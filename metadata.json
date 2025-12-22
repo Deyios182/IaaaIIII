@@ -1,0 +1,8 @@
+{
+  "name": "Compañero IA - Tu Acompañante Virtual",
+  "description": "Una aplicación de compañía virtual con IA avanzada que utiliza Gemini para interacción en tiempo real, personalización de avatares y memoria persistente.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
