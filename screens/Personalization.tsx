@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { AvatarSettings } from '../types';
-import { generateAvatarImage, checkApiKeyForRestrictedModels } from '../geminiService';
+import { generateAvatarImage, checkApiKeySelection } from '../geminiService';
 
 interface PersonalizationProps {
   avatar: AvatarSettings;
@@ -18,8 +18,8 @@ const Personalization: React.FC<PersonalizationProps> = ({ avatar, updateAvatar 
     setIsGenerating(true);
     
     try {
-      // Obligatory check for Gemini 3 Pro Image
-      await checkApiKeyForRestrictedModels();
+      // Obligatory check for Gemini 3 Pro Image or restricted models
+      await checkApiKeySelection();
 
       const prompt = `Realistic IA companion Nova, style ${avatar.baseModel}, hair ${avatar.hairStyle}, color ${avatar.hairColor}, outfit ${avatar.outfit}. High detail, artistic lighting.`;
       const newImg = await generateAvatarImage(prompt, avatar.isBoldMode);

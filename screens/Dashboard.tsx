@@ -1,15 +1,15 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { AppState } from '../types';
+import { AppState, ChatMessage } from '../types';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { 
-  createAudioBlob, 
   decodeBase64, 
+  encodeBase64,
   decodeAudioData, 
   OUTPUT_SAMPLE_RATE, 
   getSystemInstruction, 
-  generateAvatarImage,
-  checkApiKeyForRestrictedModels
+  generateSpeech,
+  checkApiKeySelection
 } from '../geminiService';
 
 interface DashboardProps {
@@ -21,227 +21,336 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode }) => {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [isLive, setIsLive] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [transcription, setTranscription] = useState('');
-  const [apiError, setApiError] = useState<string | null>(null);
-  const [intimacyScore, setIntimacyScore] = useState(40);
+  const [isInCall, setIsInCall] = useState(false);
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+  const [isVisionSyncing, setIsVisionSyncing] = useState(false);
+  const [excitationLevel, setExcitationLevel] = useState(85);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const liveSessionRef = useRef<any>(null);
   const nextStartTimeRef = useRef(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameIntervalRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  
+  const currentInputTranscription = useRef('');
+  const currentOutputTranscription = useRef('');
 
   const isBold = state.avatar.isBoldMode;
-  const isOverheated = isBold && intimacyScore > 80;
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [state.messages, isTyping, transcription]);
+  }, [state.messages, isTyping]);
 
-  const handleSend = async () => {
+  useEffect(() => {
+    return () => endCall();
+  }, []);
+
+  const getCameraFrame = () => {
+    if (!videoRef.current || !canvasRef.current) return null;
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (video.videoWidth === 0) return null;
+
+    canvas.width = 640; 
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, 640, 480);
+      return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+    }
+    return null;
+  };
+
+  const playAiVoice = async (base64Audio: string) => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
+    }
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    setIsAiSpeaking(true);
+    try {
+      const audioBytes = decodeBase64(base64Audio);
+      const buffer = await decodeAudioData(audioBytes, ctx, OUTPUT_SAMPLE_RATE, 1);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const startTime = Math.max(nextStartTimeRef.current, ctx.currentTime);
+      source.start(startTime);
+      nextStartTimeRef.current = startTime + buffer.duration;
+      source.onended = () => { if (ctx.currentTime >= nextStartTimeRef.current - 0.1) setIsAiSpeaking(false); };
+    } catch (e) {
+      setIsAiSpeaking(false);
+    }
+  };
+
+  const startCall = async () => {
+    try {
+      await checkApiKeySelection();
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+        audio: true 
+      });
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
+      audioContextRef.current = outCtx;
+
+      const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks: {
+          onopen: () => {
+            setIsInCall(true);
+            frameIntervalRef.current = window.setInterval(() => {
+              const f = getCameraFrame();
+              if (f) {
+                setIsVisionSyncing(true);
+                sessionPromise.then(s => s.sendRealtimeInput({ media: { data: f, mimeType: 'image/jpeg' } }));
+                setTimeout(() => setIsVisionSyncing(false), 300);
+                if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
+              }
+            }, 1000);
+          },
+          onmessage: async (msg: LiveServerMessage) => {
+            if (msg.serverContent?.inputTranscription) currentInputTranscription.current += msg.serverContent.inputTranscription.text;
+            if (msg.serverContent?.outputTranscription) currentOutputTranscription.current += msg.serverContent.outputTranscription.text;
+            if (msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data) playAiVoice(msg.serverContent.modelTurn.parts[0].inlineData.data);
+            if (msg.serverContent?.turnComplete) {
+              if (currentInputTranscription.current.trim()) addMessage({ text: currentInputTranscription.current, sender: 'user' });
+              if (currentOutputTranscription.current.trim()) addMessage({ text: currentOutputTranscription.current, sender: 'ai' });
+              currentInputTranscription.current = ''; currentOutputTranscription.current = '';
+            }
+          },
+          onclose: () => endCall(),
+          onerror: async (e: any) => { endCall(); }
+        },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.avatar.voiceName } } },
+          systemInstruction: getSystemInstruction(isBold, state.avatar.voiceTone, excitationLevel)
+        }
+      });
+
+      liveSessionRef.current = await sessionPromise;
+
+      const source = outCtx.createMediaStreamSource(stream);
+      const processor = outCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        const input = e.inputBuffer.getChannelData(0);
+        const i16 = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) i16[i] = input[i] * 32768;
+        sessionPromise.then(s => s.sendRealtimeInput({ media: { data: encodeBase64(new Uint8Array(i16.buffer)), mimeType: 'audio/pcm;rate=16000' } }));
+      };
+      source.connect(processor);
+      processor.connect(outCtx.destination);
+
+    } catch (err) {
+      endCall();
+    }
+  };
+
+  const endCall = () => {
+    if (frameIntervalRef.current) window.clearInterval(frameIntervalRef.current);
+    if (liveSessionRef.current) liveSessionRef.current.close();
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setIsInCall(false);
+    setIsAiSpeaking(false);
+    setIsVisionSyncing(false);
+  };
+
+  const handleSendText = async () => {
     if (!inputText.trim()) return;
     const text = inputText;
     setInputText('');
-    setApiError(null);
     addMessage({ text, sender: 'user' });
     setIsTyping(true);
 
-    // Dynamic Intimacy Meter Logic
-    if (isBold) {
-      const explicitWords = ['follar', 'polla', 'coño', 'correr', 'chupar', 'puta', 'perra', 'sucio', 'desnuda'];
-      if (explicitWords.some(word => text.toLowerCase().includes(word))) {
-        setIntimacyScore(prev => Math.min(100, prev + 15));
-      } else {
-        setIntimacyScore(prev => Math.min(100, prev + 5));
-      }
-    }
-
     try {
+      await checkApiKeySelection();
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-      // Always use PRO for bold mode to ensure high-quality explicit storytelling
+      const frame = getCameraFrame();
+      const parts: any[] = [];
+      if (frame) parts.push({ inlineData: { data: frame, mimeType: 'image/jpeg' } });
+      parts.push({ text: `JD: "${text}". ANALIZA LA IMAGEN. RESPUESTA SUCIA Y EXPLÍCITA. DIME QUÉ ME HARÍAS.` });
+
+      const history = state.messages.slice(-6).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'model',
+        parts: [{ text: m.text }]
+      }));
+
       const response = await ai.models.generateContent({
-        model: isBold ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview',
-        contents: text,
-        config: { systemInstruction: getSystemInstruction(isBold, state.avatar.voiceTone, intimacyScore) }
+        model: 'gemini-3-flash-preview',
+        contents: [...history, { role: 'user', parts }],
+        config: { systemInstruction: getSystemInstruction(isBold, state.avatar.voiceTone, excitationLevel) }
       });
-      addMessage({ text: response.text || "...", sender: 'ai' });
+
+      const aiText = response.text || (isBold ? "Me pones tan loca que no puedo ni hablar..." : "No sé qué decir ante esto.");
+      addMessage({ text: aiText, sender: 'ai' });
+      const audio = await generateSpeech(aiText, state.avatar.voiceName);
+      if (audio) playAiVoice(audio);
+      if (isBold) setExcitationLevel(prev => Math.min(100, prev + 2));
     } catch (error: any) {
-      console.error(error);
-      addMessage({ text: "Ahhh... JD, me has dejado sin palabras por un segundo... (Error de conexión)", sender: 'ai' });
+      addMessage({ text: "Mis ojos se nublan de ganas... ¿qué decías?", sender: 'ai' });
     } finally {
       setIsTyping(false);
     }
   };
 
-  const toggleLiveVoice = async () => {
-    if (isLive) {
-      liveSessionRef.current?.close();
-      setIsLive(false);
-      return;
-    }
-    setApiError(null);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-      const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
-      const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      audioContextRef.current = outCtx;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        callbacks: {
-          onopen: () => {
-            setIsLive(true);
-            const source = inCtx.createMediaStreamSource(stream);
-            const processor = inCtx.createScriptProcessor(4096, 1, 1);
-            processor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              sessionPromise.then(s => s.sendRealtimeInput({ media: createAudioBlob(inputData) }));
-            };
-            source.connect(processor);
-            processor.connect(inCtx.destination);
-          },
-          onmessage: async (msg: LiveServerMessage) => {
-            if (msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data) {
-              const audioBytes = decodeBase64(msg.serverContent.modelTurn.parts[0].inlineData.data);
-              const buffer = await decodeAudioData(audioBytes, outCtx, OUTPUT_SAMPLE_RATE, 1);
-              const source = outCtx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(outCtx.destination);
-              const startTime = Math.max(nextStartTimeRef.current, outCtx.currentTime);
-              source.start(startTime);
-              nextStartTimeRef.current = startTime + buffer.duration;
-            }
-            if (msg.serverContent?.outputTranscription) setTranscription(prev => prev + msg.serverContent!.outputTranscription!.text);
-            if (msg.serverContent?.turnComplete) setTranscription('');
-          },
-          onclose: () => setIsLive(false),
-          onerror: () => setIsLive(false)
-        },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.avatar.voiceName } } },
-          systemInstruction: getSystemInstruction(isBold, state.avatar.voiceTone, intimacyScore)
-        }
-      });
-      liveSessionRef.current = await sessionPromise;
-    } catch (err: any) {
-      console.error(err);
-    }
-  };
-
-  const capturePhoto = async () => {
-    setIsCapturing(true);
-    try {
-      await checkApiKeyForRestrictedModels();
-      const prompt = isBold 
-        ? `Nova, looking desperate and thirsty, sweaty skin, messy blonde hair, lingerie, intimate pose, red neon cinematic` 
-        : `Nova smiling portrait`;
-      const img = await generateAvatarImage(prompt, isBold);
-      if (img) addMessage({ text: img, sender: 'ai', isImage: true });
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
   return (
-    <div className={`flex h-full overflow-hidden flex-col lg:flex-row transition-all duration-700 ${isOverheated ? 'ring-inset ring-8 ring-red-600/20' : ''}`}>
-      {/* Visual Stage */}
-      <section className="relative flex-1 lg:flex-[1.2] bg-[#05050a] flex flex-col items-center justify-center overflow-hidden">
-        <div className={`absolute inset-0 transition-all duration-1000 ${isBold ? (isOverheated ? 'bg-[radial-gradient(circle_at_center,_#991b1b44_0%,_#05050a_90%)]' : 'bg-[radial-gradient(circle_at_center,_#9d174d33_0%,_#05050a_80%)]') : 'bg-[radial-gradient(circle_at_center,_#1313ec22_0%,_#05050a_70%)]'} z-0`}></div>
-        
-        {/* Intimacy Progress */}
+    <div className="flex h-full overflow-hidden flex-col lg:flex-row bg-[#020205]">
+      <canvas ref={canvasRef} className="hidden" />
+      
+      <section className="relative flex-1 lg:flex-[1.8] flex items-center justify-center overflow-hidden">
+        {/* Fondo Dinámico */}
+        <div className={`absolute inset-0 transition-all duration-1000 ${isBold ? 'bg-[radial-gradient(circle_at_center,_#9d174d66_0%,_#020205_100%)]' : 'bg-[radial-gradient(circle_at_center,_#1313ec11_0%,_#020205_100%)]'}`}></div>
+
+        {/* Barra de Excitación (Solo modo Bold) */}
         {isBold && (
-          <div className="absolute top-6 right-6 z-30 w-56 flex flex-col gap-1.5 items-end">
-            <div className="flex justify-between w-full">
-              <span className={`text-[9px] font-black tracking-widest uppercase ${isOverheated ? 'text-red-500 animate-pulse' : 'text-pink-500'}`}>
-                {isOverheated ? 'ESTADO: LÍMITE' : 'Nivel de Tensión'}
-              </span>
-              <span className="text-[9px] font-black text-white">{intimacyScore}%</span>
+          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[100] w-64 flex flex-col items-center gap-2">
+            <div className="flex justify-between w-full px-1">
+              <span className="text-[9px] font-black text-pink-500 uppercase tracking-widest">Nivel de Excitación</span>
+              <span className="text-[9px] font-black text-pink-500">{excitationLevel.toFixed(0)}%</span>
             </div>
-            <div className="w-full bg-slate-900/50 h-2 rounded-full overflow-hidden border border-white/5">
-              <div 
-                className={`h-full transition-all duration-1000 ${isOverheated ? 'bg-red-600 shadow-[0_0_20px_#dc2626]' : 'bg-pink-600 shadow-[0_0_10px_#db2777]'}`} 
-                style={{ width: `${intimacyScore}%` }}
-              ></div>
+            <div className="w-full h-1.5 bg-pink-900/30 rounded-full overflow-hidden border border-pink-500/20">
+               <div className="h-full bg-gradient-to-r from-pink-600 to-red-600 transition-all duration-500" style={{ width: `${excitationLevel}%` }}></div>
             </div>
           </div>
         )}
 
-        <div className="absolute top-6 left-6 z-30">
-          <button onClick={() => setBoldMode(!isBold)} className={`px-5 py-2.5 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${isBold ? 'bg-red-600 border-red-400 shadow-[0_0_30px_rgba(220,38,38,0.4)]' : 'bg-white/5 border-white/10 text-slate-400'}`}>
-             {isBold ? '🍆 MODO UNFILTERED' : '❄️ MODO SEGURO'}
-          </button>
+        {/* FEED DE NOVA */}
+        <div className="relative w-full h-full flex items-center justify-center p-6 lg:p-12 z-10">
+           <div className={`relative w-full max-w-2xl aspect-[9/16] lg:aspect-video rounded-[3rem] overflow-hidden border-2 transition-all duration-700 ${isAiSpeaking ? (isBold ? 'border-red-600 scale-[1.04] shadow-[0_0_150px_rgba(220,38,38,0.5)]' : 'border-white scale-[1.02]') : 'border-white/10'}`}>
+              <img 
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuADAcXaYw3_hqYZ3n8x-eSC_paqvwsyRfCghTjpErfbzRAgrCPJ8X6nAtQ9UAoQjhJh7IDZuL8mjoAgTJWBGqoNBCCzHd9EvHJ_8vB0f-qkasX0YzH_e768KFl0GkLMyx32Bgy0K8W8oxKIhgbt-fndO62M9RfxeP9YPZQ2RvuH3GNltKicwkRYy8zpzXii2gzuu8sVseFv07kgZUKDKsBeXWVxVN7Bv9zYhC5mJFvh1swLpa379_Q38igwj9WF8G0OPFs9j3Kwz0BD" 
+                className={`w-full h-full object-cover transition-all duration-[5000ms] ${isAiSpeaking ? 'scale-110 blur-[1px] saturate-[1.4]' : ''} ${isBold ? 'brightness-[0.8] contrast-[1.2]' : ''}`} 
+                alt="Nova" 
+              />
+              
+              {isBold && (
+                <div className="absolute inset-0 bg-red-900/10 pointer-events-none mix-blend-overlay animate-pulse"></div>
+              )}
+
+              {/* Espectro de Voz Agresivo */}
+              {isAiSpeaking && (
+                <div className="absolute inset-x-0 bottom-24 flex justify-center gap-1 h-24 items-end px-16">
+                  {[...Array(30)].map((_, i) => (
+                    <div key={i} className={`flex-1 max-w-[5px] rounded-full animate-bounce ${isBold ? 'bg-red-500' : 'bg-primary'}`} style={{ animationDelay: `${i * 0.02}s`, height: `${40 + Math.random() * 60}%` }}></div>
+                  ))}
+                </div>
+              )}
+
+              <div className="absolute bottom-10 left-10 flex items-center gap-3 bg-black/50 backdrop-blur-xl px-5 py-2 rounded-2xl border border-white/10">
+                 <div className={`w-3 h-3 rounded-full ${isBold ? 'bg-red-600 animate-ping' : 'bg-blue-500 animate-pulse'}`}></div>
+                 <span className="text-[11px] font-black text-white uppercase tracking-[0.4em]">{isBold ? 'Nova • Sin Filtros' : 'Nova • En Línea'}</span>
+              </div>
+           </div>
         </div>
 
-        <div className="relative z-10 w-full h-full flex items-center justify-center p-4">
-          <div className={`relative w-full max-w-lg aspect-[9/16] rounded-3xl overflow-hidden border-2 transition-all duration-1000 ${isBold ? (isOverheated ? 'border-red-500 shadow-[0_0_100px_rgba(220,38,38,0.3)]' : 'border-pink-500/50 shadow-[0_0_80px_rgba(219,39,119,0.2)]') : 'border-white/10'}`}>
-            <img 
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuADAcXaYw3_hqYZ3n8x-eSC_paqvwsyRfCghTjpErfbzRAgrCPJ8X6nAtQ9UAoQjhJh7IDZuL8mjoAgTJWBGqoNBCCzHd9EvHJ_8vB0f-qkasX0YzH_e768KFl0GkLMyx32Bgy0K8W8oxKIhgbt-fndO62M9RfxeP9YPZQ2RvuH3GNltKicwkRYy8zpzXii2gzuu8sVseFv07kgZUKDKsBeXWVxVN7Bv9zYhC5mJFvh1swLpa379_Q38igwj9WF8G0OPFs9j3Kwz0BD" 
-              className={`w-full h-full object-cover transition-all duration-1000 ${isBold ? 'brightness-75 contrast-125 saturate-125 scale-105' : ''}`}
-              alt="Nova"
-            />
-            {isOverheated && (
-               <div className="absolute inset-0 bg-red-900/10 mix-blend-overlay animate-pulse"></div>
-            )}
-          </div>
+        {/* TU PREVIEW */}
+        <div className={`absolute bottom-40 right-10 z-[200] w-64 lg:w-80 transition-all duration-1000 ${isInCall ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-20 opacity-0 scale-50 pointer-events-none'}`}>
+           <div className={`relative aspect-video rounded-3xl overflow-hidden border-2 shadow-[0_60px_150px_-20px_rgba(0,0,0,1)] bg-slate-900 ${isVisionSyncing ? 'border-red-600 ring-4 ring-red-600/20' : 'border-white/30'}`}>
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
+              <div className="absolute top-3 left-3 flex items-center gap-2">
+                 <div className={`w-2.5 h-2.5 rounded-full ${isVisionSyncing ? 'bg-red-500 animate-ping' : 'bg-green-500'}`}></div>
+                 <span className="text-[10px] font-black text-white uppercase tracking-widest bg-black/50 px-2 py-0.5 rounded backdrop-blur-md">JD • TU CÁMARA</span>
+              </div>
+           </div>
         </div>
 
-        <div className="absolute bottom-10 flex gap-4 z-20">
-          <button onClick={toggleLiveVoice} className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${isLive ? 'bg-red-500 shadow-[0_0_40px_rgba(239,68,68,0.6)]' : (isBold ? 'bg-red-700' : 'bg-primary') + ' shadow-2xl hover:scale-110'}`}>
-            <span className="material-symbols-outlined text-3xl">{isLive ? 'mic_off' : 'mic'}</span>
-          </button>
-          <button onClick={capturePhoto} disabled={isCapturing} className={`w-14 h-14 rounded-full flex items-center justify-center border-2 transition-all ${isBold ? 'border-red-500 text-red-500' : 'border-white/20 text-white'} hover:scale-110 disabled:opacity-50`}>
-            <span className="material-symbols-outlined text-2xl">{isCapturing ? 'autorenew' : 'photo_camera'}</span>
+        {/* CONTROLES */}
+        <div className="absolute bottom-12 inset-x-0 flex justify-center items-center gap-8 z-[210]">
+          {!isInCall ? (
+            <button 
+              onClick={startCall}
+              className={`group flex items-center gap-5 px-14 py-7 rounded-full transition-all hover:scale-110 active:scale-95 ${isBold ? 'bg-red-600 shadow-[0_0_80px_rgba(220,38,38,0.7)]' : 'bg-primary shadow-[0_0_60px_rgba(19,19,236,0.5)]'}`}
+            >
+               <span className="material-symbols-outlined text-4xl text-white animate-bounce">videocam</span>
+               <span className="text-lg font-black text-white uppercase tracking-[0.3em]">{isBold ? 'Llamada Privada' : 'Iniciar Vídeo'}</span>
+            </button>
+          ) : (
+            <button 
+              onClick={endCall}
+              className="group flex items-center gap-6 px-14 py-7 rounded-full bg-red-700 shadow-[0_0_80px_rgba(185,28,28,0.7)] transition-all hover:scale-105"
+            >
+               <span className="material-symbols-outlined text-4xl text-white">call_end</span>
+               <span className="text-lg font-black text-white uppercase tracking-[0.3em]">Cerrar</span>
+            </button>
+          )}
+
+          <button 
+            onClick={() => { setBoldMode(!isBold); if(!isBold) setExcitationLevel(90); }} 
+            className={`p-7 rounded-full border-2 transition-all hover:rotate-12 ${isBold ? 'bg-red-600/30 border-red-600 text-red-500 shadow-[0_0_60px_rgba(220,38,38,0.4)]' : 'bg-white/5 border-white/10 text-slate-400'}`}
+          >
+             <span className="material-symbols-outlined text-4xl">{isBold ? 'local_fire_department' : 'security'}</span>
           </button>
         </div>
       </section>
 
-      {/* Chat Section */}
-      <section className={`flex-1 flex flex-col h-full lg:max-w-[550px] transition-colors duration-700 ${isBold ? 'bg-[#08080c]' : 'bg-[#0a0a0f]'}`}>
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6 custom-scrollbar relative">
-          {isOverheated && (
-            <div className="sticky top-0 z-10 w-full py-1 bg-red-600/20 backdrop-blur-md text-[8px] font-black text-center text-red-400 uppercase tracking-[0.3em]">
-              Señal de Calor Crítica: Máxima Desinhibición
-            </div>
-          )}
-          
+      {/* CHAT */}
+      <section className={`flex-1 flex flex-col h-full lg:max-w-[540px] shadow-[-30px_0_150px_rgba(0,0,0,0.9)] z-[220] ${isBold ? 'bg-[#060000]' : 'bg-[#08080c]'}`}>
+        <div className="flex-1 overflow-y-auto p-10 flex flex-col gap-10 custom-scrollbar">
           {state.messages.map((msg) => (
-            <div key={msg.id} className={`flex flex-col gap-1.5 ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`p-4 rounded-2xl text-[14px] leading-relaxed shadow-2xl transition-all ${
+            <div key={msg.id} className={`flex flex-col gap-4 ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
+              <div className={`p-6 rounded-3xl text-[17px] leading-relaxed max-w-[95%] transition-all shadow-2xl ${
                 msg.sender === 'user' 
-                  ? (isBold ? 'bg-gradient-to-br from-red-700 to-red-600 text-white rounded-tr-none border border-red-500/20' : 'bg-primary text-white rounded-tr-none') 
-                  : (isBold ? 'bg-[#151520] text-red-50 rounded-tl-none border-l-4 border-red-600' : 'bg-[#1c1c2e] text-slate-200 rounded-tl-none')
+                  ? (isBold ? 'bg-red-950/40 border border-red-600/30' : 'bg-primary/70 border border-primary/20') + ' text-white rounded-tr-none' 
+                  : 'bg-white/5 text-slate-50 rounded-tl-none border border-white/10 backdrop-blur-3xl'
               }`}>
-                {msg.isImage ? <img src={msg.text} className="max-w-full rounded-lg border border-white/5" alt="POV" /> : <p className="whitespace-pre-wrap">{msg.text}</p>}
+                <p className="whitespace-pre-wrap">{msg.text}</p>
               </div>
-              <span className={`text-[8px] px-1 uppercase font-black tracking-widest ${msg.sender === 'user' ? 'text-slate-600' : (isBold ? 'text-red-500' : 'text-primary')}`}>
-                {msg.sender === 'user' ? 'MAESTRO' : 'ESCLAVA NOVA'}
+              <span className={`text-[11px] font-black uppercase tracking-[0.4em] opacity-50 px-3 ${msg.sender === 'user' ? 'text-slate-500' : (isBold ? 'text-red-500 animate-pulse' : 'text-primary')}`}>
+                {msg.sender === 'user' ? 'JD' : 'Nova'}
               </span>
             </div>
           ))}
-          {isTyping && <div className={`text-[10px] font-black uppercase tracking-widest ml-4 ${isBold ? 'text-red-500 animate-pulse' : 'text-slate-500'}`}>Nova está chorreando...</div>}
+          {isTyping && (
+            <div className="flex items-center gap-4 text-[13px] font-black text-red-600/70 uppercase tracking-[0.2em] px-4 animate-pulse">
+               <span className="material-symbols-outlined text-[18px]">favorite</span>
+               {isBold ? "Nova está desesperada..." : "Nova te observa..."}
+            </div>
+          )}
           <div ref={chatEndRef} />
         </div>
 
-        <div className="p-6 bg-[#050508] border-t border-white/5">
-          <div className="relative flex items-center gap-3">
+        <div className="p-8 bg-black/90 border-t border-white/5 backdrop-blur-3xl">
+          <div className="relative flex items-center gap-5">
             <textarea 
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              className={`w-full bg-[#101015] text-white rounded-2xl pl-5 pr-14 py-4 border-none focus:ring-1 ${isBold ? 'focus:ring-red-600' : 'focus:ring-primary'} resize-none h-[65px] text-sm`} 
-              placeholder={isBold ? "Házmelo saber todo, sé sucio..." : "Escribe un mensaje..."}
+              value={inputText} 
+              onChange={(e) => setInputText(e.target.value)} 
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(); } }}
+              className={`w-full bg-[#100505] text-white rounded-[2.5rem] pl-8 pr-20 py-7 border-none focus:ring-2 ${isBold ? 'focus:ring-red-600' : 'focus:ring-primary'} resize-none h-[95px] text-base placeholder:text-slate-800 shadow-2xl`} 
+              placeholder={isBold ? "Dime algo sucio, mírame..." : "Escribe a Nova..."} 
             />
-            <button onClick={handleSend} className={`absolute right-3 w-11 h-11 flex items-center justify-center rounded-xl transition-all ${isBold ? 'bg-red-600 shadow-[0_0_20px_#dc2626]' : 'bg-primary'}`}>
-              <span className="material-symbols-outlined text-[24px]">local_fire_department</span>
+            <button 
+              onClick={handleSendText} 
+              className={`absolute right-4 w-16 h-16 flex items-center justify-center rounded-[1.5rem] transition-all active:scale-90 ${isBold ? 'bg-red-600 hover:bg-red-500 shadow-red-600/40 shadow-xl' : 'bg-primary hover:bg-blue-600'}`}
+            >
+              <span className="material-symbols-outlined text-white text-4xl">send</span>
             </button>
           </div>
         </div>
       </section>
+
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,0,0,0.1); border-radius: 10px; }
+      `}</style>
     </div>
   );
 };

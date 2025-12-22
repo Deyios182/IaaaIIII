@@ -21,6 +21,13 @@ export interface ChatMessage {
   tags?: string[];
 }
 
+export interface MemoryEntry {
+  id: string;
+  category: string;
+  content: string;
+  timestamp: number;
+}
+
 export interface AvatarSettings {
   baseModel: string;
   hairStyle: string;
