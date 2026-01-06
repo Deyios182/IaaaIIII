@@ -14,6 +14,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
     { path: '/personalize', icon: 'person', label: 'Personalización' },
     { path: '/voice', icon: 'volume_up', label: 'Voz y Tono' },
     { path: '/memory', icon: 'psychology', label: 'Memoria' },
+    { path: '/performance', icon: 'speed', label: 'Rendimiento' },
     { path: '/account', icon: 'settings', label: 'Ajustes' },
   ];
 
@@ -37,10 +38,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
             key={item.path}
             to={item.path}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
-                isActive
-                  ? (isBold ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-primary/20 text-white border border-primary/30')
-                  : 'text-slate-400 hover:text-white hover:bg-white/5'
+              `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${isActive
+                ? (isBold ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-primary/20 text-white border border-primary/30')
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
               }`
             }
           >
@@ -57,7 +57,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
             <span className={`text-[10px] font-bold ${isBold ? 'text-pink-400' : 'text-primary'}`}>88%</span>
           </div>
           <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
-             <div className={`h-full transition-all duration-1000 ${isBold ? 'bg-pink-500' : 'bg-primary'}`} style={{ width: '88%' }}></div>
+            <div className={`h-full transition-all duration-1000 ${isBold ? 'bg-pink-500' : 'bg-primary'}`} style={{ width: '88%' }}></div>
           </div>
         </div>
       </div>

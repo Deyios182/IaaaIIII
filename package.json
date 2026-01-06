@@ -1,23 +1,66 @@
 {
-  "name": "compañero-ia---tu-acompañante-virtual",
+  "name": "nova-ia",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Asistente virtual IA con avatar 3D y auto-inicio 24/7",
+  "author": "NovaIA Team",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --config vite.config.web.ts",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:build": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.nova.ia",
+    "productName": "NovaIA",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/nova-icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "public/nova-icon.png",
+      "uninstallerIcon": "public/nova-icon.png"
+    },
+    "compression": "maximum",
+    "artifactName": "${productName}-${version}-Setup.${ext}"
   },
   "dependencies": {
     "@google/genai": "^1.34.0",
-    "react-dom": "^19.2.3",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.4.2",
+    "@supabase/supabase-js": "^2.89.0",
+    "@vladmandic/face-api": "^1.7.15",
+    "face-api.js": "^0.22.2",
     "react": "^19.2.3",
-    "react-router-dom": "^7.11.0"
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.11.0",
+    "three": "^0.182.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6"
   }
 }
