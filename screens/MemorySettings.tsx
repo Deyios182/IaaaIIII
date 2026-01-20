@@ -214,8 +214,8 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
                           // MODO VISUALIZACIÓN
                           <>
                             <div className="flex justify-between items-start mb-2">
-                              <div>
-                                <h3 className="font-bold text-white text-lg">{person.name}</h3>
+                              <div className="flex-1 min-w-0 mr-2">
+                                <h3 className="font-bold text-white text-lg truncate" title={person.name}>{person.name}</h3>
                                 <div className="flex gap-2 items-center flex-wrap mt-1">
                                   <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full whitespace-nowrap">{person.relationship}</span>
                                   {person.isUnknown && <span className="text-[10px] font-bold text-yellow-400 border border-yellow-400/30 px-1.5 rounded whitespace-nowrap">NUEVO</span>}
@@ -232,7 +232,11 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
                                 <button
                                   onClick={async () => {
                                     try {
-                                      const updatedPerson = { ...person, name: "Usuario Principal", relationship: "self", isUnknown: false };
+                                      // FIX: Preguntar nombre real en lugar de "Usuario Principal"
+                                      const newName = prompt("¿Cuál es tu nombre?", person.name !== "Desconocido" ? person.name : "");
+                                      if (!newName) return;
+
+                                      const updatedPerson = { ...person, name: newName, relationship: "self", isUnknown: false };
                                       updateKnownPeople(knownPeople.map(p => p.id === person.id ? updatedPerson : p));
                                       await upsertKnownPerson({
                                         ...updatedPerson,
@@ -252,6 +256,8 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
                                   onClick={async () => {
                                     if (window.confirm(`¿Eliminar a ${person.name}?`)) {
                                       try {
+                                        // FIX: Borrar también de la nube/backend, no solo del estado local
+                                        await deleteKnownPerson(person.id);
                                         await removePerson(person.id);
                                       } catch (e) {
                                         console.error("Error deleting person:", e);

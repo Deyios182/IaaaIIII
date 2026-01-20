@@ -19,23 +19,53 @@ export interface ClothingState {
 
 // Patrones para categorizar ropa
 const CATEGORY_PATTERNS: Record<string, string[]> = {
-    outfit: ['dress', 'clothes', 'outfit', 'normal', 'shirt', 'pants', 'skirt', 'jacket', 'coat', 'cloth'],
-    underwear: ['underwear', 'bra', 'panties', 'lingerie', 'sexy', 'bikini'],
-    accessory: ['glasses', 'hat', 'ribbon', 'bow', 'necklace', 'earring', 'acc', 'stockings', 'socks'],
-    body: ['body', 'skin', 'face', 'eye', 'hair', 'head', 'hand', 'foot', 'arm', 'leg', 'tongue', 'lash', 'blush', 'sticker', 'brows'],
+    outfit: ['dress', 'clothes', 'shirt', 'pants', 'skirt', 'jacket', 'coat', 'suit', 'uniform'],
+    underwear: ['underwear', 'bra', 'panties', 'lingerie', 'sexy', 'bikini', 'thong', 'stockings', 'garter'],
+    accessory: ['glasses', 'hat', 'ribbon', 'bow', 'necklace', 'earring', 'acc', 'socks', 'choker', 'neck', 'wrist', 'ring', 'headband'],
+    body: ['body', 'skin', 'face', 'eye', 'hair', 'head', 'hand', 'foot', 'arm', 'leg', 'tongue', 'lash', 'blush', 'sticker', 'brows', 'pupil', 'iris', 'sclera', 'teeth', 'mouth'],
 };
 
 // Determinar categoría de un mesh por su nombre
 export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
     const lower = meshName.toLowerCase();
 
-    for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {
-        if (patterns.some(pattern => lower.includes(pattern))) {
-            return category as ClothingItem['category'];
+    // 1. BASURA DEL RIG (WIDGETS) - ¡IGNORAR SIEMPRE!
+    // Si el nombre empieza por WGT, es un control de Blender, no ropa.
+    if (lower.startsWith('wgt') || lower.includes('collision') || lower.includes('ik_')) {
+        return 'body'; // Lo marcamos como cuerpo para que NUNCA se oculte accidentalmente
+    }
+
+    // 2. LISTA BLANCA DE CUERPO (PROTEGIDO)
+    // Basado en tu escaneo, estos son partes vitales:
+    const bodyParts = [
+        'ani_main', // PARECE SER EL CUERPO PRINCIPAL
+        'tongue',   // ¡Es la lengua, no ropa!
+        'face',
+        'eye',
+        'hair',     // El pelo suele considerarse cuerpo, o accesorio fijo
+        'glows',    // Brillos, mejor no quitarlos
+        'ani_blush' // Maquillaje
+    ];
+
+    if (bodyParts.some(part => lower.includes(part))) {
+        return 'body';
+    }
+
+    // 3. ROPA REAL DETECTADA (Lo que sí se puede quitar)
+    const clothingMap: Record<string, string[]> = {
+        'underwear': ['brassiere', 'panties', 'underwear', 'bra', 'thong'],
+        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves'],
+        'accessory': ['necklace', 'bow', 'stickers', 'stockings', 'garter']
+    };
+
+    for (const [cat, keywords] of Object.entries(clothingMap)) {
+        if (keywords.some(k => lower.includes(k))) {
+            return cat as ClothingItem['category'];
         }
     }
 
-    return 'other';
+    // Por defecto, si no sabemos qué es, mejor no tocarlo
+    return 'body';
 }
 
 // Generar nombre legible para display
@@ -65,6 +95,7 @@ export class ClothingManager {
             if ((child as any).isMesh) {
                 const mesh = child as THREE.Mesh;
                 const category = getCategoryForMesh(mesh.name);
+                console.log(`👗 [ClothingManager] Mesh: "${mesh.name}" -> ${category}`);
 
                 // Solo incluir items que no son parte del cuerpo
                 if (category !== 'body') {

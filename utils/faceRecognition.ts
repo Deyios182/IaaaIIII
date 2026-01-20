@@ -96,6 +96,13 @@ export function compareFaces(descriptor1: Float32Array | number[], descriptor2: 
     const desc1 = descriptor1 instanceof Float32Array ? descriptor1 : new Float32Array(descriptor1);
     const desc2 = descriptor2 instanceof Float32Array ? descriptor2 : new Float32Array(descriptor2);
 
+    // FIX: Prevenir crash si los descriptores tienen longitudes diferentes (ej: 128 vs 0 o vs 512)
+    if (desc1.length !== desc2.length) {
+        // Log solo una vez por sesión para no spammear console
+        // console.warn(`⚠️ Vector length mismatch: ${desc1.length} vs ${desc2.length}`);
+        return 1.0; // Tratarlos como completamente diferentes
+    }
+
     // Calcular distancia euclidiana
     const distance = faceapi.euclideanDistance(desc1, desc2);
 

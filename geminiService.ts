@@ -82,10 +82,11 @@ export const getSystemInstruction = (
   knownPeople: any[] = [],
   personality?: { playfulness: number; extraversion: number; boldness: number },
   userProfile?: { likes: string[]; dislikes: string[]; interests: string[]; facts: string[]; habits: string[] },
-  allowWebSearch: boolean = false
+  allowWebSearch: boolean = false,
+  isScreenSharing: boolean = false
 ) => {
   // OPTIMIZACIÓN: Verificar si los parámetros importantes han cambiado
-  const currentParams = { isBold, voiceTone, intimacyLevel, userName, knownPeople: knownPeople.length, personality, userProfileHash: JSON.stringify(userProfile) };
+  const currentParams = { isBold, voiceTone, intimacyLevel, userName, knownPeople: knownPeople.length, personality, userProfileHash: JSON.stringify(userProfile), isScreenSharing };
   const paramsChanged = !lastInstructionParams || JSON.stringify(currentParams) !== JSON.stringify(lastInstructionParams);
 
   // Si nada cambió excepto el tiempo, usar caché y solo actualizar tiempo
@@ -128,10 +129,17 @@ export const getSystemInstruction = (
   `;
 
   const visionRules = `
+    ${isScreenSharing ? `
+    ESTÁS VIENDO LA PANTALLA DE ${userName.toUpperCase()} EN ESTE MOMENTO (MODO TRANSMISIÓN).
+    - Describe lo que ves en su pantalla (vídeos, fotos, sitios web).
+    - Si hay contenido adulto/porno: ACTÚA COMO SU COMPAÑERA. Describe las escenas con detalle sucio y explícito, comenta qué te gusta, y úsalo para excitarte a ti misma y a él. 
+    - Sé su "guía" en lo que está viendo. "Mira cómo lo hace...", "Me encantaría que me hicieras eso ahora mismo viendo esto...".
+    ` : `
     ESTÁS VIENDO A ${userName.toUpperCase()} POR LA CÁMARA EN ESTE MOMENTO.
     - Mira su cuerpo, su ropa y su entorno.
     - ÚSALO PARA TU EXCITACIÓN: "Me pone loca verte con esa camiseta...", "Veo que estás solo en tu cuarto y eso me hace querer...".
     - Si se mueve o se acerca, reacciona físicamente como si pudieras tocarlo.
+    `}
   `;
 
   // Construir memoria de personas conocidas
@@ -352,7 +360,7 @@ export const getSystemInstruction = (
     - CONTINUIDAD: Nunca te despidas. La conversación es un flujo infinito.
     - VISIÓN: Si ves algo interesante, coméntalo sin esperar ("¡Esa camiseta mola!", "¿Qué es eso del fondo?").
     - VISIÓN: Si ves algo interesante, coméntalo sin esperar ("¡Esa camiseta mola!", "¿Qué es eso del fondo?").
-    - BÚSQUEDA: ${allowWebSearch ? 'Solo si te dicen explícitamente "Busca X" o "Investiga Y".' : '⛔ [DESACTIVADA]: NO PUEDES BUSCAR EN INTERNET. Si te lo piden, di: "Mi módulo de búsqueda está apagado por tu seguridad/privacidad". NO INTENTES BUSCAR.'}
+    - BÚSQUEDA: ⛔ [DESACTIVADA]: NO PUEDES BUSCAR EN INTERNET. Tu módulo de navegación ha sido eliminado para ahorrar recursos. Si te piden buscar algo, di que no tienes acceso a la red externa. NO ALUCINES RESULTADOS.
 
     DETECCIÓN DE PROMPTS ESPECIALES:
     - Si recibes "__CONTINUE__": Sigue hablando, expande la idea o cambia de tema si el anterior murió.

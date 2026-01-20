@@ -62,6 +62,35 @@ export class MaterialManager {
 
         console.log(`🎨 MaterialManager: ${this.materials.length} materiales detectados`);
 
+        // === FIX AUTOMÁTICO DE PIEL ===
+        // Aplicar configuración realista a todo lo detectado como 'skin' inmediatamente
+        this.materials.forEach(ref => {
+            if (ref.category === 'skin' && ref.material instanceof THREE.MeshStandardMaterial) {
+                // Piel humana: Baja metalicidad, rugosidad media
+                ref.material.roughness = 0.45; // Ni muy brillante (sudor), ni muy mate (tiza)
+                ref.material.metalness = 0.1;  // La piel no es metal
+
+                // TRUCO PRO: Tintar el color ligeramente hacia rojo/naranja para simular sangre bajo la piel
+                // Solo si el color es muy pálido
+                const color = ref.material.color;
+                if (color.r > 0.8 && color.g > 0.8 && color.b > 0.8) {
+                    // Es blanco/gris, darle un tono "carne" sutil
+                    ref.material.color.setHex(0xffe0bd);
+                }
+                ref.material.needsUpdate = true;
+                console.log('🎨 Skin material optimizado:', ref.mesh.name);
+            }
+
+            // Ojos: Configuración más equilibrada (evitar demasiado brillo)
+            if (ref.category === 'eyes' && ref.material instanceof THREE.MeshStandardMaterial) {
+                ref.material.roughness = 0.5; // Menos brillante
+                ref.material.metalness = 0.0;
+                ref.material.envMapIntensity = 0.5; // Reducir reflejos
+                ref.material.needsUpdate = true;
+                console.log('👁️ Eye material optimizado (Toned down):', ref.mesh.name);
+            }
+        });
+
         // Guardar paleta actual
         this.currentPalette = this.extractCurrentPalette();
     }

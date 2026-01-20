@@ -38,6 +38,12 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
     const sessionRef = useRef<any>(null);
     const isDisconnectingRef = useRef(false);
 
+    // 🆕 Safety timeout para evitar que isAiSpeaking se quede atascado
+    const speakingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const speakingStartTimeRef = useRef<number>(0);
+    const MAX_SPEAKING_DURATION = 10000; // 10 segundos max continuo
+    const AUDIO_SILENCE_TIMEOUT = 2000; // 2 segundos de silencio para considerar que terminó
+
     const connect = useCallback(async () => {
         if (!config.apiKey) {
             config.onError?.(new Error('API Key missing'));
@@ -60,9 +66,38 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
                     onmessage: (msg: any) => {
                         // Handle audio data
                         if (msg.data?.data) {
+                            const now = Date.now();
+
+                            // Si es la primera vez hablando en este ciclo, registrar tiempo de inicio
+                            if (!isAiSpeaking) {
+                                speakingStartTimeRef.current = now;
+                            }
+
                             setIsAiSpeaking(true);
                             const audioBytes = Uint8Array.from(atob(msg.data.data), c => c.charCodeAt(0));
                             config.onAudioData?.(audioBytes.buffer);
+
+                            // 🆕 Limpiar timeout anterior
+                            if (speakingTimeoutRef.current) {
+                                clearTimeout(speakingTimeoutRef.current);
+                            }
+
+                            // 🆕 Safety timeout: Si no recibimos más audio en AUDIO_SILENCE_TIMEOUT, parar
+                            speakingTimeoutRef.current = setTimeout(() => {
+                                console.warn('⚠️ Safety timeout: No se recibió audio en', AUDIO_SILENCE_TIMEOUT, 'ms. Deteniendo isAiSpeaking.');
+                                setIsAiSpeaking(false);
+                            }, AUDIO_SILENCE_TIMEOUT);
+
+                            // 🆕 Safety timeout: Si lleva hablando más de MAX_SPEAKING_DURATION, forzar stop
+                            const elapsed = now - speakingStartTimeRef.current;
+                            if (elapsed > MAX_SPEAKING_DURATION) {
+                                console.warn('⚠️ Safety timeout: Hablando por más de', MAX_SPEAKING_DURATION, 'ms. Deteniendo isAiSpeaking.');
+                                setIsAiSpeaking(false);
+                                if (speakingTimeoutRef.current) {
+                                    clearTimeout(speakingTimeoutRef.current);
+                                    speakingTimeoutRef.current = null;
+                                }
+                            }
                         }
 
                         // Handle transcriptions
@@ -82,6 +117,11 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
 
                         // Handle turn complete
                         if (msg.serverContent?.turnComplete) {
+                            // 🆕 Limpiar timeouts al completar turno
+                            if (speakingTimeoutRef.current) {
+                                clearTimeout(speakingTimeoutRef.current);
+                                speakingTimeoutRef.current = null;
+                            }
                             setIsAiSpeaking(false);
                             config.onTurnComplete?.();
                         }
@@ -125,6 +165,13 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
 
     const disconnect = useCallback(() => {
         isDisconnectingRef.current = true;
+
+        // 🆕 Limpiar timeout de seguridad
+        if (speakingTimeoutRef.current) {
+            clearTimeout(speakingTimeoutRef.current);
+            speakingTimeoutRef.current = null;
+        }
+
         if (sessionRef.current) {
             try {
                 sessionRef.current.close();

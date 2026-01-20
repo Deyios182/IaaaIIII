@@ -10,6 +10,7 @@ export interface JiggleBone {
     originalRotation: THREE.Euler;
     velocity: THREE.Vector3;
     targetRotation: THREE.Euler;
+    settings?: JiggleSettings; // Configuración específica por hueso
 }
 
 export interface JiggleSettings {
@@ -29,12 +30,16 @@ export const DEFAULT_JIGGLE_SETTINGS: JiggleSettings = {
 
 // Patrones de nombres de huesos que deben tener jiggle (MÁS ESTRICTO)
 const JIGGLE_PATTERNS = [
-    // Pechos - solo si tienen breast en el nombre
-    'breast',
-    // Trasero  
-    'butt',
-    // Cabello principal (no hair genérico porque hay muchos huesos de pelo)
-    'ponytail', 'pigtail', 'ahoge',
+    // Pechos (Ya los tenías, pero confirmados)
+    'breast', 'boob', 'chest',
+    // Trasero (Nuevo detectado)
+    'ass', 'butt', 'glute',
+    // Pelo (Gran hallazgo: hairFront y hairTail)
+    'hair', 'ponytail', 'tail', 'bangs', 'front',
+    // Orejas (Nuevo: ear y ear_end)
+    'ear',
+    // Ropa/Accesorios (Nuevo: bow_tail)
+    'bow', 'ribbon', 'skirt', 'dress', 'cloth', 'sleeve'
 ];
 
 // Huesos que NUNCA deben tener jiggle
@@ -44,6 +49,20 @@ const EXCLUDE_PATTERNS = [
     'ik', 'fk', 'ctrl', 'target', 'pole', 'socket', 'parent', 'master',
     'tweak', 'pivot', 'widget', 'driver', 'offset', 'swing'
 ];
+
+// Configuración de rebote por tipo (User provided)
+export function getPhysicsSettings(boneName: string): Partial<JiggleSettings> {
+    const n = boneName.toLowerCase();
+
+    // Configura la "suavidad" según la parte del cuerpo
+    if (n.includes('breast') || n.includes('boob')) return { stiffness: 0.2, damping: 0.1, gravity: 0.5 }; // Rebote suave
+    if (n.includes('ass') || n.includes('butt')) return { stiffness: 0.3, damping: 0.2, gravity: 0.2 };    // Más firme
+    if (n.includes('ear')) return { stiffness: 0.1, damping: 0.1, gravity: 0.1 };    // Muy ligero
+    if (n.includes('hair') || n.includes('tail') || n.includes('ponytail')) return { stiffness: 0.15, damping: 0.15, gravity: 0.8 }; // Fluido
+    if (n.includes('bow') || n.includes('ribbon') || n.includes('skirt')) return { stiffness: 0.1, damping: 0.2, gravity: 0.6 };    // Tela
+
+    return { stiffness: 0.3, damping: 0.3, gravity: 0.5 }; // Default
+}
 
 // Detectar si un hueso es de tipo jiggle (más estricto)
 export function isJiggleBone(boneName: string): boolean {
@@ -77,11 +96,15 @@ export class JigglePhysicsSystem {
         model.traverse((child) => {
             if ((child as any).isBone && isJiggleBone(child.name)) {
                 const bone = child as THREE.Bone;
+                // Mix global settings with bone-specific settings
+                const boneSettings = { ...this.settings, ...getPhysicsSettings(bone.name) };
+
                 this.bones.push({
                     bone,
                     originalRotation: bone.rotation.clone(),
                     velocity: new THREE.Vector3(),
-                    targetRotation: bone.rotation.clone()
+                    targetRotation: bone.rotation.clone(),
+                    settings: boneSettings as JiggleSettings
                 });
             }
         });
@@ -108,9 +131,11 @@ export class JigglePhysicsSystem {
             this.lastRootPosition.copy(rootObject.position);
         }
 
-        const { stiffness, damping, gravity, intensity } = this.settings;
+        const globalSettings = this.settings;
 
         for (const jb of this.bones) {
+            // Use bone specific settings if available, else global
+            const { stiffness, damping, gravity, intensity } = jb.settings || globalSettings;
             // Fuerza de retorno al origen (spring)
             const returnForceX = (jb.originalRotation.x - jb.bone.rotation.x) * stiffness;
             const returnForceZ = (jb.originalRotation.z - jb.bone.rotation.z) * stiffness;

@@ -42,6 +42,12 @@ export interface PersonEntry {
   // 🆕 Biometric Recognition
   faceDescriptor?: number[]; // 128D embedding facial para reconocimiento
   lastRecognitionConfidence?: number; // 0-1 score de última detección
+  // 🆕 Voice Biometrics
+  voiceSignature?: {
+    avgPitch: number;      // Frecuencia fundamental media (Hz)
+    pitchVariance: number; // Varianza de tono (Expresividad)
+    spectralCentroid?: number; // Timbre (Brillo)
+  };
 }
 
 export interface AvatarSettings {

@@ -2,6 +2,7 @@ import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, desktopCap
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import fs from 'fs';
 
 // ES Module compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -41,7 +42,6 @@ let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
 // Cargar configuración al inicio
 function loadSettings(): AppSettings {
     try {
-        const fs = require('fs');
         const configPath = path.join(app.getPath('userData'), 'settings.json');
         if (fs.existsSync(configPath)) {
             const data = fs.readFileSync(configPath, 'utf8');
@@ -56,7 +56,6 @@ function loadSettings(): AppSettings {
 // Guardar configuración
 function saveSettings(settings: AppSettings) {
     try {
-        const fs = require('fs');
         const configPath = path.join(app.getPath('userData'), 'settings.json');
         fs.writeFileSync(configPath, JSON.stringify(settings, null, 2));
         appSettings = settings;

@@ -1,6 +1,8 @@
 import React, { useRef, useEffect, Suspense, useState } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei';
+import { EffectComposer, Bloom, ToneMapping, Vignette } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as THREE from 'three';
 import { LipSyncAnalyzer } from '../utils/lipSync';
@@ -13,6 +15,7 @@ import { IKController } from '../utils/ikController';
 import { MoodSystem } from '../utils/moodSystem';
 import { InteractionSystem } from '../utils/interactionSystem';
 import { MaterialManager } from '../utils/materialManager';
+import { SimplexNoise } from '../utils/perlin';
 
 interface AvatarViewer3DProps {
     modelUrl?: string;
@@ -23,6 +26,8 @@ interface AvatarViewer3DProps {
     disableControls?: boolean;
     isHotMode?: boolean;
 }
+
+// Simulación de Ruido Perlin simple (Legacy removed - using SimplexNoise class)
 
 function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, isHotMode = false }: {
     modelUrl: string;
@@ -37,6 +42,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const mixerRef = useRef<THREE.AnimationMixer | null>(null);
     const lipSyncRef = useRef<LipSyncAnalyzer | null>(null);
 
+    // Generador de Ruido Orgánico (Perlin)
+    const simplex = React.useMemo(() => new SimplexNoise(), []);
+
     // Refs específicos para GrokAni / Anime
     const tongueRef = useRef<number | null>(null);
     const tongueMeshRef = useRef<THREE.Mesh | null>(null);
@@ -49,8 +57,63 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const leftArmOriginalRot = useRef<THREE.Euler | null>(null);
     const rightForeArmRef = useRef<THREE.Bone | null>(null);
     const leftForeArmRef = useRef<THREE.Bone | null>(null);
-    const spineRef = useRef<THREE.Bone | null>(null); // Para respiración mejorada
+    // Body Parts Refs
+    const hipsRef = useRef<THREE.Object3D | null>(null); // Detected Hips
+    const spineRef = useRef<THREE.Object3D | null>(null); // Para respiración mejorada
+    const lastSpineRot = useRef<THREE.Euler>(new THREE.Euler()); // Para inercia
     const musicEnergyRef = useRef(0); // Audio Reactivity Energy
+
+    // --- JIGGLE PHYSICS REFS ---
+    const leftBreastRef = useRef<THREE.Bone | null>(null);
+    const rightBreastRef = useRef<THREE.Bone | null>(null);
+    const leftButtRef = useRef<THREE.Bone | null>(null);
+    const rightButtRef = useRef<THREE.Bone | null>(null);
+    const debugDumpCount = useRef(0); // Counter for hierarchy dump
+
+    // Physics State: { velocity, position } for each part
+    const jiggleState = useRef({
+        lBreast: { velocity: 0, position: 0 },
+        rBreast: { velocity: 0, position: 0 },
+        lButt: { velocity: 0, position: 0 },
+        rButt: { velocity: 0, position: 0 }
+    });
+
+    const dragState = useRef({
+        active: false,
+        part: '' as string,
+        startY: 0,
+        currentY: 0
+    });
+
+    // --- DANCE & SWAY REFS ---
+    const isDancing = useRef(false);
+    const hairBonesRef = useRef<THREE.Object3D[]>([]);
+    const skirtBonesRef = useRef<THREE.Object3D[]>([]);
+
+    // Sway State (Rotation Physics)
+    // Structure: { [uuid]: { velocity: 0, rotation: 0, baseRot: THREE.Euler } }
+    const swayState = useRef<Record<string, { velocity: number, rotation: number, baseRot: THREE.Euler }>>({});
+
+    // LISTENER PARA ARRASTRAR (Drag-to-Jiggle)
+    useEffect(() => {
+        const handleDragMove = (e: MouseEvent) => {
+            if (dragState.current.active) {
+                dragState.current.currentY = e.clientY;
+            }
+        };
+        const handleDragUp = () => {
+            if (dragState.current.active) {
+                dragState.current.active = false;
+                console.log('🍒 Soltando rebote!');
+            }
+        };
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('mouseup', handleDragUp);
+        return () => {
+            window.removeEventListener('mousemove', handleDragMove);
+            window.removeEventListener('mouseup', handleDragUp);
+        };
+    }, []);
 
     // --- HELPER FUNCTIONS FOR EXPRESIONS ---
     const getEmotionIntensity = (currentEmotion: string): number => {
@@ -95,6 +158,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     // Refs para LipSync basado en hueso de mandíbula
     const jawBoneRef = useRef<THREE.Bone | null>(null);
     const jawOriginalRotation = useRef<THREE.Euler | null>(null);
+
+    // 🆕 Ref para suavizar apertura de boca y permitir decay gradual
+    const autoMouthOpenRef = useRef<{ value: number } | null>(null);
 
     // Refs para huesos de labios (modelos Rigify como GrokAni)
     const lipTopBoneRef = useRef<THREE.Bone | null>(null);      // DEF-lipTL
@@ -249,8 +315,14 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                 }
                                 console.log('✨ Configurado como DECAL:', child.name);
                             } else if (meshName.includes('eye')) {
-                                // OJOS: Preservar configuración original
+                                // OJOS: Toning down brightness
                                 mat.side = THREE.DoubleSide;
+                                if (mat instanceof THREE.MeshStandardMaterial) {
+                                    mat.roughness = 0.5; // Less shiny
+                                    mat.metalness = 0.1;
+                                    mat.envMapIntensity = 0.5; // Lower reflections
+                                    mat.emissiveIntensity = 0; // Ensure no glow
+                                }
                                 console.log('👁️ Configurado como OJO:', child.name);
                             } else if (isSkin) {
                                 // PIEL/CUERPO: Material sólido normal
@@ -305,6 +377,19 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             // DEBUG: Mostrar morphs encontrados en este mesh
                             const morphNames = Object.keys(child.morphTargetDictionary);
                             console.log(`🎭 MESH "${child.name}" Morph List:`, morphNames);
+
+                            if (child.name === 'Ani_Main') {
+                                console.log("🔥 SHAPE KEYS ENCONTRADAS EN ANI_MAIN:");
+                                console.log(Object.keys(child.morphTargetDictionary));
+
+                                // Intenta buscar automáticamente las de interés:
+                                const keys = Object.keys(child.morphTargetDictionary);
+                                const tongueKey = keys.find(k => k.toLowerCase().includes('tongue'));
+                                const ahegaoKey = keys.find(k => k.toLowerCase().includes('ahegao') || k.toLowerCase().includes('roll'));
+
+                                if (tongueKey) console.log(`👅 Clave de lengua detectada: "${tongueKey}"`);
+                                if (ahegaoKey) console.log(`🥵 Clave Ahegao detectada: "${ahegaoKey}"`);
+                            }
 
                             // DEBUG: Buscar TODOS los morphs relacionados con boca/labios
                             const mouthMorphs = morphNames.filter(m => {
@@ -365,17 +450,115 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
                 }
 
-                // 2. BÚSQUEDA DE HUESOS (Más tolerante)
-                if (child instanceof THREE.Bone) {
-                    const name = child.name.toLowerCase();
+                // 2. BÚSQUEDA DE HUESOS (Más tolerante: Acepta Object3D si tiene nombre clave)
+                const lowerName = child.name.toLowerCase();
+                const isJigglePart = /breast|ass_|ass-|pectoral|glute|butt/.test(lowerName);
+
+                if (child instanceof THREE.Bone || isJigglePart) {
+                    const name = lowerName; // Ya lo tenemos calculado
                     const isRight = name.includes('right') || name.includes('_r') || name.endsWith('.r');
                     const isLeft = name.includes('left') || name.includes('_l') || name.endsWith('.l');
 
-                    if (name.includes('head')) headBoneRef.current = child;
-                    if (name.includes('spine') || name.includes('body')) spineRef.current = child;
+                    // DEPURACIÓN EXTREMA: DUMP DE JERARQUÍA (Desactivado)
+                    /*
+                    if (debugDumpCount.current < 200) {
+                         console.log(`🦴 NODE [${child.type}]: "${child.name}" (Bone? ${child instanceof THREE.Bone})`);
+                         debugDumpCount.current++;
+                    }
+                    */
 
-                    // Mandíbula para LipSync - buscar varios nombres posibles
-                    // DEF-jaw (Blender), jaw (Unity), mandible, etc.
+                    if (name.includes('head')) headBoneRef.current = child as any;
+                    if (name.includes('spine') || name.includes('body')) spineRef.current = child as any;
+                    if (name.includes('hips') || name.includes('pelvis') || name.includes('grokani_hips')) {
+                        console.log('💃 Hips/Pelvis found:', name);
+                        hipsRef.current = child as any;
+                    }
+
+                    // --- DANCE: Detección de Pelo y Ropa ---
+                    if (name.includes('hair') || name.includes('ponytail') || name.includes('braid')) {
+                        // Evitar duplicados
+                        if (!hairBonesRef.current.some(b => b.uuid === child.uuid)) {
+                            console.log('💇 Hair bone found:', name);
+                            hairBonesRef.current.push(child);
+                            swayState.current[child.uuid] = {
+                                velocity: 0,
+                                rotation: 0,
+                                baseRot: child.rotation.clone() // GUARDAR POSICIÓN ORIGINAL
+                            };
+                        }
+                    }
+                    if (name.includes('skirt') || name.includes('dress') || name.includes('cloth') || name.includes('apron')) {
+                        if (!skirtBonesRef.current.some(b => b.uuid === child.uuid)) {
+                            console.log('👗 Skirt bone found:', name);
+                            skirtBonesRef.current.push(child);
+                            swayState.current[child.uuid] = {
+                                velocity: 0,
+                                rotation: 0,
+                                baseRot: child.rotation.clone() // GUARDAR POSICIÓN ORIGINAL
+                            };
+                        }
+                    }
+
+
+
+                    // 0. HARDCODED USER REQUEST (Máxima prioridad)
+                    // Nombres reales encontrados en el dump: wgt-grokani_breast_masterl, etc.
+                    const exactName = child.name;
+                    // Normalizar: quitar prefijos molestos si queremos, pero mejor check directo
+
+                    if (exactName === 'breast_master.L' || name === 'wgt-grokani_breast_masterl' || name === 'wgt-grokani_breastl') {
+                        console.log('🎯 HARDCODED HIT: Left Breast');
+                        leftBreastRef.current = child as any;
+                    }
+                    if (exactName === 'breast_master.R' || name === 'wgt-grokani_breast_masterr' || name === 'wgt-grokani_breastr') {
+                        console.log('🎯 HARDCODED HIT: Right Breast');
+                        rightBreastRef.current = child as any;
+                    }
+                    if (exactName === 'ass_master.L' || name === 'wgt-grokani_ass_masterl') {
+                        console.log('🎯 HARDCODED HIT: Left Butt');
+                        leftButtRef.current = child as any;
+                    }
+                    if (exactName === 'ass_master.R' || name === 'wgt-grokani_ass_masterr') {
+                        console.log('🎯 HARDCODED HIT: Right Butt');
+                        rightButtRef.current = child as any;
+                    }
+
+                    // JIGGLE BONES DETECTION (Fuzzy Fallback)
+                    // Prioridad: "master" > normal > "front"/"tip"
+                    // Nota: La detección fuzzy falló antes porque 'masterl' no terminaba en '.l' ni '_l'
+                    // Solo activamos fallback si NO se asignó arriba
+                    const fuzzyCheck = !leftBreastRef.current || !rightBreastRef.current || !leftButtRef.current || !rightButtRef.current;
+
+                    if (fuzzyCheck && (name.includes('pectoral') || name.includes('breast') || name.includes('chestlower'))) {
+                        console.log('✅ Found Breast Bone candidate:', name);
+                        const isL = isLeft || name.startsWith('lpectoral') || name.startsWith('l_');
+                        const isR = isRight || name.startsWith('rpectoral') || name.startsWith('r_');
+
+                        // Si es "master", tiene prioridad absoluta. Si no, solo si no hay uno asignado.
+                        const isMaster = name.includes('master') || name.includes('pectoral');
+
+                        if (isL) {
+                            if (isMaster || !leftBreastRef.current) leftBreastRef.current = child as any;
+                        } else if (isR) {
+                            if (isMaster || !rightBreastRef.current) rightBreastRef.current = child as any;
+                        }
+                    }
+                    // Agregado 'ass' para modelos Rigify/Blender
+                    if (name.includes('glute') || name.includes('butt') || name.includes('pelvis') || name.includes('ass_') || name.includes('ass-')) {
+                        console.log('✅ Found Butt Bone candidate:', name);
+                        const isL = isLeft || name.startsWith('lglute') || name.startsWith('l_') || name.includes('.l');
+                        const isR = isRight || name.startsWith('rglute') || name.startsWith('r_') || name.includes('.r');
+
+                        const isMaster = name.includes('master') || name.includes('glute');
+
+                        if (isL) {
+                            if (isMaster || !leftButtRef.current) leftButtRef.current = child as any;
+                        } else if (isR) {
+                            if (isMaster || !rightButtRef.current) rightButtRef.current = child as any;
+                        }
+                    }
+
+                    // Mandíbula para LipSync
                     if (!jawBoneRef.current) {
                         const isJawBone = (
                             name === 'def-jaw' ||
@@ -385,76 +568,62 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             (name.includes('jaw') && !name.includes('jawl') && !name.includes('jawr') && !name.includes('jaw.l') && !name.includes('jaw.r'))
                         );
                         if (isJawBone) {
-                            jawBoneRef.current = child;
+                            jawBoneRef.current = child as any;
                             jawOriginalRotation.current = child.rotation.clone();
                             console.log('🦷 Hueso de mandíbula encontrado:', child.name);
                         }
                     }
 
-                    // Huesos de labios para Rigify (GrokAni) - lip.T, lip.B
-                    // Debug: mostrar huesos que contengan "lip"
+                    // Huesos de labios
                     if (name.includes('lip')) {
                         console.log('🔍 Hueso con "lip":', child.name);
                     }
-
-                    // Detectar DEF-lipTL (labio superior izquierdo)
                     if (name === 'def-liptl' && !lipTopBoneRef.current) {
-                        lipTopBoneRef.current = child;
+                        lipTopBoneRef.current = child as any;
                         lipTopOriginalPos.current = child.position.clone();
-                        console.log('👄 Hueso DEFORM labio SUPERIOR IZQ encontrado:', child.name);
                     }
-                    // Detectar DEF-lipTR (labio superior derecho)
                     if (name === 'def-liptr' && !lipTopRightRef.current) {
-                        lipTopRightRef.current = child;
+                        lipTopRightRef.current = child as any;
                         lipTopRightOriginalPos.current = child.position.clone();
-                        console.log('👄 Hueso DEFORM labio SUPERIOR DER encontrado:', child.name);
                     }
-                    // Detectar DEF-lipBL (labio inferior izquierdo)
                     if (name === 'def-lipbl' && !lipBottomBoneRef.current) {
-                        lipBottomBoneRef.current = child;
+                        lipBottomBoneRef.current = child as any;
                         lipBottomOriginalPos.current = child.position.clone();
-                        console.log('👄 Hueso DEFORM labio INFERIOR IZQ encontrado:', child.name);
                     }
-                    // Detectar DEF-lipBR (labio inferior derecho)
                     if (name === 'def-lipbr' && !lipBottomRightRef.current) {
-                        lipBottomRightRef.current = child;
+                        lipBottomRightRef.current = child as any;
                         lipBottomRightOriginalPos.current = child.position.clone();
-                        console.log('👄 Hueso DEFORM labio INFERIOR DER encontrado:', child.name);
                     }
 
-                    // Brazos (Upper Arm) - Soporta múltiples convenciones de nombres
-                    // Rigify: DEF-upper_armL, DEF-upper_armR (name is lowercase: def-upper_arml)
-                    // SOLO detectar huesos DEF- para animación (son los que deforman)
+                    // Brazos (Upper Arm)
                     const isDefUpperArm = name === 'def-upper_arml' || name === 'def-upper_armr';
                     const isRPMArm = (name.includes('arm') && !name.includes('fore') && !name.includes('hand') && !name.includes('upper_arm'));
 
                     if (isDefUpperArm) {
-                        // Rigify DEF bones
                         if (name === 'def-upper_arml' && !rightArmRef.current) {
-                            rightArmRef.current = child;
+                            rightArmRef.current = child as any;
                             rightArmOriginalRot.current = child.rotation.clone();
                             console.log('💪 Brazo DERECHO (DEF) asignado:', child.name);
                         }
                         if (name === 'def-upper_armr' && !leftArmRef.current) {
-                            leftArmRef.current = child;
+                            leftArmRef.current = child as any;
                             leftArmOriginalRot.current = child.rotation.clone();
                             console.log('💪 Brazo IZQUIERDO (DEF) asignado:', child.name);
                         }
                     } else if (isRPMArm) {
-                        // RPM naming
                         if (isRight && !rightArmRef.current) {
-                            rightArmRef.current = child;
+                            rightArmRef.current = child as any;
                             console.log('💪 Brazo DERECHO (RPM) asignado:', child.name);
                         }
                         if (isLeft && !leftArmRef.current) {
-                            leftArmRef.current = child;
+                            leftArmRef.current = child as any;
                             console.log('💪 Brazo IZQUIERDO (RPM) asignado:', child.name);
                         }
                     }
-                    // Antebrazos (Lower Arm)
+                    // Antebrazos
                     if (name.includes('fore') || name.includes('lower') || name.includes('elbow')) {
-                        if (isRight && !rightForeArmRef.current) rightForeArmRef.current = child;
-                        if (isLeft && !leftForeArmRef.current) leftForeArmRef.current = child;
+                        if (isRight && !rightForeArmRef.current) rightForeArmRef.current = child as any;
+                        if (isLeft && !leftForeArmRef.current) leftForeArmRef.current = child as any;
                     }
                 }
             });
@@ -572,27 +741,141 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             breathingSpeed: 1, gestureFrequency: 1, expressionIntensity: 1, idleVariation: 1, timeScale: 1
         };
 
-        // --- 1. MOVIMIENTO "VIVO" (RESPIRACIÓN Y BRAZOS) ---
-        // Solo actualizar cuando shouldUpdateAnimation es true para reducir carga
+        // --- 1. MOVIMIENTO "VIVO" AVANZADO (Procedural Animation) ---
+        if (modelRef.current) {
+            // A. RESPIRACIÓN REALISTA (No solo arriba/abajo, sino expansión de pecho)
+            const breathT = t * (isHotMode ? 3.0 : 1.0) * moodInfluence.breathingSpeed;
+            const inhale = Math.sin(breathT); // -1 a 1
 
-        if (shouldUpdateAnimation && modelRef.current) {
-            // Respiración influenciada por mood
-            const breathSpeed = (isHotMode ? 8 : 2) * moodInfluence.breathingSpeed;
-            const breathAmp = (isHotMode ? 0.008 : 0.003) * moodInfluence.expressionIntensity;
-            modelRef.current.position.y = -1.5 + Math.sin(t * breathSpeed) * breathAmp;
+            // Movimiento vertical sutil (Pecho sube al inhalar)
+            // Usamos lerp para suavizar cambios bruscos de mood
+            const targetY = -0.5 + (inhale * 0.005 * moodInfluence.expressionIntensity);
+            modelRef.current.position.y = THREE.MathUtils.lerp(modelRef.current.position.y, targetY, 0.1);
 
-            // Sutil movimiento de columna
+            // B. MICRO-BALANCEO (Spine/Columna)
+            // Esto evita que parezca "clavada" al suelo. Se balancea sutilmente como si mantuviera el equilibrio.
             if (spineRef.current) {
-                spineRef.current.rotation.x = Math.sin(t * 1) * 0.02 * moodInfluence.idleVariation;
+                // Ruido orgánico para rotación (Simplex)
+                const noiseX = simplex.noise2D(t * 0.5, 0) * 0.02 * moodInfluence.idleVariation;
+                const noiseY = simplex.noise2D(t * 0.3, 100) * 0.015 * moodInfluence.idleVariation;
+                const noiseZ = simplex.noise2D(t * 0.4, 200) * 0.01 * moodInfluence.idleVariation;
+
+                // 🔒 JIGGLE PHYSICS REMOVED PER USER REQUEST (Performance)
+                /*
+                const jiggleTargets = [
+                    { key: 'lBreast', ref: leftBreastRef },
+                    { key: 'rBreast', ref: rightBreastRef },
+                    { key: 'lButt', ref: leftButtRef },
+                    { key: 'rButt', ref: rightButtRef }
+                ];
+
+                jiggleTargets.forEach(({ key, ref }) => {
+                    const state = (jiggleState.current as any)[key];
+                    ...
+                });
+                */
+
+                // --- DANCE SYSTEM & SECONDARY PHYSICS ---
+                const isDancingNow = true;
+
+                if (isDancingNow) {
+                    const speed = 0.5; // Velocidad orgánica
+
+                    // 1. ORGANIC BODY MOTION (Perlin Noise)
+                    if (spineRef.current) {
+                        const nTwist = simplex.noise2D(t * speed, 0) * 0.15;
+                        const nLean = simplex.noise2D(t * speed, 100) * 0.1;
+                        const nJitter = simplex.noise2D(t * speed * 2, 200) * 0.02;
+
+                        // Add Dance to existing Breathing/Noise
+                        spineRef.current.rotation.y += nTwist + nJitter;
+                        spineRef.current.rotation.z += nLean;
+
+                        // Global Bounce (Breathing-like but deeper)
+                        if (modelRef.current) {
+                            const nBounce = simplex.noise2D(t * speed * 1.5, 300) * 0.03;
+                            modelRef.current.position.y = -0.5 + Math.abs(nBounce); // Keeping user's -0.5 base
+                        }
+
+                        // Counter Head
+                        if (headBoneRef.current) {
+                            headBoneRef.current.rotation.y -= (nTwist + nJitter) * 0.6;
+                            headBoneRef.current.rotation.z -= nLean * 0.4;
+
+                            // Head Look-Around
+                            const nHeadLook = simplex.noise2D(t * 0.2, 500) * 0.2;
+                            headBoneRef.current.rotation.y += nHeadLook;
+                        }
+
+                        // 2. INERTIA PHYSICS (From Spine Movement)
+                        const currentRotY = spineRef.current.rotation.y;
+                        const deltaY = currentRotY - lastSpineRot.current.y;
+
+                        // Update Last Frame
+                        lastSpineRot.current.copy(spineRef.current.rotation);
+
+                        // Apply Inertia to Hair/Skirt
+                        const allSwayBones = [...hairBonesRef.current, ...skirtBonesRef.current];
+                        allSwayBones.forEach((bone, i) => {
+                            const state = swayState.current[bone.uuid];
+                            if (!state || !state.baseRot) return;
+
+                            // Reset to Base
+                            bone.rotation.copy(state.baseRot);
+
+                            // Inertia Multiplier (REDUCIDO x10 por petición usuario)
+                            // Antes: -5.0 -> Ahora: -0.5
+                            const inertia = deltaY * -0.2 * (1 + i * 0.05);
+
+                            // Viento suave (REDUCIDO x10)
+                            const wind = simplex.noise2D(t * 0.02, i * 10) * 0.005;
+
+                            bone.rotation.y += inertia + wind;
+                            bone.rotation.z += wind * 0.2;
+                        });
+                    }
+                }
+
+                // Aplicar suavemente (Existing noise logic merged or ignored if dancing)
+                /* 
+                spineRef.current.rotation.x = THREE.MathUtils.lerp(spineRef.current.rotation.x, noiseX, 0.1);
+                ...
+                */
+                if (!isDancingNow) {
+                    spineRef.current.rotation.x = THREE.MathUtils.lerp(spineRef.current.rotation.x, noiseX, 0.1);
+                    spineRef.current.rotation.y = THREE.MathUtils.lerp(spineRef.current.rotation.y, noiseY, 0.1);
+                    spineRef.current.rotation.z = THREE.MathUtils.lerp(spineRef.current.rotation.z, noiseZ, 0.1);
+                }
+
+                // Extra en Hot Mode
                 if (isHotMode) {
-                    spineRef.current.rotation.z = Math.sin(t * 2) * 0.03;
+                    spineRef.current.rotation.z += Math.sin(t * 2) * 0.02;
                 }
             }
+
+            // C. CABEZA "FLOTANTE" (Head Stabilization)
+            // Los ojos humanos compensan el movimiento del cuerpo. Movemos la cabeza ligeramente en contra del cuerpo.
+            if (headBoneRef.current && spineRef.current) {
+                // Contrarrestar sutilmente el movimiento del cuerpo para mantener la mirada estable
+                const counterX = -spineRef.current.rotation.x * 0.5;
+                const counterY = -spineRef.current.rotation.y * 0.5;
+
+                // Añadir "Sacadas" (movimientos rápidos y pequeños de atención) - Simplex Noise
+                const attentionNoise = simplex.noise2D(t, 600) * 0.05 * moodInfluence.expressionIntensity;
+
+                // Aplicar suavemente
+                headBoneRef.current.rotation.x = THREE.MathUtils.lerp(headBoneRef.current.rotation.x, counterX + attentionNoise * 0.2, 0.1);
+                headBoneRef.current.rotation.y = THREE.MathUtils.lerp(headBoneRef.current.rotation.y, counterY + attentionNoise, 0.1);
+            }
+
+            // D. HOMBROS RELAJADOS (Solo si no hay acción)
+            // Los hombros suben un poquito al inhalar
+            // D. HOMBROS RELAJADOS (Versi\u00f3n segura: Solo rotaci\u00f3n sutil, NO posici\u00f3n)
+            // Eliminado el c\u00f3digo de position.y que romp\u00eda el modelo
         }
 
         // --- GESTOS / ACCIONES ---
-        // SOLO aplicar rotación cuando hay una acción activa
-        // Cuando no hay acción, dejar los brazos en su pose original del modelo
+        // SOLO aplicar rotaci\u00f3n cuando hay una acci\u00f3n activa
         if (action && (rightArmRef.current || leftArmRef.current)) {
             let targetRightArmZ = 0;
             let targetLeftArmZ = 0;
@@ -600,31 +883,49 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             let targetLeftArmX = 0;
             let shouldAnimate = false;
 
-            // Aplicar gesto según la acción
+            // FIX: Ajuste de ejes para que no salude a la espalda
+            // Si Z+ es Atr\u00e1s, necesitamos Z Negativo o 0 para ir al frente.
+            // Si X-80 es Abajo, entonces X cerca de 0 es Horizontal (Arriba).
+
             if (action === 'WAVE') {
-                // Saludar con mano derecha
-                targetRightArmZ = THREE.MathUtils.degToRad(60); // Levantar brazo
-                targetRightArmX = Math.sin(t * 12) * 0.3; // Movimiento de saludo
+                // Saludo corregido:
+                // 1. Levantar brazo: X debe subir (de -80 a -10 o 0)
+                // 2. Traer al frente: Z debe ser negativo (de 10 a -20)
+
+                targetRightArmX = THREE.MathUtils.degToRad(-10) + (Math.sin(t * 10) * 0.1); // Levantar casi horizontal y oscilar
+                targetRightArmZ = THREE.MathUtils.degToRad(-25); // Traer HACIA ADELANTE (Z negativo)
+
+                // A\u00f1adimos una oscilaci\u00f3n extra en Z para el efecto de saludo
+                targetRightArmZ += Math.sin(t * 12) * 0.2;
+
                 shouldAnimate = true;
 
             } else if (action === 'SHRUG') {
                 // Encogerse de hombros
-                targetRightArmZ = THREE.MathUtils.degToRad(30);
-                targetLeftArmZ = THREE.MathUtils.degToRad(-30);
+                targetRightArmZ = THREE.MathUtils.degToRad(-10); // Un poco afuera/adelante
+                targetRightArmX = THREE.MathUtils.degToRad(-60); // Subir un poco desde abajo
+
+                targetLeftArmZ = THREE.MathUtils.degToRad(-10); // Espejo
+                targetLeftArmX = THREE.MathUtils.degToRad(-60);
                 shouldAnimate = true;
 
             } else if (action === 'CROSS_ARMS') {
-                // Cruzar brazos (hacia adentro)
-                targetRightArmZ = THREE.MathUtils.degToRad(-45);
-                targetLeftArmZ = THREE.MathUtils.degToRad(45);
+                // Cruzar brazos (hacia el pecho)
+                targetRightArmX = THREE.MathUtils.degToRad(-50);
+                targetRightArmZ = THREE.MathUtils.degToRad(-45); // Z Negativo = Adelante/Adentro
+
+                targetLeftArmX = THREE.MathUtils.degToRad(-50);
+                targetLeftArmZ = THREE.MathUtils.degToRad(45); // En el izquierdo suele ser opuesto
                 shouldAnimate = true;
 
             } else if (action === 'HANDS_ON_HIPS') {
-                // Manos en cadera
-                targetRightArmZ = THREE.MathUtils.degToRad(-30);
-                targetLeftArmZ = THREE.MathUtils.degToRad(30);
-                shouldAnimate = true;
+                // Manos en cadera (Jarramanos)
+                targetRightArmX = THREE.MathUtils.degToRad(-70);
+                targetRightArmZ = THREE.MathUtils.degToRad(30); // Afuera para abrir codos
 
+                targetLeftArmX = THREE.MathUtils.degToRad(-70);
+                targetLeftArmZ = THREE.MathUtils.degToRad(-30);
+                shouldAnimate = true;
             }
 
             if (shouldAnimate) {
@@ -640,51 +941,45 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             }
         } else if (isAiSpeaking && !action) {
             // --- AUTO GESTOS AL HABLAR ---
-            // Base: Brazos abajo (-80 deg X) + Ligeramente adelante (-0.2 Z)
-
             const gestureSpeed = 5;
             const noise = Math.sin(t * gestureSpeed) * Math.cos(t * gestureSpeed * 0.7);
             const liftAmount = THREE.MathUtils.degToRad(25);
-            const baseDownX = THREE.MathUtils.degToRad(-80);
-            const baseForwardZ = -0.2; // Ligeramente hacia adelante
+
+            // Base: Brazos abajo (-80 X).
+            // FIX Z: Forzar un poco m\u00e1s adelante para que se vea relajado frente al cuerpo.
+            const baseForwardZ = THREE.MathUtils.degToRad(-15); // -15 grados (Adelante)
 
             // Brazo DERECHO
             if (rightArmRef.current) {
-                const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3)));
-                // Z: Base Forward + Gesto lateral sutil
-                const targetZ = baseForwardZ + THREE.MathUtils.degToRad(5) + (noise * 0.1);
+                const targetX = THREE.MathUtils.degToRad(-80) + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3)));
+                const targetZ = baseForwardZ + (noise * 0.1); // Moverse sobre la base "adelantada"
 
                 rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, targetX, 0.1);
                 rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, targetZ, 0.1);
             }
-            // Brazo IZQUIERDO (Espejo Z?)
+            // Brazo IZQUIERDO
             if (leftArmRef.current) {
-                const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3 + 1)));
-                // Z en izquierdo suele ser opuesto para "adelante" si los ejes son espejo.
-                // Si Z+ fue Atrás en ambos (asumido), entonces Z- es Adelante en ambos?
-                // En T-Pose, Z apunta hacia arriba.
-                // Si rotamos X (-80), el Z local cambia.
-                // Vamos a asumir espejo simétrico: Si Right Z=-0.2 es adelante, Left Z=+0.2 podría ser adelante?
-                // O si el usuario dijo que Z+75 fue atrás...
-                // Vamos a probar Z = +0.2 para izquierdo (espejo).
-                const targetZ = -baseForwardZ + THREE.MathUtils.degToRad(-5) - (noise * 0.1);
+                const targetX = THREE.MathUtils.degToRad(-80) + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3 + 1)));
+                // Invertir Z para el izquierdo (espejo)
+                const targetZ = -baseForwardZ - (noise * 0.1);
 
                 leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, targetX, 0.1);
                 leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, targetZ, 0.1);
             }
         } else if (!action) {
-            // --- RELAX (Return to Idle Pose) ---
-            // Pose base: X=-80, Z=-0.2 (Adelante)
+            // --- RELAX (Idle Pose) ---
             const lerpReturn = 0.05;
-            const baseDownX = THREE.MathUtils.degToRad(-80);
-            const baseForwardZ = -0.2;
+            const baseDownX = THREE.MathUtils.degToRad(-82); // Muy pegados al cuerpo
+
+            // FIX: Z negativo para que las manos descansen sobre los muslos, no hacia el trasero
+            const baseForwardZ = THREE.MathUtils.degToRad(-10);
 
             if (rightArmRef.current) {
                 rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, baseDownX, lerpReturn);
                 rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, baseForwardZ, lerpReturn);
             }
             if (leftArmRef.current) {
-                // Espejo para izquierdo
+                // Espejo izquierdo (invierto Z)
                 leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, baseDownX, lerpReturn);
                 leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, -baseForwardZ, lerpReturn);
             }
@@ -719,7 +1014,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         lookTarget.current.lerp(mouse, 0.1);
 
         let targetPupilScale = 0;
-        let eyeDirectionX = lookTarget.current.x * 0.5;
+        let eyeDirectionX = lookTarget.current.x * -0.5;
         let eyeDirectionY = lookTarget.current.y * 0.5;
 
         switch (emotion) {
@@ -810,16 +1105,39 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // Cálculo de apertura de boca para hablar
         // Si no hay audio analizado, usamos una onda simple cuando isAiSpeaking es true
         const lipTime = t * 20;
-        const autoMouthOpen = isAiSpeaking ? (Math.sin(lipTime) * 0.5 + 0.5) : 0;
+
+        // 🆕 Mejorar decay de autoMouthOpen para evitar movimiento perpetuo
+        const targetMouthOpen = isAiSpeaking ? (Math.sin(lipTime) * 0.5 + 0.5) : 0;
+
+        // 🆕 Usar ref para suavizar y permitir decay gradual
+        if (!autoMouthOpenRef.current) {
+            autoMouthOpenRef.current = { value: 0 };
+        }
+
+        // 🆕 Lerp con decay más rápido cuando no está hablando
+        const lerpSpeed = isAiSpeaking ? 0.3 : 0.15; // Más rápido al cerrar
+        autoMouthOpenRef.current.value = THREE.MathUtils.lerp(
+            autoMouthOpenRef.current.value,
+            targetMouthOpen,
+            lerpSpeed
+        );
+
+        const autoMouthOpen = THREE.MathUtils.clamp(autoMouthOpenRef.current.value, 0, 1);
 
         // --- JAW BONE LIP SYNC (para modelos sin morph targets de boca) ---
         if (jawBoneRef.current && jawOriginalRotation.current) {
+            // 🆕 Validar que jawOriginalRotation tenga valores válidos
+            if (isNaN(jawOriginalRotation.current.x) || isNaN(jawOriginalRotation.current.z)) {
+                console.warn('⚠️ jawOriginalRotation tiene valores inválidos, resetando...');
+                jawOriginalRotation.current.copy(jawBoneRef.current.rotation);
+            }
+
             // Rotar la mandíbula para abrir la boca
             // Diferentes modelos usan diferentes ejes:
             // - Blender/Rigify: X axis
             // - DAZ/Genesis: Z axis  
             // - Unity Humanoid: X axis
-            const maxJawRotation = Math.PI / 4; // ~45 grados (más abierto)
+            const maxJawRotation = Math.PI / 6; // 🆕 Reducido de /4 a /6 (~30 grados en vez de 45)
 
             const jawName = jawBoneRef.current.name.toLowerCase();
             const isDazModel = jawName.includes('lowerjaw') || jawName.includes('genesis');
@@ -827,15 +1145,47 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             if (isDazModel) {
                 // DAZ: rotación en Z (hacia abajo)
                 const targetZ = jawOriginalRotation.current.z - (autoMouthOpen * maxJawRotation);
-                jawBoneRef.current.rotation.z = THREE.MathUtils.lerp(
-                    jawBoneRef.current.rotation.z, targetZ, 0.3
+
+                // 🆕 Aplicar límites de seguridad
+                const clampedTargetZ = THREE.MathUtils.clamp(
+                    targetZ,
+                    jawOriginalRotation.current.z - Math.PI / 4, // Máximo ~45° hacia abajo
+                    jawOriginalRotation.current.z + Math.PI / 12  // Máximo ~15° hacia arriba (cierre)
                 );
+
+                jawBoneRef.current.rotation.z = THREE.MathUtils.lerp(
+                    jawBoneRef.current.rotation.z,
+                    clampedTargetZ,
+                    0.3
+                );
+
+                // 🆕 Validar que el valor final sea válido
+                if (isNaN(jawBoneRef.current.rotation.z)) {
+                    console.warn('⚠️ jawBone rotation.z es NaN, resetando...');
+                    jawBoneRef.current.rotation.z = jawOriginalRotation.current.z;
+                }
             } else {
                 // Blender/otros: rotación en X
                 const targetX = jawOriginalRotation.current.x + (autoMouthOpen * maxJawRotation);
-                jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(
-                    jawBoneRef.current.rotation.x, targetX, 0.3
+
+                // 🆕 Aplicar límites de seguridad
+                const clampedTargetX = THREE.MathUtils.clamp(
+                    targetX,
+                    jawOriginalRotation.current.x - Math.PI / 12, // Máximo ~15° hacia atrás
+                    jawOriginalRotation.current.x + Math.PI / 4   // Máximo ~45° hacia adelante (apertura)
                 );
+
+                jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(
+                    jawBoneRef.current.rotation.x,
+                    clampedTargetX,
+                    0.3
+                );
+
+                // 🆕 Validar que el valor final sea válido
+                if (isNaN(jawBoneRef.current.rotation.x)) {
+                    console.warn('⚠️ jawBone rotation.x es NaN, resetando...');
+                    jawBoneRef.current.rotation.x = jawOriginalRotation.current.x;
+                }
             }
 
             // ACTIVAR MORPHS JCM DE DAZ (para que los labios sigan a la mandíbula)
@@ -915,11 +1265,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const openIdx = visemeMap['viseme_aa'];
                     // Multiplicador para aumentar la apertura
                     const mouthIntensity = autoMouthOpen * 10; // 10x más abierto
+                    // 🆕 Clamping más estricto para evitar deformaciones
+                    const clampedIntensity = THREE.MathUtils.clamp(mouthIntensity, 0, 0.8); // Máximo 0.8 en vez de 1.0
 
                     if (openIdx !== undefined) {
                         mesh.morphTargetInfluences[openIdx] = THREE.MathUtils.lerp(
                             mesh.morphTargetInfluences[openIdx],
-                            Math.min(mouthIntensity, 1), // Clamp a 1
+                            clampedIntensity,
                             0.3 // Más rápido
                         );
                     } else {
@@ -927,16 +1279,40 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         Object.keys(mesh.morphTargetDictionary!).forEach(k => {
                             if (k.toLowerCase().includes('open') || k.toLowerCase().includes('aa')) {
                                 const idx = mesh.morphTargetDictionary![k];
-                                mesh.morphTargetInfluences![idx] = Math.min(mouthIntensity, 1);
+                                mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(
+                                    mesh.morphTargetInfluences![idx],
+                                    clampedIntensity,
+                                    0.3
+                                );
                             }
                         });
                     }
                 } else {
-                    // Cerrar boca suavemente
+                    // 🆕 Cerrar boca suavemente - resetear TODOS los morphs relacionados con boca
                     const openIdx = visemeMap['viseme_aa'];
                     if (openIdx !== undefined) {
-                        mesh.morphTargetInfluences[openIdx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences[openIdx], 0, 0.2);
+                        mesh.morphTargetInfluences[openIdx] = THREE.MathUtils.lerp(
+                            mesh.morphTargetInfluences[openIdx],
+                            0,
+                            0.2
+                        );
                     }
+
+                    // 🆕 También resetear cualquier otro morph de boca que pueda estar activo
+                    Object.keys(mesh.morphTargetDictionary!).forEach(k => {
+                        const kl = k.toLowerCase();
+                        if (kl.includes('open') || kl.includes('aa') ||
+                            kl.includes('mouth') && !kl.includes('smile') && !kl.includes('frown')) {
+                            const idx = mesh.morphTargetDictionary![k];
+                            if (idx !== undefined && mesh.morphTargetInfluences![idx] > 0.01) {
+                                mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(
+                                    mesh.morphTargetInfluences![idx],
+                                    0,
+                                    0.15 // Cerrar gradualmente
+                                );
+                            }
+                        }
+                    });
                 }
             });
         }
@@ -1070,10 +1446,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 const geo = new THREE.SphereGeometry(0.008, 6, 6); // Gotas pequeñas
                 const mat = new THREE.MeshPhysicalMaterial({
                     color: 0xffffff,
-                    roughness: 0.2,
-                    metalness: 0.1,
+                    roughness: 0.1,  // Muy brillante (líquido)
+                    metalness: 0.0,
                     transmission: 0.8, // Transparencia lechosa
-                    thickness: 0.2,
+                    thickness: 0.5,    // Grosor para refracción
                     transparent: true,
                     opacity: 0.9,
                     side: THREE.DoubleSide
@@ -1256,7 +1632,7 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
 
     // Coordenadas objetivo para cada modo
     const targets: Record<string, { pos: THREE.Vector3, look: THREE.Vector3 }> = {
-        default: { pos: new THREE.Vector3(0, 1.4, 3.8), look: new THREE.Vector3(0, 1.3, 0) },
+        default: { pos: new THREE.Vector3(0, 3.2, 4.2), look: new THREE.Vector3(0, 2.2, 0) },
         face: { pos: new THREE.Vector3(0, 2.75, 1.6), look: new THREE.Vector3(0, 2.65, 0) },
         body: { pos: new THREE.Vector3(0, 1.5, 2.6), look: new THREE.Vector3(0, 1.1, 0) },
         full: { pos: new THREE.Vector3(0, 1.4, 3.8), look: new THREE.Vector3(0, 1.0, 0) },
@@ -1367,15 +1743,38 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps & { action?: string | null, v
                     makeDefault
                     fov={cameraFov}
                     // Position inicial (se sobreescribe por CameraManager)
-                    position={[-0.007, 2.458, 3.815]}
+                    position={[0, 3.2, 4.2]}
                 />
 
                 <CameraManager viewMode={viewMode} controlsRef={controlsRef} />
 
-                <ambientLight intensity={0.8} /> {/* Luz ambiental subida para evitar sombras negras en la cara */}
-                <directionalLight position={[2, 5, 5]} intensity={1.2} castShadow />
-                <spotLight position={[-2, 5, 5]} intensity={0.5} color="#b0c4de" />
-                <Environment preset="city" />
+                {/* 1. ILUMINACIÓN DRAMÁTICA (Ajustada - menos brillo) */}
+                <ambientLight intensity={0.1} /> {/* Reducido para evitar brillo excesivo */}
+                <directionalLight
+                    position={[2, 2, 5]}
+                    intensity={0.1}
+                    castShadow
+                    shadow-bias={-0.0001}
+                />
+                {/* Luz de contra (Rim Light) - reducida */}
+                <spotLight position={[-1, 3, -2]} intensity={0.4} color="#b0c4de" angle={0.5} penumbra={1} />
+
+                <Environment preset="apartment" background={false} blur={0.8} />
+
+                {/* 2. CÁMARA DE CINE (Post-procesamiento) */}
+                <EffectComposer enableNormalPass={false}>
+                    {/* Bloom suave - reducido para evitar manos brillantes */}
+                    <Bloom
+                        luminanceThreshold={1.4}
+                        mipmapBlur
+                        intensity={0.1}
+                        radius={0.4}
+                    />
+                    {/* ToneMapping para colores más cinemáticos y menos saturados */}
+                    <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+                    {/* Vignette para centrar la atención en la cara */}
+                    <Vignette darkness={0.4} offset={0.2} />
+                </EffectComposer>
 
                 <Suspense fallback={<FallbackAvatar />}>
                     <AvatarModel
@@ -1393,7 +1792,7 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps & { action?: string | null, v
                         ref={controlsRef}
                         enabled={true}
                         // Target inicial (se sobreescribe por CameraManager)
-                        target={[0.025, 1.430, -0.125]}
+                        target={[0, 2.2, 0]}
                     />
                 )}
             </Canvas>
