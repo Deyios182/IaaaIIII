@@ -23,6 +23,10 @@ import { addFact as addFactToCloud, addKnownPerson as addPersonToCloud, saveImpo
 import { initializeFaceAPI, detectFace, getFaceDescriptor, findMatchingPerson, compareFaces, descriptorToArray, captureVideoFrame } from '../utils/faceRecognition';
 import { cleanupDuplicates, getPersonStats } from '../utils/duplicateCleanup';
 import { extractVoiceFeatures, compareVoiceSignatures } from '../utils/voiceBiometrics';
+import { consultGrok, type GrokConsultResponse } from '../services/grokConsultant';
+import { SecondOpinionPanel } from '../components/SecondOpinionPanel';
+import { PokerOverlay } from '../components/PokerOverlay';
+import { usePokerAssistant } from '../hooks/usePokerAssistant';
 
 // SIMPLE ERROR BOUNDARY COMPONENT (Inline to avoid file clutter for now)
 class AvatarErrorBoundary extends React.Component<{ children: React.ReactNode, fallback: React.ReactNode, onError?: () => void }, { hasError: boolean }> {
@@ -66,6 +70,22 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   }, [isAiSpeaking]);
   const [isVisionSyncing, setIsVisionSyncing] = useState(false);
   const [viewMode, setViewMode] = useState('default'); // Default, Face, Body, Selfie
+
+  // 🧠 GROK SECOND OPINION STATES
+  const [showGrokPanel, setShowGrokPanel] = useState(false);
+  const [isConsultingGrok, setIsConsultingGrok] = useState(false);
+  const [grokResponse, setGrokResponse] = useState<GrokConsultResponse | null>(null);
+  const [lastUserQuestion, setLastUserQuestion] = useState('');
+  const [lastGeminiResponse, setLastGeminiResponse] = useState('');
+
+  // 🎴 POKER ASSISTANT
+  const pokerAssistant = usePokerAssistant({
+    enabled: true,
+    debugMode: false, // 🚀 MODO REAL ACTIVADO
+    onSpeak: (text) => {
+      addMessage({ text, sender: 'ai' });
+    }
+  });
 
   // Autonomy Refs
   const idleIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -194,6 +214,58 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
   // SISTEMA DE MEMORIA PERSISTENTE
   const [novaMemory, setNovaMemory] = useState<NovaMemory>(() => loadMemory());
+
+  // 🧠 FUNCIÓN DE CONSULTA A GROK
+  const handleConsultGrok = async () => {
+    if (!isInCall) {
+      alert('Debes estar en una llamada para consultar a Grok');
+      return;
+    }
+
+    // Capturar contexto actual
+    const recentMessages = state.messages.slice(-10);
+    const userMessages = recentMessages.filter(m => m.sender === 'user');
+    const aiMessages = recentMessages.filter(m => m.sender === 'ai');
+
+    const question = userMessages[userMessages.length - 1]?.text || lastUserQuestion;
+    const geminiResp = aiMessages[aiMessages.length - 1]?.text || lastGeminiResponse;
+
+    if (!question) {
+      alert('No hay una pregunta reciente para consultar');
+      return;
+    }
+
+    setLastUserQuestion(question);
+    setLastGeminiResponse(geminiResp);
+    setShowGrokPanel(true);
+    setIsConsultingGrok(true);
+    setGrokResponse(null);
+
+    try {
+      const visualFrame = getCameraFrame();
+
+      const response = await consultGrok({
+        userQuestion: question,
+        geminiResponse: geminiResp,
+        visualContext: visualFrame,
+        conversationHistory: recentMessages.slice(-5).map(m => ({
+          sender: m.sender,
+          text: m.text
+        }))
+      });
+
+      setGrokResponse(response);
+      console.log('🧠 Respuesta de Grok recibida:', response);
+    } catch (error: any) {
+      console.error('❌ Error consultando a Grok:', error);
+      addMessage({
+        text: `⚠️ Error consultando a Grok: ${error.message}`,
+        sender: 'ai'
+      });
+    } finally {
+      setIsConsultingGrok(false);
+    }
+  };
 
   // Cargar memoria desde la nube al iniciar
   useEffect(() => {
@@ -940,9 +1012,92 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
   // --- AUDIO DUCKING / GATING ---
 
+  // 🧠 PIPELINE CALL para modelos no-Gemini (Grok, GPT-4, Claude)
+  const startPipelineCall = async (brain: 'grok' | 'gpt4o' | 'claude') => {
+    try {
+      console.log(`🎤 Iniciando pipeline con ${brain}...`);
+
+      // 1. Capturar micrófono y cámara
+      const selectedMic = localStorage.getItem('nova_selectedMic');
+      const selectedCamera = localStorage.getItem('nova_selectedCamera');
+
+      const audioConstraints: MediaTrackConstraints = {
+        deviceId: selectedMic ? { exact: selectedMic } : undefined,
+        sampleRate: 16000,
+        channelCount: 1,
+        noiseSuppression: false,
+        echoCancellation: false,
+        autoGainControl: true
+      };
+
+      const videoConstraints: MediaTrackConstraints = selectedCamera
+        ? { deviceId: { exact: selectedCamera }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" };
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: audioConstraints
+      });
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      setIsInCall(true);
+
+      // 2. Crear Voice Pipeline
+      const { createVoicePipeline } = await import('../services/voicePipeline');
+      const pipeline = createVoicePipeline(brain, {
+        onTranscription: (text) => {
+          console.log('📝 Transcripción:', text);
+          addMessage({ text, sender: 'user' });
+          lastInteractionRef.current = Date.now();
+          lastUserInteractionRef.current = Date.now();
+        },
+        onResponse: (text) => {
+          console.log('💬 Respuesta:', text);
+          addMessage({ text, sender: 'ai' });
+        },
+        onError: (error) => {
+          console.error('❌ Pipeline error:', error);
+          addMessage({ text: `⚠️ Error: ${error.message}`, sender: 'ai' });
+        },
+        getCameraFrame: () => getCameraFrame()
+      });
+
+      // Iniciar reconocimiento continuo (Web Speech API)
+      pipeline.start();
+
+      console.log('✅ Pipeline iniciado con éxito');
+      addMessage({ text: `🧠 Conectado con ${brain}. Habla para comenzar...`, sender: 'ai' });
+
+      // Guardar referencias para cleanup en endCall
+      (window as any).__pipelineCleanup = () => {
+        pipeline.stop();
+      };
+
+    } catch (error: any) {
+      console.error('❌ Error iniciando pipeline:', error);
+      alert(`Error iniciando ${brain}: ${error.message}`);
+      setIsInCall(false);
+    }
+  };
 
   const startCall = async () => {
     isUserDisconnectingRef.current = false; // Reset Manual flag
+
+    // 🧠 ROUTING: Detectar cerebro seleccionado
+    if (state.selectedBrain !== 'gemini-live') {
+      console.log(`🔀 Usando ${state.selectedBrain} via Voice Pipeline`);
+      return startPipelineCall(state.selectedBrain);
+    }
+
+    // 🟢 GEMINI LIVE (flujo original, nativo)
+    console.log('⚡ Usando Gemini Live (nativo)');
+
     try {
       // Verificar API key primero
       const apiKey = process.env.API_KEY;
@@ -1484,8 +1639,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                     model: 'gemini-2.5-flash',
                     contents: [{ role: 'user', parts: [{ text: queryToSearch }] }],
                     config: {
-                      tools: [{ googleSearch: {} }],
-                      systemInstruction: { parts: [{ text: "ERES NOVA. EL USUARIO TE PIDIÓ BUSCAR ESTO. USA GOOGLE SEARCH INMEDIATAMENTE. ASUME EL CONTEXTO MÁS PROBABLE (PRECIO ACTUAL, CLIMA HOY, ETC). NO HAGAS PREGUNTAS. DA EL DATO DIRECTO. SI ES MONEDA, DA EL CAMBIO A LOCAL Y USD." }] }
+                      // ❌ BÚSQUEDA WEB DESHABILITADA PERMANENTEMENTE
+                      // tools: [{ googleSearch: {} }],
+                      systemInstruction: { parts: [{ text: "Eres Nova. Responde basándote en tu conocimiento. NO tienes acceso a búsqueda web." }] }
                     }
                   });
 
@@ -2193,10 +2349,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       const parts: any[] = [];
       if (frame) parts.push({ inlineData: { data: frame, mimeType: 'image/jpeg' } });
 
-      // Detectar si el usuario pide buscar algo en internet (SOLO SI ESTÁ HABILITADO)
-      // FIX: Eliminados triggers conversacionales ("qué es", "quién es", etc) para evitar falsos positivos
-      const searchKeywords = ['busca', 'buscar', 'búscame', 'investiga', 'google', 'internet'];
-      const needsSearch = state.allowWebSearch && searchKeywords.some(kw => text.toLowerCase().includes(kw));
+      // ❌ BÚSQUEDA WEB DESHABILITADA PERMANENTEMENTE
+      // Detectar si el usuario pide buscar algo en internet (BLOQUEADO)
+      // const searchKeywords = ['busca', 'buscar', 'búscame', 'investiga', 'google', 'internet'];
+      const needsSearch = false; // SIEMPRE FALSE - búsqueda deshabilitada
 
       parts.push({ text: `JD: "${text}"` });
 
@@ -2577,23 +2733,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         </div>
 
         {/* VISUAL FEEDBACK: SEARCHING MODE */}
-        {isSearching && (
-          <div className="absolute inset-0 z-[250] flex flex-col items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-            <div className="flex flex-col items-center gap-6">
-              <div className="relative">
-                <div className="w-24 h-24 rounded-full border-t-2 border-l-2 border-cyan-400 animate-spin"></div>
-                <div className="absolute inset-0 w-24 h-24 rounded-full border-r-2 border-b-2 border-red-500 animate-spin direction-reverse opacity-70"></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="material-symbols-outlined text-4xl text-white animate-pulse">public</span>
-                </div>
-              </div>
-              <div className="text-center">
-                <h2 className="text-2xl font-black text-white tracking-[0.3em] animate-pulse">BUSCANDO</h2>
-                <p className="text-cyan-400 font-mono text-sm mt-2 tracking-widest typewriter">ACCEDIENDO A LA RED GLOBAL...</p>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* ❌ BÚSQUEDA WEB ELIMINADA - Overlay removido completamente */}
 
         {/* TU PREVIEW */}
         <div className={`absolute bottom-40 right-10 z-[200] w-64 lg:w-80 transition-all duration-1000 ${isInCall ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-20 opacity-0 scale-50 pointer-events-none'}`}>
@@ -2776,6 +2916,18 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           >
             <span className="material-symbols-outlined text-4xl">{isBold ? 'local_fire_department' : 'security'}</span>
           </button>
+
+          {/* GROK SECOND OPINION BUTTON */}
+          {isInCall && (
+            <button
+              onClick={handleConsultGrok}
+              disabled={isConsultingGrok}
+              className="p-7 rounded-full border-2 transition-all hover:scale-110 bg-orange-600/30 border-orange-500 text-orange-400 shadow-[0_0_60px_rgba(255,107,53,0.4)] disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Consultar con Grok (Segunda Opinión)"
+            >
+              <span className="material-symbols-outlined text-4xl">{isConsultingGrok ? 'hourglass_empty' : 'psychology'}</span>
+            </button>
+          )}
         </div>
       </section>
 
@@ -2825,6 +2977,36 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           </div>
         </section>
       )}
+
+      {/* GROK SECOND OPINION PANEL */}
+      <SecondOpinionPanel
+        isVisible={showGrokPanel}
+        isLoading={isConsultingGrok}
+        userQuestion={lastUserQuestion}
+        geminiResponse={lastGeminiResponse}
+        grokResponse={grokResponse}
+        onClose={() => {
+          setShowGrokPanel(false);
+          setGrokResponse(null);
+        }}
+        onUseGrokResponse={() => {
+          if (grokResponse) {
+            addMessage({
+              text: grokResponse.alternativeResponse,
+              sender: 'ai'
+            });
+            setShowGrokPanel(false);
+          }
+        }}
+      />
+
+      {/* 🎴 Poker Assistant Overlay */}
+      <PokerOverlay
+        situation={pokerAssistant.situation}
+        decision={pokerAssistant.decision}
+        isActive={pokerAssistant.isActive}
+        onToggle={() => pokerAssistant.setIsActive(!pokerAssistant.isActive)}
+      />
 
       <style>{`
   .custom-scrollbar::-webkit-scrollbar { width: 6px; }

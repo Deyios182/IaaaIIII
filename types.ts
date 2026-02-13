@@ -87,4 +87,5 @@ export interface AppState {
     habits: string[];
   };
   userFaceDescriptor?: number[]; // 🆕 Descriptor facial del usuario principal
+  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude'; // 🆕 Modelo de IA para conversaciones
 }

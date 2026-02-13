@@ -45,7 +45,8 @@ const getDefaultState = (): AppState => ({
     interests: [],
     facts: [],
     habits: []
-  }
+  },
+  selectedBrain: 'gemini-live' // Default: Gemini Live (nativo, rápido)
 });
 
 const loadState = (): AppState => {
@@ -164,7 +165,7 @@ const AppContent: React.FC<{
                 setAllowWebSearch={(val) => setState(p => ({ ...p, allowWebSearch: val }))}
               />
             } />
-            <Route path="/voice" element={<VoiceSettings avatar={state.avatar} updateAvatar={updateAvatar} />} />
+            <Route path="/voice" element={<VoiceSettings avatar={state.avatar} updateAvatar={updateAvatar} selectedBrain={state.selectedBrain} setSelectedBrain={(brain) => setState(p => ({ ...p, selectedBrain: brain }))} />} />
             <Route path="/memory" element={<MemorySettings
               retention={state.memoryRetention}
               style={state.conversationStyle}

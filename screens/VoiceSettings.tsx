@@ -5,9 +5,11 @@ import { AvatarSettings } from '../types';
 interface VoiceSettingsProps {
   avatar: AvatarSettings;
   updateAvatar: (settings: Partial<AvatarSettings>) => void;
+  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude';
+  setSelectedBrain: (brain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude') => void;
 }
 
-const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar }) => {
+const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, selectedBrain, setSelectedBrain }) => {
   const voices = [
     { id: 'Zephyr', label: 'Zephyr', gender: 'Femenina', desc: 'Clara, calmada y profesional.' },
     { id: 'Kore', label: 'Kore', gender: 'Femenina', desc: 'Juvenil, energética y alegre.' },
@@ -190,6 +192,88 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar }) =
                     <span>Agudo (2.0x)</span>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* AI BRAIN SELECTION */}
+            <div className="rounded-2xl border border-surface-border bg-surface-dark p-6">
+              <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
+                <span className="material-symbols-outlined text-primary">psychology</span> Cerebro de IA
+              </h2>
+              <p className="text-sm text-slate-400 mb-6">
+                Elige el modelo de IA que procesará las conversaciones. Todos mantienen funcionalidad de voz.
+              </p>
+
+              <div className="grid grid-cols-1 gap-3">
+                {[
+                  {
+                    id: 'gemini-live',
+                    label: 'Gemini Live',
+                    icon: '⚡',
+                    latency: '~500ms',
+                    desc: 'Nativo, rápido, voz en tiempo real. Sin costos adicionales.',
+                    badge: 'RECOMENDADO',
+                    badgeColor: 'bg-blue-500/20 text-blue-400'
+                  },
+                  {
+                    id: 'grok',
+                    label: 'Grok 4.1 Fast',
+                    icon: '🧠',
+                    latency: '~2-4s',
+                    desc: 'xAI. Menos censura, razonamiento agentic, 2M tokens contexto.',
+                    badge: 'EXPLÍCITO',
+                    badgeColor: 'bg-orange-500/20 text-orange-400'
+                  },
+                  {
+                    id: 'gpt4o',
+                    label: 'GPT-4o',
+                    icon: '🤖',
+                    latency: '~2-3s',
+                    desc: 'OpenAI. Balance entre calidad y velocidad. Multimodal.',
+                    badge: 'EQUILIBRADO',
+                    badgeColor: 'bg-green-500/20 text-green-400'
+                  },
+                  {
+                    id: 'claude',
+                    label: 'Claude Sonnet',
+                    icon: '💭',
+                    latency: '~2-4s',
+                    desc: 'Anthropic. Excelente para escritura creativa y análisis profundo.',
+                    badge: 'CREATIVO',
+                    badgeColor: 'bg-purple-500/20 text-purple-400'
+                  }
+                ].map((model) => (
+                  <button
+                    key={model.id}
+                    onClick={() => setSelectedBrain(model.id as any)}
+                    className={`p-4 rounded-xl border-2 text-left transition-all ${selectedBrain === model.id
+                        ? 'border-primary bg-primary/10 shadow-lg'
+                        : 'border-surface-border hover:bg-white/5'
+                      }`}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{model.icon}</span>
+                        <div>
+                          <span className="text-sm font-bold">{model.label}</span>
+                          <span className="text-xs text-slate-500 ml-2">{model.latency}</span>
+                        </div>
+                      </div>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-black uppercase ${model.badgeColor}`}>
+                        {model.badge}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed">{model.desc}</p>
+
+                    {selectedBrain !== 'gemini-live' && model.id === selectedBrain && (
+                      <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+                        <p className="text-[10px] text-yellow-400 leading-relaxed">
+                          ⚠️ <strong>Latencia 2-4s</strong> · Costos ~$0.02-0.05/conversación via OpenRouter
+                        </p>
+                      </div>
+                    )}
+                  </button>
+                ))}
               </div>
             </div>
 

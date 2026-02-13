@@ -1,0 +1,136 @@
+// Temporal: insertar antes de startCall
+// Función para iniciar llamada con pipeline STT → OpenRouter → TTS
+const startPipelineCall = async (brain: 'grok' | 'gpt4o' | 'claude') => {
+  try {
+    console.log(`🎤 Iniciando pipeline con ${brain}...`);
+    
+    // 1. Capturar micrófono y cámara
+    const selectedMic = localStorage.getItem('nova_selectedMic');
+    const selectedCamera = localStorage.getItem('nova_selectedCamera');
+    
+    const audioConstraints: MediaTrackConstraints = {
+      deviceId: selectedMic ? { exact: selectedMic } : undefined,
+      sampleRate: 16000,
+      channelCount: 1,
+      noiseSuppression: false,
+      echoCancellation: false,
+      autoGainControl: true
+    };
+    
+    const videoConstraints: MediaTrackConstraints = selectedCamera
+      ? { deviceId: { exact: selectedCamera }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" };
+    
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: audioConstraints
+    });
+    
+    streamRef.current = stream;
+    
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+    }
+    
+    setIsInCall(true);
+    
+    // 2. Crear Voice Pipeline
+    const { createVoicePipeline } = await import('../services/voicePipeline');
+    const pipeline = createVoicePipeline(brain, {
+      onTranscription: (text) => {
+        console.log('📝 Transcripción:', text);
+        addMessage({ text, sender: 'user' });
+        lastInteractionRef.current = Date.now();
+        lastUserInteractionRef.current = Date.now();
+      },
+      onResponse: (text) => {
+        console.log('💬 Respuesta:', text);
+        addMessage({ text, sender: 'ai' });
+      },
+      onError: (error) => {
+        console.error('❌ Pipeline error:', error);
+        addMessage({ text: `⚠️ Error: ${error.message}`, sender: 'ai' });
+      }
+    });
+    
+    // 3. Configurar captura de audio (Press-to-Talk o Voice Activation)
+    const audioContext = new AudioContext({ sampleRate: 16000 });
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    
+    const audioChunks: Float32Array[] = [];
+    let isRecording = false;
+    let silenceTimeout: NodeJS.Timeout | null = null;
+    
+    processor.onaudioprocess = (e) => {
+      if (!isRecording) return;
+      
+      const inputData = e.inputBuffer.getChannelData(0);
+      audioChunks.push(new Float32Array(inputData));
+      
+      // Detección de silencio simple (nivel de volumen)
+      const volume = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
+      
+      if (volume < 0.01) {
+        // Silencio detectado
+        if (!silenceTimeout) {
+          silenceTimeout = setTimeout(async () => {
+            // Procesar audio acumulado
+            if (audioChunks.length > 0) {
+              console.log('🎤 Procesando audio...');
+              const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+              const audioData = new Float32Array(totalLength);
+              let offset = 0;
+              for (const chunk of audioChunks) {
+                audioData.set(chunk, offset);
+                offset += chunk.length;
+              }
+              
+              // Convertir a ArrayBuffer
+              const buffer = audioData.buffer;
+              
+              // Capturar frame visual
+              const visualFrame = getCameraFrame();
+              
+              // Procesar con pipeline
+              await pipeline.processAudioInput(buffer, visualFrame);
+              
+              // Limpiar chunks
+              audioChunks.length = 0;
+              isRecording = false;
+            }
+          }, 1500); // 1.5s de silencio
+        }
+      } else {
+        // Voz detectada
+        if (silenceTimeout) {
+          clearTimeout(silenceTimeout);
+          silenceTimeout = null;
+        }
+        if (!isRecording) {
+          isRecording = true;
+          console.log('🎤 Grabando...');
+        }
+      }
+    };
+    
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+    
+    console.log('✅ Pipeline iniciado con éxito');
+    
+    // Guardar referencias para cleanup
+    (window as any).__pipelineCleanup = () => {
+      processor.disconnect();
+      source.disconnect();
+      audioContext.close();
+      pipeline.stop();
+    };
+    
+  } catch (error: any) {
+    console.error('❌ Error iniciando pipeline:', error);
+    alert(`Error iniciando ${brain}: ${error.message}`);
+    setIsInCall(false);
+  }
+};
