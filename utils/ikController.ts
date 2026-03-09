@@ -54,6 +54,9 @@ export class IKController {
     private currentHeadRotation: THREE.Euler = new THREE.Euler();
     private currentEyeRotation: THREE.Euler = new THREE.Euler();
 
+    // Micro-offset for saccades
+    private microOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
+
     constructor(settings?: Partial<IKSettings>) {
         this.settings = { ...DEFAULT_IK_SETTINGS, ...settings };
     }
@@ -121,6 +124,13 @@ export class IKController {
     }
 
     /**
+     * Establecer micro-offset para saccades (movimientos rápidos de ojos)
+     */
+    setMicroOffset(offset: THREE.Vector3): void {
+        this.microOffset.copy(offset);
+    }
+
+    /**
      * Deshabilitar look-at
      */
     disableLookAt(): void {
@@ -151,8 +161,11 @@ export class IKController {
         const headWorldPos = new THREE.Vector3();
         this.headBone.getWorldPosition(headWorldPos);
 
+        // Target real + micro offset
+        const finalTarget = this.lookTarget.position.clone().add(this.microOffset);
+
         const direction = new THREE.Vector3()
-            .subVectors(this.lookTarget.position, headWorldPos)
+            .subVectors(finalTarget, headWorldPos)
             .normalize();
 
         // Convertir a rotación local
@@ -209,8 +222,13 @@ export class IKController {
             this.rightEye.getWorldPosition(eyeWorldPos);
         }
 
+        // Target real + micro offset (más notorio en ojos)
+        // Multiplicamos el offset para que los ojos se muevan más que la cabeza
+        const eyeOffset = this.microOffset.clone().multiplyScalar(1.5);
+        const finalTarget = this.lookTarget.position.clone().add(eyeOffset);
+
         const direction = new THREE.Vector3()
-            .subVectors(this.lookTarget.position, eyeWorldPos)
+            .subVectors(finalTarget, eyeWorldPos)
             .normalize();
 
         // Calcular rotación target
