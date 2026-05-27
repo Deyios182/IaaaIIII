@@ -54,14 +54,46 @@ export class AnimationManager {
      * Reproducir una animación con configuración
      */
     play(animationName: string, config?: Partial<AnimationConfig>): boolean {
-        const action = this.actions.get(animationName);
+        let action = this.actions.get(animationName);
+        let actualName = animationName;
+
+        // BÚSQUEDA ROBUSTA SI NO EXISTE
         if (!action) {
-            console.warn(`⚠️ Animación no encontrada: ${animationName}`);
+            // 1. Probar case-insensitive
+            const lowerName = animationName.toLowerCase();
+            const keys = Array.from(this.actions.keys());
+            const key = keys.find(k => k.toLowerCase() === lowerName);
+            if (key) {
+                action = this.actions.get(key);
+                actualName = key;
+            }
+
+            // 2. Fallbacks específicos
+            if (!action) {
+                if (lowerName.includes('idle') || lowerName === 'neutral') {
+                    // Buscar cualquier clip que tenga "idle" en el nombre
+                    const idleKey = keys.find(k => k.toLowerCase().includes('idle'));
+                    // O usar el primer clip si es el principal (ej: GrokAniAction)
+                    const fallbackKey = idleKey || keys.find(k => k.includes('Action')) || keys[0];
+                    if (fallbackKey) {
+                        action = this.actions.get(fallbackKey);
+                        actualName = fallbackKey;
+                        console.log(`ℹ️ Usando fallback para Idle: ${actualName}`);
+                    }
+                } else if (lowerName.includes('wave')) {
+                    // Si no hay wave, intentar saludar con lo que haya o ignore
+                    console.warn(`⚠️ No se encontró animación de saludo (${animationName})`);
+                }
+            }
+        }
+
+        if (!action) {
+            console.warn(`⚠️ Animación no encontrada: ${animationName}. Disponibles: ${Array.from(this.actions.keys()).join(', ')}`);
             return false;
         }
 
         const finalConfig: AnimationConfig = {
-            name: animationName,
+            name: actualName,
             ...this.defaultConfig,
             ...config
         } as AnimationConfig;
@@ -103,7 +135,7 @@ export class AnimationManager {
             this.mixer.addEventListener('finished', onFinished);
         }
 
-        console.log(`▶️ Reproduciendo: ${animationName} (prioridad: ${finalConfig.priority})`);
+        console.log(`▶️ Reproduciendo: ${actualName} (request: ${animationName}, prioridad: ${finalConfig.priority})`);
         return true;
     }
 
@@ -123,6 +155,13 @@ export class AnimationManager {
                 a => a.config.name !== animationName
             );
         }, fadeDuration * 1000);
+    }
+
+    /**
+     * Obtener lista de animaciones disponibles
+     */
+    getAvailableAnimations(): string[] {
+        return Array.from(this.clips.keys());
     }
 
     /**
@@ -186,13 +225,6 @@ export class AnimationManager {
     }
 
     /**
-     * Obtener lista de animaciones disponibles
-     */
-    getAvailableAnimations(): string[] {
-        return Array.from(this.clips.keys());
-    }
-
-    /**
      * Verificar si existe una animación
      */
     hasAnimation(name: string): boolean {
@@ -233,6 +265,11 @@ export const ANIMATION_MAP: Record<string, string> = {
     'shake_head': 'Shake_Head',
     'clap': 'Clap',
     'point': 'Point',
+    'bow': 'Bow',
+    'stretch': 'Stretch',
+    'flirt': 'Flirt',
+    'laugh': 'Laugh',
+    'shy': 'Shy',
 
     // Estados
     'idle_calm': 'Idle_Calm',

@@ -8,8 +8,10 @@ import Personalization from './screens/Personalization';
 import MemorySettings from './screens/MemorySettings';
 import VoiceSettings from './screens/VoiceSettings';
 import ChatHistory from './screens/ChatHistory';
+import MemoriesTimeline from './screens/MemoriesTimeline';
 import AccountSettings from './screens/AccountSettings';
 import PerformanceSettings from './screens/PerformanceSettings';
+import AvatarStudio from './screens/AvatarStudio';
 import { AppState, MemoryRetention, ConversationStyle, PersonEntry } from './types';
 import AvatarViewer3D from './components/AvatarViewer3D';
 import { loadAllMemory } from './services/MemoryService';
@@ -21,9 +23,9 @@ const getDefaultState = (): AppState => ({
   knownPeople: [], // Se llenará dinámicamente al cambiar el nombre
   avatar: {
     baseModel: 'Realista',
-    modelUrl: '/models/nova-avatar.glb', // Default LOCAL seguro
+    modelUrl: '/models/grokani_lipsync.glb', // Default LOCAL seguro
     hairStyle: 'Ondulado',
-    hairColor: '#1a1a1a',
+    hairColor: '#e2b464',
     outfit: 'Traje Futurista',
     isBoldMode: false,
     voiceName: 'Zephyr',
@@ -69,11 +71,18 @@ const loadState = (): AppState => {
         '64b590e38055615783515494', // Business rota 1
         '63c0cd0c7f0e3600966f976a', // Business rota 2 (Official Demo Failed)
         '638df693d72bffc6fa17943c', // Cyberpunk possible fail
-        '64b58e65805561578351544a'  // Cyber Nova rota 2
+        '64b58e65805561578351544a', // Cyber Nova rota 2
+        '6185a4acfb622cf1cdc49348', // Cyberpunk RPM - crash GPU
       ];
 
-      if (brokenUrls.some(id => parsed.avatar?.modelUrl?.includes(id))) {
-        console.warn('⚠️ Avatar URL rota detectada, restaurando default.');
+      // También resetear modelos locales que causan crash GPU
+      const crashingModels = ['Android.glb', 'android.glb', 'nova_anime.glb'];
+
+      const isBrokenUrl = brokenUrls.some(id => parsed.avatar?.modelUrl?.includes(id));
+      const isCrashingModel = crashingModels.some(m => parsed.avatar?.modelUrl?.includes(m));
+
+      if (isBrokenUrl || isCrashingModel) {
+        console.warn('⚠️ Avatar URL problemática detectada, restaurando default.');
         parsed.avatar.modelUrl = '/models/nova-avatar.glb';
       }
 
@@ -86,7 +95,7 @@ const loadState = (): AppState => {
           ...getDefaultState().avatar,
           ...parsed.avatar,
           // Force override si sigue rota (doble check)
-          modelUrl: brokenUrls.some(id => parsed.avatar?.modelUrl?.includes(id))
+          modelUrl: (isBrokenUrl || isCrashingModel)
             ? '/models/nova-avatar.glb'
             : (parsed.avatar?.modelUrl || getDefaultState().avatar.modelUrl)
         },
@@ -133,6 +142,7 @@ const AppContent: React.FC<{
 }> = ({ state, setState, updateAvatar, setBoldMode, addMessage, isMiniMode }) => {
   const location = useLocation();
   const isDashboardRoute = location.pathname === '/';
+  const isAvatarStudioRoute = location.pathname === '/avatar-studio';
 
   return (
     <div className={`flex h-screen w-full bg-background-dark text-white overflow-hidden transition-colors duration-1000 ${state.avatar.isBoldMode ? 'selection:bg-pink-500' : 'selection:bg-primary'}`}>
@@ -143,7 +153,7 @@ const AppContent: React.FC<{
         {!isMiniMode && <Header userInitials={state.userName.substring(0, 2).toUpperCase()} isBold={state.avatar.isBoldMode} />}
         <main className="flex-1 overflow-auto relative">
 
-          {/* DASHBOARD PERSISTENTE: Nunca se desmonta */}
+          {/* DASHBOARD PERSISTENTE: Oculto cuando estamos en Avatar Studio (tiene su propio visor 3D) */}
           <div className={`${isDashboardRoute ? 'block h-full' : 'hidden'}`}>
             <Dashboard
               state={state}
@@ -157,14 +167,7 @@ const AppContent: React.FC<{
 
           <Routes>
             <Route path="/" element={<></>} /> {/* Dummy route para el path '/' */}
-            <Route path="/personalize" element={
-              <Personalization
-                avatar={state.avatar}
-                updateAvatar={updateAvatar}
-                allowWebSearch={state.allowWebSearch}
-                setAllowWebSearch={(val) => setState(p => ({ ...p, allowWebSearch: val }))}
-              />
-            } />
+            <Route path="/personalize" element={<Navigate to="/avatar-studio" />} />
             <Route path="/voice" element={<VoiceSettings avatar={state.avatar} updateAvatar={updateAvatar} selectedBrain={state.selectedBrain} setSelectedBrain={(brain) => setState(p => ({ ...p, selectedBrain: brain }))} />} />
             <Route path="/memory" element={<MemorySettings
               retention={state.memoryRetention}
@@ -179,6 +182,7 @@ const AppContent: React.FC<{
               updateKnownPeople={(people) => setState(p => ({ ...p, knownPeople: people }))}
             />} />
             <Route path="/history" element={<ChatHistory messages={state.messages} />} />
+            <Route path="/memories" element={<MemoriesTimeline />} />
             <Route path="/account" element={<AccountSettings
               isPro={state.isPro}
               userName={state.userName}
@@ -197,6 +201,14 @@ const AppContent: React.FC<{
               }}
             />} />
             <Route path="/performance" element={<PerformanceSettings onClose={() => window.history.back()} />} />
+            <Route path="/avatar-studio" element={
+              <AvatarStudio
+                avatar={state.avatar}
+                updateAvatar={updateAvatar}
+                allowWebSearch={state.allowWebSearch}
+                setAllowWebSearch={(val) => setState(p => ({ ...p, allowWebSearch: val }))}
+              />
+            } />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
@@ -275,8 +287,8 @@ const App: React.FC = () => {
             relationship: p.relationship || 'Conocido',
             visualDescription: p.visual_description || '',
             voiceDescription: p.voice_description || '',
-            faceDescriptor: p.face_descriptor ? new Float32Array(p.face_descriptor) : undefined,
-            photoData: p.photoData || p.photo_data, // 📸 CARGAR FOTO (Compatible con ambos nombres)
+            faceDescriptor: p.face_descriptor ? Array.from(p.face_descriptor) : undefined,
+            photoData: p.photo_data, // Correct field from KnownPerson
             isUnknown: p.is_unknown || false,
             detectedAt: p.first_seen ? new Date(p.first_seen).getTime() : Date.now(),
             lastSeen: p.last_seen ? new Date(p.last_seen).getTime() : Date.now()

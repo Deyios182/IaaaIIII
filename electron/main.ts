@@ -458,6 +458,26 @@ app.whenReady().then(() => {
         return { mode: appSettings.startMode };
     });
 
+    // LISTAR MODELOS DISPONIBLES
+    ipcMain.handle('get-available-models', async () => {
+        try {
+            const modelsPath = path.join(process.env.VITE_PUBLIC!, 'models');
+            if (!fs.existsSync(modelsPath)) return [];
+            
+            const files = fs.readdirSync(modelsPath);
+            return files
+                .filter(file => file.toLowerCase().endsWith('.glb') || file.toLowerCase().endsWith('.vrm'))
+                .map(file => ({
+                    name: file.replace(/\.(glb|vrm)$/i, '').replace(/[-_]/g, ' '),
+                    url: `/models/${file}`,
+                    file: file
+                }));
+        } catch (e) {
+            console.error('Error listando modelos:', e);
+            return [];
+        }
+    });
+
     // Buscar archivos (abre explorador con búsqueda)
     ipcMain.handle('system:search-files', async (_event: any, query: string) => {
         try {

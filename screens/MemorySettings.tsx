@@ -230,22 +230,13 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
                                   <span className="material-symbols-outlined text-lg">edit</span>
                                 </button>
                                 <button
-                                  onClick={async () => {
-                                    try {
-                                      // FIX: Preguntar nombre real en lugar de "Usuario Principal"
-                                      const newName = prompt("¿Cuál es tu nombre?", person.name !== "Desconocido" ? person.name : "");
-                                      if (!newName) return;
-
-                                      const updatedPerson = { ...person, name: newName, relationship: "self", isUnknown: false };
-                                      updateKnownPeople(knownPeople.map(p => p.id === person.id ? updatedPerson : p));
-                                      await upsertKnownPerson({
-                                        ...updatedPerson,
-                                        last_seen: new Date().toISOString()
-                                      });
-                                    } catch (e) {
-                                      console.error("Error setting as main user:", e);
-                                      alert("Error al guardar cambios. Verifique consola.");
-                                    }
+                                  onClick={() => {
+                                    startEditing(person);
+                                    setEditForm({
+                                      name: person.name.includes("Desconocido") ? "" : person.name,
+                                      relationship: "self"
+                                    });
+                                    // Mostrar retroalimentación si es necesario, pero la UI de edición es suficiente
                                   }}
                                   className="bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:text-blue-300 hover:bg-blue-500/20 p-2 rounded-lg transition-all"
                                   title="Soy Yo (Usuario Principal)"

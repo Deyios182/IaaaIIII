@@ -10,8 +10,9 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
   const navItems = [
     { path: '/', icon: 'smart_toy', label: 'Inicio' },
-    { path: '/history', icon: 'history', label: 'Recuerdos' },
-    { path: '/personalize', icon: 'person', label: 'Personalización' },
+    { path: '/memories', icon: 'timeline', label: 'Línea de Vida' },
+    { path: '/history', icon: 'history', label: 'Chat Reciente' },
+    { path: '/avatar-studio', icon: 'theater_comedy', label: 'Avatar Studio' },
     { path: '/voice', icon: 'volume_up', label: 'Voz y Tono' },
     { path: '/memory', icon: 'psychology', label: 'Memoria' },
     { path: '/performance', icon: 'speed', label: 'Rendimiento' },

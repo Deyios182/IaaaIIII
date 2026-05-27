@@ -4,6 +4,7 @@ import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei
 import { EffectComposer, Bloom, ToneMapping, Vignette } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import * as THREE from 'three';
 import { LipSyncAnalyzer } from '../utils/lipSync';
 import { emotionToFacialExpression, type Emotion } from '../utils/emotionDetector';
@@ -15,29 +16,38 @@ import { IKController } from '../utils/ikController';
 import { MoodSystem } from '../utils/moodSystem';
 import { InteractionSystem } from '../utils/interactionSystem';
 import { MaterialManager } from '../utils/materialManager';
+import { ProceduralAnimator } from '../utils/proceduralAnimations';
+import { isMixamoAnimation, retargetMixamoClip, getModelBoneNames } from '../utils/mixamoRetargeter';
 import { SimplexNoise } from '../utils/perlin';
 
 interface AvatarViewer3DProps {
-    modelUrl?: string;
+    avatar: any; // El estado del avatar desde App.tsx
     emotion?: Emotion;
-    action?: string | null;
+    activeAction?: string | null;
     audioElement?: HTMLAudioElement | null;
     isAiSpeaking?: boolean;
     disableControls?: boolean;
+    viewMode?: string;
     isHotMode?: boolean;
+    hairColor?: string;
 }
 
 // Simulación de Ruido Perlin simple (Legacy removed - using SimplexNoise class)
 
-function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, isHotMode = false }: {
+function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, isHotMode = false, hairColor }: {
     modelUrl: string;
     emotion: Emotion;
     action?: string | null;
     audioElement: HTMLAudioElement | null;
     isAiSpeaking: boolean;
     isHotMode?: boolean;
+    hairColor?: string;
 }) {
-    const gltf = useLoader(GLTFLoader, modelUrl);
+    // Si no hay URL, usamos Grokani como base por ser el más estable
+    const safeModelUrl = modelUrl || '/models/grokani_lipsync.glb';
+
+    const gltf = useLoader(GLTFLoader, safeModelUrl);
+
     const modelRef = useRef<THREE.Group>(null);
     const mixerRef = useRef<THREE.AnimationMixer | null>(null);
     const lipSyncRef = useRef<LipSyncAnalyzer | null>(null);
@@ -183,6 +193,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const ikControllerRef = useRef<IKController | null>(null);
     const moodSystemRef = useRef<MoodSystem | null>(null);
     const materialManagerRef = useRef<MaterialManager | null>(null);
+    const proceduralAnimatorRef = useRef<ProceduralAnimator | null>(null);
+    const externalAnimPlayingRef = useRef(false);
 
     // Initializion logic for Clothing Manager
     useEffect(() => {
@@ -294,7 +306,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                     meshName.includes('body') ||
                                     meshName.includes('face') ||
                                     meshName.includes('skin') ||
-                                    meshName.includes('head')
+                                    meshName.includes('head') ||
+                                    meshName.includes('retopo') ||
+                                    meshName.includes('human_')
                                 )
                             );
 
@@ -459,7 +473,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const isRight = name.includes('right') || name.includes('_r') || name.endsWith('.r');
                     const isLeft = name.includes('left') || name.includes('_l') || name.endsWith('.l');
 
-                    // DEPURACIÓN EXTREMA: DUMP DE JERARQUÍA (Desactivado)
+                    // DEPURACIÓN: DUMP DE JERARQUÍA DE HUESOS (Desactivado)
                     /*
                     if (debugDumpCount.current < 200) {
                          console.log(`🦴 NODE [${child.type}]: "${child.name}" (Bone? ${child instanceof THREE.Bone})`);
@@ -600,15 +614,15 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const isRPMArm = (name.includes('arm') && !name.includes('fore') && !name.includes('hand') && !name.includes('upper_arm'));
 
                     if (isDefUpperArm) {
-                        if (name === 'def-upper_arml' && !rightArmRef.current) {
-                            rightArmRef.current = child as any;
-                            rightArmOriginalRot.current = child.rotation.clone();
-                            console.log('💪 Brazo DERECHO (DEF) asignado:', child.name);
-                        }
-                        if (name === 'def-upper_armr' && !leftArmRef.current) {
+                        if (name === 'def-upper_arml' && !leftArmRef.current) {
                             leftArmRef.current = child as any;
                             leftArmOriginalRot.current = child.rotation.clone();
                             console.log('💪 Brazo IZQUIERDO (DEF) asignado:', child.name);
+                        }
+                        if (name === 'def-upper_armr' && !rightArmRef.current) {
+                            rightArmRef.current = child as any;
+                            rightArmOriginalRot.current = child.rotation.clone();
+                            console.log('💪 Brazo DERECHO (DEF) asignado:', child.name);
                         }
                     } else if (isRPMArm) {
                         if (isRight && !rightArmRef.current) {
@@ -639,8 +653,26 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             // 1. Animation Manager - Gestiona animaciones de Blender
             if (gltf.animations.length > 0) {
-                animationManagerRef.current = new AnimationManager(modelRef.current, gltf.animations);
-                console.log('✅ AnimationManager inicializado con', gltf.animations.length, 'clips');
+                // FILTRAR tracks de brazos/manos de las animaciones para que el sistema procedural los controle
+                const filteredAnims = gltf.animations.map(clip => {
+                    const filtered = clip.clone();
+                    filtered.tracks = clip.tracks.filter(track => {
+                        const tn = track.name.toLowerCase();
+                        // Excluir tracks de upper_arm, forearm, hand, shoulder, finger
+                        const isArmTrack = (
+                            tn.includes('upper_arm') || tn.includes('forearm') || 
+                            tn.includes('hand') || tn.includes('shoulder') ||
+                            tn.includes('f_index') || tn.includes('f_middle') ||
+                            tn.includes('f_ring') || tn.includes('f_pinky') ||
+                            tn.includes('thumb') || tn.includes('palm')
+                        );
+                        return !isArmTrack;
+                    });
+                    console.log(`🎬 Clip "${clip.name}": ${clip.tracks.length} tracks → ${filtered.tracks.length} (${clip.tracks.length - filtered.tracks.length} arm tracks removidos)`);
+                    return filtered;
+                });
+                animationManagerRef.current = new AnimationManager(modelRef.current, filteredAnims);
+                console.log('✅ AnimationManager inicializado con', filteredAnims.length, 'clips (brazos libres)');
             } else {
                 console.warn('⚠️ No hay animaciones en el modelo - AnimationManager no inicializado');
             }
@@ -655,16 +687,24 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // 4. Material Manager - Customización visual
             materialManagerRef.current = new MaterialManager();
             materialManagerRef.current.initialize(modelRef.current);
+            // Solo aplicar color de pelo si NO es el negro por defecto (el modelo ya trae su color original)
+            if (hairColor && hairColor !== '#1a1a1a') {
+                materialManagerRef.current.setColor('hair', hairColor);
+            }
 
             // Mixer (necesario para AnimationManager pero ya no lo usamos directamente)
             mixerRef.current = new THREE.AnimationMixer(modelRef.current);
 
             // DEBUG: Resumen de detección para este modelo
+            const allBones: string[] = [];
+            modelRef.current.traverse((c: any) => { if (c.isBone) allBones.push(c.name); });
+            (window as any).__modelBoneNames = allBones;
             console.log(`📍 RESUMEN MODELO:`,
                 `Meshes con morphs: ${meshes.length}`,
                 `| VisemeMap: ${Object.keys(newVisemeMap).join(', ') || 'NINGUNO'}`,
                 `| JawBone: ${jawBoneRef.current?.name || 'NO ENCONTRADO'}`,
-                `| Animaciones: ${gltf.animations.map(a => a.name).join(', ') || 'NINGUNA'}`
+                `| Animaciones: ${gltf.animations.map(a => a.name).join(', ') || 'NINGUNA'}`,
+                `| Huesos (${allBones.length}):`, allBones.join(', ')
             );
 
             // --- FORZAR POSE NEUTRA (BRAZOS ABAJO) ---
@@ -699,6 +739,19 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 }
             };
             forceArmsDown();
+
+            // 5. Procedural Animator - Gestos sin clips de Blender
+            proceduralAnimatorRef.current = new ProceduralAnimator();
+            proceduralAnimatorRef.current.initialize({
+                head: headBoneRef.current || undefined,
+                spine: spineRef.current || undefined,
+                hips: hipsRef.current || undefined,
+                rightArm: rightArmRef.current || undefined,
+                leftArm: leftArmRef.current || undefined,
+                rightForeArm: rightForeArmRef.current || undefined,
+                leftForeArm: leftForeArmRef.current || undefined,
+            });
+            console.log('✅ ProceduralAnimator inicializado');
         }
 
         // Cleanup on unmount
@@ -708,23 +761,164 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     }, [gltf]);
 
 
+    // --- EFECTO: CARGAR ANIMACIONES EXTERNAS (Mixamo, etc.) ---
+    useEffect(() => {
+        const handler = async (e: Event) => {
+            const { url, name, type } = (e as CustomEvent).detail;
+            if (!url || !modelRef.current) return;
+
+            console.log(`🎬 Cargando animación externa: ${name} (.${type})`);
+
+            try {
+                let animations: THREE.AnimationClip[] = [];
+                let sourceRestPoses: Map<string, THREE.Quaternion> | undefined;
+
+                if (type === 'fbx') {
+                    const fbxLoader = new FBXLoader();
+                    const fbxResult = await new Promise<any>((resolve, reject) => {
+                        fbxLoader.load(url, resolve, undefined, reject);
+                    });
+                    animations = fbxResult.animations || [];
+
+                    // Extraer rest poses del esqueleto Mixamo (FBX)
+                    sourceRestPoses = new Map();
+                    fbxResult.traverse((child: any) => {
+                        if (child.isBone) {
+                            sourceRestPoses!.set(child.name, child.quaternion.clone());
+                        }
+                    });
+                    console.log(`📦 FBX: ${animations.length} anims, ${sourceRestPoses.size} huesos rest-pose`);
+                } else {
+                    const gltfLoader = new GLTFLoader();
+                    const gltfResult = await new Promise<any>((resolve, reject) => {
+                        gltfLoader.load(url, resolve, undefined, reject);
+                    });
+                    animations = gltfResult.animations || [];
+                    console.log(`📦 GLB cargado: ${animations.length} animaciones`);
+                }
+
+                if (animations.length > 0) {
+                    const boneNames = getModelBoneNames(modelRef.current!);
+
+                    // Encontrar el skeleton del modelo target
+                    let skeleton: THREE.Skeleton | null = null;
+                    modelRef.current!.traverse((child: any) => {
+                        if (child.isSkinnedMesh && child.skeleton && !skeleton) {
+                            skeleton = child.skeleton;
+                        }
+                    });
+
+                    // IMPORTANTE: Resetear a bind pose para capturar las rotaciones REALES de reposo
+                    // (si hay una animación corriendo, bone.quaternion tiene valores animados, no de reposo)
+                    if (skeleton) {
+                        (skeleton as THREE.Skeleton).pose();
+                        console.log(`🔧 Skeleton reseteado a bind-pose para captura`);
+                    }
+
+                    // Ahora capturar las rotaciones de reposo correctas
+                    const targetRestPoses = new Map<string, THREE.Quaternion>();
+                    modelRef.current!.traverse((child: any) => {
+                        if (child.isBone) {
+                            targetRestPoses.set(child.name, child.quaternion.clone());
+                        }
+                    });
+                    console.log(`🦴 Target: ${boneNames.size} huesos, ${targetRestPoses.size} rest-poses capturadas`);
+
+                    const processedClips: THREE.AnimationClip[] = [];
+
+                    animations.forEach((clip: THREE.AnimationClip) => {
+                        clip.name = name;
+
+                        if (isMixamoAnimation(clip)) {
+                            console.log(`🔄 Retargeteando con corrección rest-pose...`);
+                            const retargeted = retargetMixamoClip(
+                                clip, boneNames, modelRef.current!,
+                                sourceRestPoses, targetRestPoses
+                            );
+                            retargeted.name = name;
+                            processedClips.push(retargeted);
+                        } else {
+                            processedClips.push(clip);
+                        }
+
+                        console.log(`✅ "${name}": ${clip.duration.toFixed(1)}s, ${clip.tracks.length} tracks`);
+                    });
+
+                    if (processedClips.length > 0 && mixerRef.current) {
+                        // Parar TODAS las animaciones actuales en el mixer original
+                        mixerRef.current.stopAllAction();
+
+                        // Reproducir el clip retargetado en el mixer ORIGINAL del modelo
+                        // Esto es crucial: el mixer original está conectado a TODAS las mallas
+                        // (body, face, clothing, shoes), no solo al skeleton
+                        const clipAction = mixerRef.current.clipAction(processedClips[0]);
+                        clipAction.reset();
+                        clipAction.setLoop(THREE.LoopRepeat, Infinity);
+                        clipAction.clampWhenFinished = false;
+                        clipAction.play();
+
+                        externalAnimPlayingRef.current = true;
+                        console.log(`🎯 Animación "${name}" reproduciéndose en mixer original - TODAS las mallas se actualizan`);
+                    }
+                } else {
+                    console.warn(`⚠️ "${name}" no contiene animaciones`);
+                }
+            } catch (err) {
+                console.error(`❌ Error cargando "${name}":`, err);
+            }
+        };
+
+        window.addEventListener('nova-load-animation', handler);
+        return () => window.removeEventListener('nova-load-animation', handler);
+    }, [gltf]);
+
+
+    // --- EFECTO: APLICAR COLOR DE CABELLO ---
+    useEffect(() => {
+        // Solo aplicamos si el color NO es el negro por defecto heredado de versiones anteriores (#1a1a1a)
+        // O si el usuario ha seleccionado explícitamente otro color.
+        if (hairColor && hairColor !== '#1a1a1a' && materialManagerRef.current) {
+            console.log('💇 Aplicando color de cabello personalizado:', hairColor);
+            materialManagerRef.current.setColor('hair', hairColor);
+        } else if (hairColor === '#1a1a1a' && materialManagerRef.current) {
+            // Si es el negro por defecto, restaurar el original del modelo (ej: rubio)
+            console.log('💇 Restaurando color de cabello original del modelo');
+            materialManagerRef.current.resetCategoryToOriginal('hair');
+        }
+    }, [hairColor]);
 
     // --- EFECTO: DISPARAR ANIMACIONES DESDE PROP 'ACTION' ---
     useEffect(() => {
-        if (action && animationManagerRef.current) {
+        if (action) {
             console.log('🎬 Action prop changed:', action);
-            const animName = getAnimationName(action); // Uses helper to map 'WAVE' -> 'Wave', etc.
+            
+            const animName = getAnimationName(action);
 
-            // Si retorna 'Idle' (default) pero la acción no era 'neutral'/'idle', 
-            // intentamos usar el nombre directo capitalizado por si acaso existe (ej: 'Cross_Arms')
-            const finalName = animName === 'Idle' && !action.toLowerCase().includes('idle')
-                ? action.charAt(0).toUpperCase() + action.slice(1).toLowerCase()
-                : animName;
+            // 1. Intentar con AnimationManager (clips de Blender)
+            let played = false;
+            if (animationManagerRef.current) {
+                const finalName = animName === 'Idle' && !action.toLowerCase().includes('idle')
+                    ? action.charAt(0).toUpperCase() + action.slice(1).toLowerCase()
+                    : animName;
+                played = animationManagerRef.current.play(finalName, { priority: 10, loop: true });
+            }
 
-            animationManagerRef.current.play(finalName, { priority: 10, loop: true });
-        } else if (!action && animationManagerRef.current) {
-            // Volver a Idle si se quita la acción
-            animationManagerRef.current.play('Idle', { priority: 1, loop: true, blendDuration: 0.5 });
+            // 2. Fallback: ProceduralAnimator (gestos por huesos)
+            if (!played && proceduralAnimatorRef.current) {
+                console.log('🎭 Usando animación procedural para:', action);
+                proceduralAnimatorRef.current.play(action);
+            }
+        } else {
+            // Volver a Idle / detener procedural
+            externalAnimPlayingRef.current = false;
+            if (mixerRef.current) mixerRef.current.stopAllAction();
+            
+            if (animationManagerRef.current) {
+                animationManagerRef.current.play('Idle', { priority: 1, loop: true, blendDuration: 0.5 });
+            }
+            if (proceduralAnimatorRef.current) {
+                proceduralAnimatorRef.current.stop();
+            }
         }
     }, [action]);
 
@@ -758,6 +952,23 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
         // === ACTUALIZAR NUEVOS SISTEMAS ===
         if (animationManagerRef.current) animationManagerRef.current.update(delta);
+        if (!externalAnimPlayingRef.current && proceduralAnimatorRef.current) proceduralAnimatorRef.current.update(t, delta);
+
+        // === Si hay animación externa (Mixamo), saltar TODO el código procedural ===
+        // El AnimationMixer ya controla todos los huesos
+        if (externalAnimPlayingRef.current) {
+            // Solo actualizar parpadeo y lipsync (no afectan huesos)
+            blinkTimer.current += delta;
+            if (blinkTimer.current >= nextBlinkTime.current) {
+                isBlinking.current = true;
+                if (blinkTimer.current >= nextBlinkTime.current + blinkDuration) {
+                    isBlinking.current = false;
+                    blinkTimer.current = 0;
+                    nextBlinkTime.current = 2.5 + Math.random() * 4;
+                }
+            }
+            return; // <-- Saltar todo el procedural (spine, brazos, cabeza, etc.)
+        }
 
         // --- SACCADIC EYE MOVEMENTS (MICRO-MOVIMIENTOS) ---
         if (ikControllerRef.current?.isInitialized()) {
@@ -786,10 +997,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         };
 
         // --- CALCULAR PESO DE CAPA PROCEDURAL ---
-        // Si hay una animación de cuerpo completo (NO 'Idle') ejecutándose, reducidmos la influencia procedural
-        // para evitar conflictos ("pelea de huesos").
+        // Si hay una animación activa (clip o procedural), reducir influencia del idle arm code
         const isIdlePlaying = animationManagerRef.current?.isPlaying('Idle') ?? true;
-        const proceduralLayerWeight = isIdlePlaying && !action ? 1.0 : 0.2; // 20% influence even when moving to keep it "alive"
+        const isProceduralPlaying = proceduralAnimatorRef.current?.isPlaying() ?? false;
+        const proceduralLayerWeight = (isIdlePlaying && !action && !isProceduralPlaying) ? 1.0 : 0.0;
 
         // --- 1. MOVIMIENTO "VIVO" AVANZADO (Procedural Animation) ---
         if (modelRef.current) {
@@ -847,55 +1058,48 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         }
 
         // --- GESTOS / ACCIONES ---
-        // REFACTOR: Eliminada lógica manual ("WAVE", etc.) en favor de AnimationManager.
-        // Solo aplicamos correcciones sutiles proceduales a los brazos si NO hay acción (Idle).
+        // Gestión de brazos: si el ProceduralAnimator está activo, él controla los brazos.
+        // Si no, devolvemos suavemente a pose de descanso natural.
 
-        if (proceduralLayerWeight > 0.5) {
+        if (!isProceduralPlaying && !action) {
             // --- RELAX / IDLE ARMS ---
-            // Solo si estamos mayormente en Idle (peso > 0.5)
+            const baseDownX = THREE.MathUtils.degToRad(-82);
+            const baseForwardZ = THREE.MathUtils.degToRad(-10);
 
-            if (isAiSpeaking && !action) {
+            if (isAiSpeaking) {
                 // --- AUTO GESTOS AL HABLAR ---
                 const gestureSpeed = 5;
                 const noise = Math.sin(t * gestureSpeed) * Math.cos(t * gestureSpeed * 0.7);
                 const liftAmount = THREE.MathUtils.degToRad(25);
-                const baseForwardZ = THREE.MathUtils.degToRad(-15);
 
-                // Brazo DERECHO
                 if (rightArmRef.current) {
-                    const targetX = THREE.MathUtils.degToRad(-80) + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3)));
-                    const targetZ = baseForwardZ + (noise * 0.1);
-
-                    // Sumamos (+=) en lugar de asignar (=) para blend
-                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, targetX, 0.1);
-                    rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, targetZ, 0.1);
+                    const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3)));
+                    const targetZ = THREE.MathUtils.degToRad(-15) + (noise * 0.1);
+                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, targetX, 0.06);
+                    rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, targetZ, 0.06);
                 }
-                // Brazo IZQUIERDO
                 if (leftArmRef.current) {
-                    const targetX = THREE.MathUtils.degToRad(-80) + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3 + 1)));
-                    const targetZ = -baseForwardZ - (noise * 0.1);
-
-                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, targetX, 0.1);
-                    leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, targetZ, 0.1);
+                    const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3 + 1)));
+                    const targetZ = THREE.MathUtils.degToRad(15) - (noise * 0.1);
+                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, targetX, 0.06);
+                    leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, targetZ, 0.06);
                 }
-            } else if (!action) {
-                // --- RELAX PURA (Idle Pose) ---
-                const lerpReturn = 0.05;
-                const baseDownX = THREE.MathUtils.degToRad(-82);
-                const baseForwardZ = THREE.MathUtils.degToRad(-10);
+            } else {
+                // --- POSE DE DESCANSO (brazos abajo con micro-movimientos) ---
+                const lerpReturn = 0.04; // Velocidad suave de retorno
+                const microSway = Math.sin(t * 0.8) * THREE.MathUtils.degToRad(2); // Micro-balanceo natural
 
                 if (rightArmRef.current) {
-                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, baseDownX, lerpReturn);
+                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, baseDownX + microSway, lerpReturn);
                     rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, baseForwardZ, lerpReturn);
                 }
                 if (leftArmRef.current) {
-                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, baseDownX, lerpReturn);
+                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, baseDownX - microSway, lerpReturn);
                     leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, -baseForwardZ, lerpReturn);
                 }
             }
         }
-        // Si hay una acción (proceduralLayerWeight bajo), NO tocamos los brazos manualmente.
-        // AnimationManager se encarga de ellos.
+        // Si isProceduralPlaying === true, el ProceduralAnimator controla los brazos en su update().
 
         // --- 2. CONTROL \"MODO HOT\" (Lengua) ---
         if (tongueMeshRef.current && tongueRef.current !== null) {
@@ -1601,15 +1805,16 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
     return null;
 }
 
-const AvatarViewer3D: React.FC<AvatarViewer3DProps & { action?: string | null, viewMode?: string }> = ({
-    modelUrl = '/models/nova-avatar.glb',
+const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
+    avatar,
     emotion = 'neutral',
-    action = null,
-    viewMode = 'default',
+    activeAction = null,
     audioElement = null,
     isAiSpeaking = false,
     disableControls = false,
-    isHotMode = false
+    viewMode = 'default',
+    isHotMode = false,
+    hairColor = '#e2b464'
 }) => {
     // Referencia para manipular OrbitControls
     const controlsRef = useRef<any>(null);
@@ -1688,12 +1893,14 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps & { action?: string | null, v
 
                 <Suspense fallback={<FallbackAvatar />}>
                     <AvatarModel
-                        modelUrl={modelUrl}
+                        key={avatar?.modelUrl || 'default-model'}
+                        modelUrl={avatar?.modelUrl || '/models/grokani_lipsync.glb'}
                         emotion={emotion}
-                        action={action}
+                        action={activeAction}
                         audioElement={audioElement}
                         isAiSpeaking={isAiSpeaking}
                         isHotMode={isHotMode}
+                        hairColor={hairColor}
                     />
                 </Suspense>
 

@@ -54,8 +54,8 @@ export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
     // 3. ROPA REAL DETECTADA (Lo que sí se puede quitar)
     const clothingMap: Record<string, string[]> = {
         'underwear': ['brassiere', 'panties', 'underwear', 'bra', 'thong'],
-        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves'],
-        'accessory': ['necklace', 'bow', 'stickers', 'stockings', 'garter']
+        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves', 'necklace', 'stockings', 'bow'],
+        'accessory': ['glasses', 'hat', 'ribbon', 'earring', 'choker', 'headband']
     };
 
     for (const [cat, keywords] of Object.entries(clothingMap)) {

@@ -92,6 +92,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const lastInteractionRef = useRef<number>(Date.now());
   const [isSearching, setIsSearching] = useState(false); // Estado para indicar búsqueda
   const isSearchingRef = useRef(false); // Ref para bloqueo síncrono inmediato
+  const isStartingCallRef = useRef(false); // Prevenir AbortError en play()
 
   // NÚCLEO DE AUTONOMÍA UNIFICADO: Saludo y Proactividad
   useEffect(() => {
@@ -474,6 +475,16 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [emotion, setEmotion] = useState<Emotion>('neutral');
   const [action, setAction] = useState<string | null>(null);
 
+  // Listener para acciones disparadas desde Avatar Studio
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setAction(detail?.action || null);
+    };
+    window.addEventListener('nova-action', handler);
+    return () => window.removeEventListener('nova-action', handler);
+  }, []);
+
   // Efecto para analizar la emoción de la respuesta de la IA
   // Efecto para analizar la emoción de la respuesta de la IA
   useEffect(() => {
@@ -736,15 +747,31 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       // 3. Comparar con usuario principal (TÚ)
       if (state.userFaceDescriptor) {
         const userDistance = compareFaces(faceDescriptor, state.userFaceDescriptor);
-        if (userDistance <= 0.6) { // Umbral de distancia: 0.6 o menor es match
+        if (userDistance <= 0.75) { // Aumentado a 0.75 para ser más tolerante a cambios de ropa/luz
           console.log(`👤 Usuario principal detectado (${state.userName}) - Distancia: ${userDistance.toFixed(3)}`);
-          // Solo actualizar lastSeen, no guardar duplicado
+
+          // Notificar a Nova arrival del usuario (CON DEBOUNCE)
+          const userId = 'user-identity';
+          const lastAnnounce = personAnnouncementRef.current[userId] || 0;
+          const now = Date.now();
+
+          if (now - lastAnnounce > 60000) {
+            personAnnouncementRef.current[userId] = now;
+            addMessage({
+              text: `👋 Bienvenido de nuevo, ${state.userName}`, 
+              sender: 'ai'
+            });
+
+            const sysMsg = `[SYSTEM_EVENT: Visual match confirmed. Person: ${state.userName} (Tús ojos / Usuario principal). Status: Present. Acknowledge them warmly.]`;
+            liveSessionRef.current?.sendRealtimeInput({ text: sysMsg });
+          }
           return;
         }
       }
 
       // 4. Comparar con personas conocidas
-      const match = findMatchingPerson(faceDescriptor, state.knownPeople, 0.6); // Umbral 0.6
+      // Aumentado a 0.75 para mayor tolerancia evitando duplicados por ropa/luz
+      const match = findMatchingPerson(faceDescriptor, state.knownPeople, 0.75);
       if (match) {
         console.log(`✅ Persona reconocida: ${match.person.name} (Distancia: ${match.distance.toFixed(3)})`);
 
@@ -1098,6 +1125,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     // 🟢 GEMINI LIVE (flujo original, nativo)
     console.log('⚡ Usando Gemini Live (nativo)');
 
+    if (isStartingCallRef.current) return;
+    isStartingCallRef.current = true;
+
     try {
       // Verificar API key primero
       const apiKey = process.env.API_KEY;
@@ -1392,6 +1422,22 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                     window.dispatchEvent(new CustomEvent('nova-fluid', { detail: { target, intensity } }));
                     addMessage({ text: `💦 Fluidos: [${target}]`, sender: 'ai' });
                     toolResult = `Fluid simulation for ${target} with intensity ${intensity}.`;
+                  } else if (fc.name === 'addReminder') {
+                    const { message, minutes } = fc.args as any;
+                    const triggerTime = Date.now() + (minutes * 60000);
+                    const updated = addReminder(novaMemory, message, triggerTime);
+                    setNovaMemory(updated);
+                    addMessage({ text: `⏰ Recordatorio: "${message}" en ${minutes} min.`, sender: 'ai' });
+                    toolResult = `Reminder set: ${message} in ${minutes} minutes.`;
+                  } else if (fc.name === 'recordFinance') {
+                    const { note } = fc.args as any;
+                    const financeNote = `[FINANZAS] ${note}`;
+                    const updated = addFact(novaMemory, financeNote);
+                    setNovaMemory(updated);
+                    // También guardar en la nube
+                    addFactToCloud(financeNote, 'fact');
+                    addMessage({ text: `📈 Finanzas: ${note}`, sender: 'ai' });
+                    toolResult = `Finance recorded: ${note}`;
                   }
 
                   // Enviar respuesta a la herramienta (Crucial para que el modelo continúe)
@@ -1608,13 +1654,24 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
             // DETECCIÓN DE INTENCIÓN DE BÚSQUEDA (Solo Keywords del Usuario)
             const searchText = currentInputTranscription.current.toLowerCase();
 
-            // Keywords del usuario (Directa) - Solo activar si el USUARIO pregunta
-            const searchKeywords = ['busca', 'buscar', 'búscame', 'investiga', 'quién es', 'qué es', 'dónde está', 'cuándo', 'precios de', 'noticias', 'precio del', 'cuánto cuesta', 'valor', 'cotización', 'dólar', 'euro', 'uf', 'clima', 'tiempo', 'información sobre'];
+            // Keywords del usuario (Directa) - Solo activar si el USUARIO pregunta explícitamente por información externa
+            // Eliminamos "cuándo", "tiempo", "valor" por causar demasiados falsos positivos en conversación normal
+            const searchKeywords = [
+              'busca', 'buscar', 'búscame', 'investiga', 
+              'quién es', 'qué es', 'dónde está', 
+              'precios de', 'noticias', 'precio del', 'cuánto cuesta', 
+              'cotización', 'dólar', 'euro', 'uf', 'clima',
+              'información sobre'
+            ];
 
             const isUserAsking = (searchText.length > 5 && searchKeywords.some(kw => searchText.includes(kw)));
 
-            // Solo activar búsqueda si el USUARIO preguntó explícitamente Y es fin de turno
-            if (!isSearchingRef.current && isUserAsking && msg.serverContent?.turnComplete) {
+            // Solo activar búsqueda si:
+            // 1. El USUARIO preguntó explícitamente
+            // 2. Es fin de turno
+            // 3. No estamos ya buscando
+            // 4. LA BÚSQUEDA ESTÁ PERMITIDA EN SETTINGS
+            if (!isSearchingRef.current && isUserAsking && msg.serverContent?.turnComplete && state.allowWebSearch) {
 
               const queryToSearch = currentInputTranscription.current || lastUserQuery.current;
 
@@ -2020,6 +2077,41 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                     },
                     required: ["action"]
                   }
+                },
+                {
+                  name: "addReminder",
+                  description: "Sets a reminder for the user. Use this when the user needs to do something later.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      message: { type: Type.STRING, description: "The reminder message." },
+                      minutes: { type: Type.NUMBER, description: "Minutes from now to trigger the reminder." }
+                    },
+                    required: ["message", "minutes"]
+                  }
+                },
+                {
+                  name: "recordFinance",
+                  description: "Records a financial note, expense, or income for the user's organization.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      note: { type: Type.STRING, description: "The financial detail (e.g. 'Spent 10 on bread', 'Paid water bill 50')." }
+                    },
+                    required: ["note"]
+                  }
+                },
+                {
+                  name: "saveConversation",
+                  description: "Saves a summary of the current conversation as an important memory.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      summary: { type: Type.STRING, description: "A brief summary of what happened." },
+                      emotion: { type: Type.STRING, description: "Main emotion of the interaction." }
+                    },
+                    required: ["summary", "emotion"]
+                  }
                 }
               ]
             }
@@ -2271,6 +2363,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       console.error('Error al iniciar llamada:', err);
       alert('Error al iniciar la llamada: ' + (err?.message || 'Error desconocido'));
       endCall();
+    } finally {
+      isStartingCallRef.current = false;
     }
   };
 
@@ -2698,12 +2792,12 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             >
               <AvatarViewer3D
                 key={state.avatar.modelUrl} // Force remount internal component
-                modelUrl={state.avatar.modelUrl || "/models/nova-avatar.glb"}
-                emotion={emotion}
-                action={action} // Pasamos la acción detectada
+                avatar={state.avatar}
+                activeAction={action} // Pasamos la acción detectada
                 viewMode={viewMode}
                 isAiSpeaking={isAiSpeaking}
                 isHotMode={isBold}
+                hairColor={state.avatar.hairColor}
               />
             </AvatarErrorBoundary>
 

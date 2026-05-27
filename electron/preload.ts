@@ -32,7 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         node: process.versions.node,
         chrome: process.versions.chrome,
         electron: process.versions.electron
-    }
+    },
+    
+    // Modelos
+    getAvailableModels: () => ipcRenderer.invoke('get-available-models')
 });
 
 // Exponer detector de si estamos en Electron

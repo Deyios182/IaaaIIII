@@ -64,7 +64,7 @@ export const addFact = async (content: string, category: Fact['category']): Prom
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('facts')
+        .from('nova_facts')
         .insert({ user_id: userId, content, category })
         .select()
         .single();
@@ -82,7 +82,7 @@ export const getFacts = async (): Promise<Fact[]> => {
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('facts')
+        .from('nova_facts')
         .select('*')
         .eq('user_id', userId)
         .order('learned_at', { ascending: false });
@@ -101,7 +101,7 @@ export const addKnownPerson = async (person: Omit<KnownPerson, 'id' | 'user_id'>
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('known_people')
+        .from('nova_known_people')
         .insert({ user_id: userId, ...person })
         .select()
         .single();
@@ -119,7 +119,7 @@ export const getKnownPeople = async (): Promise<KnownPerson[]> => {
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('known_people')
+        .from('nova_known_people')
         .select('*')
         .eq('user_id', userId)
         .order('last_seen', { ascending: false });
@@ -135,7 +135,7 @@ export const updatePersonLastSeen = async (personId: string): Promise<void> => {
     if (!isSupabaseConfigured()) return;
 
     await supabase
-        .from('known_people')
+        .from('nova_known_people')
         .update({ last_seen: new Date().toISOString() })
         .eq('id', personId);
 };
@@ -143,7 +143,7 @@ export const updatePersonLastSeen = async (personId: string): Promise<void> => {
 export const deleteKnownPerson = async (personId: string): Promise<void> => {
     if (!isSupabaseConfigured()) return;
     const { error } = await supabase
-        .from('known_people')
+        .from('nova_known_people')
         .delete()
         .eq('id', personId);
     if (error) console.error('Error deleting person:', error);
@@ -172,7 +172,7 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
     };
 
     const { data, error } = await supabase
-        .from('known_people')
+        .from('nova_known_people')
         .upsert(dbPayload)
         .select()
         .single();
@@ -194,7 +194,7 @@ export const saveMemory = async (memory: Omit<Memory, 'id' | 'user_id'>): Promis
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('memories')
+        .from('nova_memories')
         .insert({ user_id: userId, ...memory })
         .select()
         .single();
@@ -267,7 +267,7 @@ export const getRecentMemories = async (limit: number = 50): Promise<Memory[]> =
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('memories')
+        .from('nova_memories')
         .select('*')
         .eq('user_id', userId)
         .order('timestamp', { ascending: false })
@@ -286,7 +286,7 @@ export const searchFacts = async (query: string): Promise<string[]> => {
 
     const userId = await getCurrentUserId();
     const { data: facts } = await supabase
-        .from('facts')
+        .from('nova_facts')
         .select('content')
         .eq('user_id', userId)
         .ilike('content', `%${query}%`)
@@ -302,7 +302,7 @@ export const addReminder = async (message: string, triggerTime: Date): Promise<R
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('reminders')
+        .from('nova_reminders')
         .insert({
             user_id: userId,
             message,
@@ -324,7 +324,7 @@ export const getPendingReminders = async (): Promise<Reminder[]> => {
 
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
-        .from('reminders')
+        .from('nova_reminders')
         .select('*')
         .eq('user_id', userId)
         .eq('completed', false)
@@ -341,7 +341,7 @@ export const completeReminder = async (reminderId: string): Promise<void> => {
     if (!isSupabaseConfigured()) return;
 
     await supabase
-        .from('reminders')
+        .from('nova_reminders')
         .update({ completed: true })
         .eq('id', reminderId);
 };

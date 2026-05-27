@@ -42,11 +42,13 @@ export class MaterialManager {
 
             // Procesar materiales
             const processMaterial = (mat: THREE.Material) => {
-                if (mat instanceof THREE.MeshStandardMaterial) {
+                // Soportar MeshStandardMaterial Y MeshPhysicalMaterial (usado por pelo, ojos brillantes)
+                if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+                    const stdMat = mat as THREE.MeshStandardMaterial;
                     const ref: MaterialReference = {
                         mesh,
                         material: mat,
-                        originalColor: mat.color.clone(),
+                        originalColor: stdMat.color.clone(),
                         category
                     };
                     this.materials.push(ref);
@@ -62,32 +64,55 @@ export class MaterialManager {
 
         console.log(`🎨 MaterialManager: ${this.materials.length} materiales detectados`);
 
-        // === FIX AUTOMÁTICO DE PIEL ===
-        // Aplicar configuración realista a todo lo detectado como 'skin' inmediatamente
+        // === FIX AUTOMÁTICO DE MATERIALES ===
         this.materials.forEach(ref => {
-            if (ref.category === 'skin' && ref.material instanceof THREE.MeshStandardMaterial) {
-                // Piel humana: Baja metalicidad, rugosidad media
-                ref.material.roughness = 0.45; // Ni muy brillante (sudor), ni muy mate (tiza)
-                ref.material.metalness = 0.1;  // La piel no es metal
+            if (!(ref.material instanceof THREE.MeshStandardMaterial)) return;
+            const mat = ref.material as THREE.MeshStandardMaterial;
+            const hasColorMap = !!mat.map; // Tiene textura de color pintada
 
-                // TRUCO PRO: Tintar el color ligeramente hacia rojo/naranja para simular sangre bajo la piel
-                // Solo si el color es muy pálido
-                const color = ref.material.color;
-                if (color.r > 0.8 && color.g > 0.8 && color.b > 0.8) {
-                    // Es blanco/gris, darle un tono "carne" sutil
-                    ref.material.color.setHex(0xffe0bd);
+            if (ref.category === 'skin') {
+                // Piel: Solo ajustar si NO tiene mapas de calidad ya asignados
+                if (!mat.roughnessMap && mat.roughness < 0.3) mat.roughness = 0.45;
+                if (!mat.metalnessMap && mat.metalness > 0.3) mat.metalness = 0.1;
+
+                // Tono carne solo si es blanco puro SIN textura (modelo sin pintar)
+                if (mat.color.r > 0.9 && mat.color.g > 0.9 && mat.color.b > 0.9 && !hasColorMap) {
+                    mat.color.setHex(0xffe0bd);
                 }
-                ref.material.needsUpdate = true;
-                console.log('🎨 Skin material optimizado:', ref.mesh.name);
+                mat.needsUpdate = true;
+                console.log('🧍 Skin material optimizado:', ref.mesh.name);
             }
 
-            // Ojos: Configuración más equilibrada (evitar demasiado brillo)
-            if (ref.category === 'eyes' && ref.material instanceof THREE.MeshStandardMaterial) {
-                ref.material.roughness = 0.5; // Menos brillante
-                ref.material.metalness = 0.0;
-                ref.material.envMapIntensity = 0.5; // Reducir reflejos
-                ref.material.needsUpdate = true;
+            // Cabello: Solo ajustar si no tiene mapa de roughness propio
+            if (ref.category === 'hair') {
+                if (!mat.roughnessMap) mat.roughness = Math.min(mat.roughness, 0.4);
+                if (!mat.metalnessMap) mat.metalness = Math.max(mat.metalness, 0.1);
+                mat.needsUpdate = true;
+                console.log('💇 Hair material optimizado:', ref.mesh.name);
+            }
+
+            // Ojos: Configuración equilibrada sin destruir texturas pintadas
+            if (ref.category === 'eyes') {
+                if (!mat.roughnessMap) mat.roughness = 0.3;
+                mat.metalness = Math.min(mat.metalness, 0.15);
+                mat.envMapIntensity = 0.8;
+                mat.needsUpdate = true;
                 console.log('👁️ Eye material optimizado (Toned down):', ref.mesh.name);
+            }
+
+            // ROPA: RESPETAR texturas originales siempre
+            if (ref.category === 'outfit' || ref.category === 'underwear') {
+                if (!hasColorMap) {
+                    // Sin textura → darle color para que no sea blanco fantasma
+                    if (mat.color.r > 0.95 && mat.color.g > 0.95 && mat.color.b > 0.95) {
+                        const defaultColor = ref.category === 'outfit' ? 0x333333 : 0xeeeeee;
+                        mat.color.setHex(defaultColor);
+                    }
+                    mat.roughness = 0.65;
+                    mat.metalness = 0.05;
+                }
+                // Si TIENE textura, NO tocar roughness/metalness → Respetar Blender
+                mat.needsUpdate = true;
             }
         });
 
@@ -99,11 +124,23 @@ export class MaterialManager {
      * Categorizar mesh por nombre
      */
     private categorizeMesh(name: string): MaterialReference['category'] {
-        if (name.includes('hair')) return 'hair';
-        if (name.includes('eye') && !name.includes('lash')) return 'eyes';
-        if (name.includes('body') || name.includes('face') || name.includes('skin')) return 'skin';
-        if (name.includes('underwear') || name.includes('bra') || name.includes('panties')) return 'underwear';
-        if (name.includes('cloth') || name.includes('dress') || name.includes('outfit')) return 'outfit';
+        const n = name.toLowerCase();
+        if (n.includes('hair') && !n.includes('lash')) return 'hair';
+        if (n.includes('eye') && !n.includes('lash')) return 'eyes';
+        // Cuerpo: incluir Human_Retopo (cuerpo principal del modelo Rigify/Blender)
+        if (n.includes('body') || n.includes('face') || n.includes('skin') || n.includes('head') || 
+            n.includes('main') || n.includes('human_retopo') || n.includes('retopo') ||
+            n.includes('tongue') || n.includes('lash') || n.includes('blush') || n.includes('glows')) return 'skin';
+        
+        // Ropa Interior
+        if (n.includes('underwear') || n.includes('bra') || n.includes('panties') || n.includes('brassiere') || n.includes('thong') || n.includes('lingerie')) return 'underwear';
+        
+        // Ropa Exterior  
+        if (n.includes('cloth') || n.includes('dress') || n.includes('outfit') || n.includes('shirt') || 
+            n.includes('pants') || n.includes('skirt') || n.includes('jacket') || n.includes('suit') || 
+            n.includes('uniform') || n.includes('boots') || n.includes('gloves') || n.includes('stockings') ||
+            n.includes('necklace') || n.includes('bow')) return 'outfit';
+        
         return 'other';
     }
 
@@ -189,6 +226,20 @@ export class MaterialManager {
             }
         });
         console.log('🔄 Materiales reseteados a originales');
+    }
+
+    /**
+     * Resetear una categoría específica a colores originales
+     */
+    resetCategoryToOriginal(category: MaterialReference['category']): void {
+        this.materials
+            .filter(ref => ref.category === category)
+            .forEach(ref => {
+                if (ref.originalColor && ref.material instanceof THREE.MeshStandardMaterial) {
+                    ref.material.color.copy(ref.originalColor);
+                }
+            });
+        console.log(`🔄 Categoría ${category} reseteada a original`);
     }
 
     /**
