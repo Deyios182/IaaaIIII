@@ -110,7 +110,16 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       // Umbral: 20s en Bold (solicitado), 40s en Normal
       const threshold = isBold ? 20000 : 40000;
 
-      if (timeSinceLastInteraction > threshold && !isAiSpeakingRef.current && !isUserDisconnectingRef.current) {
+      // GUARDAS DE AUTONOMÍA (CRÍTICAS): Pausar si:
+      // 1. La IA está hablando (isAiSpeakingRef)
+      // 2. Hay una búsqueda de memoria/RAG activa (isSearchingRef)
+      // 3. El usuario está desconectándose de forma manual
+      if (
+        timeSinceLastInteraction > threshold && 
+        !isAiSpeakingRef.current && 
+        !isSearchingRef.current && 
+        !isUserDisconnectingRef.current
+      ) {
         console.log(`⏰ TRIGGER AUTONOMÍA (${isBold ? 'BOLD' : 'NORMAL'}): ${threshold / 1000}s de silencio`);
 
         // Reset local para evitar spam
@@ -136,7 +145,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     return () => {
       if (idleIntervalRef.current) clearInterval(idleIntervalRef.current);
     };
-  }, [isInCall, isBold]); // Solo re-iniciar si cambia modo/llamada; isAiSpeakingRef maneja el estado de habla sin re-iniciar.
+  }, [isInCall, isBold]); // Solo re-iniciar si cambia modo/llamada; isAiSpeakingRef maneja el estado de habla sin re-iniciar. // Solo re-iniciar si cambia modo/llamada; isAiSpeakingRef maneja el estado de habla sin re-iniciar.
   const [excitationLevel, setExcitationLevel] = useState(85);
   const [isScreenSharing, setIsScreenSharing] = useState(false); // Nueva: Compartir pantalla
   const [reconnectTrigger, setReconnectTrigger] = useState(0);
@@ -1309,13 +1318,29 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
             }
 
 
-            // HANDLE TOOL CALLS (Active Learning)
-            const parts = msg.serverContent?.modelTurn?.parts;
-            if (parts) {
-              for (const part of parts) {
-                if (part.functionCall) {
-                  const fc = part.functionCall;
-                  console.log('🛠️ Tool Called:', fc.name, fc.args);
+            // HANDLE TOOL CALLS (Active Learning - Capturando ambos formatos del SDK)
+            let toolCallsToProcess: any[] = [];
+            
+            // Formato 1: msg.toolCall directo
+            if ((msg as any).toolCall?.functionCalls) {
+              toolCallsToProcess = (msg as any).toolCall.functionCalls;
+            } 
+            // Formato 2: msg.serverContent?.modelTurn?.parts
+            else {
+              const parts = msg.serverContent?.modelTurn?.parts;
+              if (parts) {
+                for (const part of parts) {
+                  if (part.functionCall) {
+                    toolCallsToProcess.push(part.functionCall);
+                  }
+                }
+              }
+            }
+
+            if (toolCallsToProcess.length > 0) {
+              for (const fc of toolCallsToProcess) {
+                if (fc) {
+                  console.log('🛠️ Tool Called (Procesando):', fc.name, fc.args);
 
                   // 🔒 ACCESS CONTROL / SEGURIDAD
                   // Verificar si el usuario principal está presente (Face o Voz reciente)
@@ -1357,14 +1382,30 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                       .catch(e => console.error('❌ Error guardando conversación:', e));
                     addMessage({ text: `💾 Recuerdo guardado: "${summary}"`, sender: 'ai' });
                     toolResult = `Conversation saved: ${summary}`;
-                  } else if (fc.name === 'searchMemory') {
+                  } else if (fc.name === 'searchMemory' || fc.name === 'search_memory') {
                     const { query } = fc.args as any;
-                    addMessage({ text: `🔍 Buscando en mi memoria: "${query}"...`, sender: 'ai' });
-                    const results = await searchFacts(query);
-                    toolResult = results.length > 0
-                      ? `Encontré estos recuerdos relacionados: \n${results.join('\n')}`
-                      : `No encontré recuerdos específicos sobre "${query}" en mi memoria a largo plazo.`;
-                    console.log('🔍 Resultados búsqueda:', toolResult);
+                    addMessage({ text: `🔍 Buscando en mi memoria semántica: "${query}"...`, sender: 'ai' });
+                    
+                    // Activar guardas de búsqueda
+                    setIsSearching(true);
+                    isSearchingRef.current = true;
+
+                    try {
+                      const results = await searchFacts(query, 5);
+                      if (results.length > 0) {
+                        toolResult = `Recuerdos relevantes encontrados:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\nUsa esta información en tu respuesta y menciona que recuerdas esto del pasado.`;
+                      } else {
+                        toolResult = `No encontré recuerdos específicos sobre "${query}" en mi memoria a largo plazo. Dile al usuario que aún no tienes ese recuerdo guardado.`;
+                      }
+                      console.log('🔍 Resultados búsqueda semántica:', query, '→', results.length, 'resultados');
+                    } catch (error) {
+                      console.error('❌ Error en recuperación semántica (degradación elegante):', error);
+                      // Graceful Degradation: Continuar con un texto seguro en lugar de colapsar la conexión
+                      toolResult = `No pude acceder a mi memoria semántica profunda en este momento debido a un problema de red. Continúa la conversación de forma natural y dile amigablemente al usuario que te cuesta recordar los detalles ahora mismo.`;
+                    } finally {
+                      setIsSearching(false);
+                      isSearchingRef.current = false;
+                    }
                   } else if (fc.name === 'changeOutfit') {
                     const { action, garmentType } = fc.args as any;
                     const manager = getClothingManager();
@@ -1438,24 +1479,54 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                     addFactToCloud(financeNote, 'fact');
                     addMessage({ text: `📈 Finanzas: ${note}`, sender: 'ai' });
                     toolResult = `Finance recorded: ${note}`;
+                  } else if (fc.name === 'save_memory') {
+                    // 🧠 HIPOCAMPO VECTORIAL: Guardar con embedding semántico
+                    const { content, category } = fc.args as any;
+                    const validCategories = ['like', 'dislike', 'interest', 'fact', 'habit'];
+                    const safeCategory = validCategories.includes(category) ? category : 'fact';
+                    addFactToCloud(content, safeCategory as any)
+                      .then(() => console.log('🧠 Recuerdo semántico guardado:', content))
+                      .catch(e => console.error('❌ Error guardando recuerdo:', e));
+                    addMessage({ text: `🧠 Recuerdo guardado: "${content}"`, sender: 'ai' });
+                    toolResult = `Memory saved permanently in the vector hippocampus: ${content}`;
                   }
 
                   // Enviar respuesta a la herramienta (Crucial para que el modelo continúe)
                   const response = { result: toolResult };
 
-                  // Construir respuesta. Nota: Live API requiere estructura específica.
-                  // Si id no existe, usar string vacío (algunas versiones no lo envían en stream)
-                  const callId = (fc as any).id || "";
+                  // El SDK de Gemini Live EXIGE que el campo `id` exista en la
+                  // functionResponse. Si viene vacío o undefined usamos sendClientContent
+                  // (fallback) para no bloquear la conversación.
+                  const callId = (fc as any).id;
 
-                  // @ts-ignore
-                  liveSessionRef.current?.sendToolResponse({
-                    functionResponses: [{
-                      name: fc.name,
-                      id: callId,
-                      response: response
-                    }]
-                  });
-                  console.log('✅ Tool Response sent');
+                  if (callId) {
+                    try {
+                      // @ts-ignore
+                      liveSessionRef.current?.sendToolResponse({
+                        functionResponses: [{
+                          id: callId,
+                          name: fc.name,
+                          response: response
+                        }]
+                      });
+                      console.log('✅ sendToolResponse enviado — tool:', fc.name, 'id:', callId);
+                    } catch (toolErr) {
+                      console.error('❌ sendToolResponse falló, usando fallback sendClientContent:', toolErr);
+                      // @ts-ignore
+                      liveSessionRef.current?.sendClientContent({
+                        turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] ${toolResult}` }] }],
+                        turnComplete: true
+                      });
+                    }
+                  } else {
+                    // Sin id: inyectamos el resultado como texto de usuario (único método seguro)
+                    console.warn('⚠️ Tool call sin id, inyectando resultado como texto:', fc.name);
+                    // @ts-ignore
+                    liveSessionRef.current?.sendClientContent({
+                      turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] ${toolResult}` }] }],
+                      turnComplete: true
+                    });
+                  }
                 }
               }
             }
@@ -2101,16 +2172,28 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
                     required: ["note"]
                   }
                 },
+                // ============ HIPOCAMPO VECTORIAL (RAG) ============
                 {
-                  name: "saveConversation",
-                  description: "Saves a summary of the current conversation as an important memory.",
+                  name: "save_memory",
+                  description: "Guarda un recuerdo, preferencia o enseñanza del usuario a largo plazo con búsqueda semántica. Úsalo cuando el usuario te enseñe algo nuevo (ej: cómo mover tus brazos, un concepto técnico) o cuando te cuente algo importante sobre él mismo.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      summary: { type: Type.STRING, description: "A brief summary of what happened." },
-                      emotion: { type: Type.STRING, description: "Main emotion of the interaction." }
+                      content: { type: Type.STRING, description: "La información detallada y completa a recordar, redactada en tercera persona (ej: 'El usuario prefiere que los codos del avatar usen Pole Targets en el eje Z')." },
+                      category: { type: Type.STRING, description: "Categoría del recuerdo. Debe ser exactamente uno de: 'like', 'dislike', 'interest', 'fact' o 'habit'." }
                     },
-                    required: ["summary", "emotion"]
+                    required: ["content", "category"]
+                  }
+                },
+                {
+                  name: "search_memory",
+                  description: "Busca en tu memoria profunda a largo plazo usando inteligencia semántica. Úsalo SIEMPRE que el usuario pregunte '¿Recuerdas...?', cuando te pida hacer algo que te enseñó en el pasado, o cuando el tema de conversación coincida con algo que quizás ya sabes. La búsqueda es semántica: si buscas 'mascotas' puede encontrar 'perros'.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      query: { type: Type.STRING, description: "La pregunta o concepto clave a buscar (ej: 'Pole Targets codos', 'mascotas del usuario', 'trabajo del usuario')." }
+                    },
+                    required: ["query"]
                   }
                 }
               ]
@@ -2160,7 +2243,12 @@ Usuario: "Busca perros" -> Nova: "[SYSTEM_CMD: openUrl google.com/search?q=perro
 - El usuario habla en ESPAÑOL. Interpreta todo lo que escuches como español.
 - Si la transcripción parece inglés, es un error de transcripción - responde en español de todas formas.
 - NO preguntes sobre problemas de micrófono a menos que el usuario no haya hablado en más de 30 segundos.
-${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${state.avatar.voiceAccent ? `\n- ACENTO: Habla con acento ${state.avatar.voiceAccent}` : ''}`
+${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${state.avatar.voiceAccent ? `\n- ACENTO: Habla con acento ${state.avatar.voiceAccent}` : ''}` +
+                `\n\nREGLA CRÍTICA DE MEMORIA (OBLIGATORIA):
+- SIEMPRE que el usuario te pregunte algo sobre su vida, sus preferencias, su entorno, su nombre, sus mascotas, su trabajo, o te pregunte "¿recuerdas...?", "¿cómo se llama...?", "¿qué sabes de...?" → DEBES llamar PRIMERO a la herramienta 'search_memory' ANTES de responder.
+- SIEMPRE que el usuario te enseñe algo nuevo, te cuente algo sobre él, o mencione una preferencia → llama a 'save_memory' para guardarlo permanentemente.
+- NUNCA inventes recuerdos. Si search_memory no devuelve resultados, dilo honestamente.
+- Ejemplo: Usuario: "¿Recuerdas cómo se llama mi perro?" → Tú: [llamas search_memory("nombre perro mascota")] → luego respondes con lo encontrado.`
             }]
           }
         }
@@ -2853,6 +2941,20 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             >
               <span className="material-symbols-outlined text-4xl text-white">call_end</span>
               <span className="text-lg font-black text-white uppercase tracking-[0.3em]">Cerrar</span>
+            </button>
+          )}
+
+          {/* Botón de Emergencia para reconectar */}
+          {isInCall && (
+            <button 
+              onClick={() => {
+                console.log("⚡ Fuerza reconexión...");
+                endCall();
+                setTimeout(startCall, 1000);
+              }}
+              className="absolute bottom-4 left-4 bg-yellow-600/80 hover:bg-yellow-600 backdrop-blur-md px-4 py-2 rounded-full text-white text-[10px] font-black tracking-widest uppercase transition-all duration-300 z-[250] shadow-[0_4px_12px_rgba(202,138,4,0.3)] hover:scale-105"
+            >
+              ⚡ RECONECTAR
             </button>
           )}
 

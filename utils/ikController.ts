@@ -1,6 +1,6 @@
 /**
- * IK Controller - Sistema de Inverse Kinematics
- * Controla head tracking, eye tracking y gestos naturales
+ * IK Controller - Sistema de Inverse Kinematics (OPTIMIZADO CON QUATERNIONS)
+ * Controla head tracking, eye tracking y gestos naturales de forma fluida
  */
 
 import * as THREE from 'three';
@@ -19,7 +19,7 @@ export interface IKSettings {
 }
 
 const DEFAULT_IK_SETTINGS: IKSettings = {
-    headLookSpeed: 0.1,
+    headLookSpeed: 0.08, // Ligeramente más lento para mayor fluidez humana
     eyeLookSpeed: 0.15,
     maxHeadRotation: Math.PI / 3, // 60 grados
     maxEyeRotation: Math.PI / 4, // 45 grados
@@ -27,7 +27,7 @@ const DEFAULT_IK_SETTINGS: IKSettings = {
 };
 
 /**
- * IKController - Controla movimientos IK del avatar
+ * IKController - Controla movimientos IK del avatar con Quaternions (sin Gimbal Lock)
  */
 export class IKController {
     private settings: IKSettings;
@@ -38,21 +38,17 @@ export class IKController {
     private leftEye: THREE.Bone | null = null;
     private rightEye: THREE.Bone | null = null;
 
-    // Rotaciones originales
-    private headOriginalRotation: THREE.Euler = new THREE.Euler();
-    private neckOriginalRotation: THREE.Euler = new THREE.Euler();
-    private leftEyeOriginalRotation: THREE.Euler = new THREE.Euler();
-    private rightEyeOriginalRotation: THREE.Euler = new THREE.Euler();
+    // Rotaciones originales (Quaternions para evitar Gimbal Lock)
+    private headOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
+    private neckOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
+    private leftEyeOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
+    private rightEyeOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
 
     // Targets
     private lookTarget: IKTarget = {
         position: new THREE.Vector3(0, 0, 0),
         enabled: false
     };
-
-    // Helpers
-    private currentHeadRotation: THREE.Euler = new THREE.Euler();
-    private currentEyeRotation: THREE.Euler = new THREE.Euler();
 
     // Micro-offset for saccades
     private microOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
@@ -74,13 +70,13 @@ export class IKController {
             // Buscar huesos de cabeza y cuello
             if (name.includes('head') && !name.includes('headtop')) {
                 this.headBone = bone;
-                this.headOriginalRotation.copy(bone.rotation);
+                this.headOriginalQuat.copy(bone.quaternion);
                 console.log('👤 IK: Head bone encontrado:', bone.name);
             }
 
             if (name.includes('neck')) {
                 this.neckBone = bone;
-                this.neckOriginalRotation.copy(bone.rotation);
+                this.neckOriginalQuat.copy(bone.quaternion);
                 console.log('👤 IK: Neck bone encontrado:', bone.name);
             }
 
@@ -91,20 +87,19 @@ export class IKController {
 
                 if (isLeft && !this.leftEye) {
                     this.leftEye = bone;
-                    this.leftEyeOriginalRotation.copy(bone.rotation);
+                    this.leftEyeOriginalQuat.copy(bone.quaternion);
                     console.log('👁️ IK: Left eye bone encontrado:', bone.name);
                 }
-
                 if (isRight && !this.rightEye) {
                     this.rightEye = bone;
-                    this.rightEyeOriginalRotation.copy(bone.rotation);
+                    this.rightEyeOriginalQuat.copy(bone.quaternion);
                     console.log('👁️ IK: Right eye bone encontrado:', bone.name);
                 }
             }
         });
 
         const foundBones = [this.headBone, this.neckBone, this.leftEye, this.rightEye].filter(Boolean).length;
-        console.log(`✅ IK Controller: ${foundBones}/4 huesos encontrados`);
+        console.log(`✅ IK Controller (Quaternion): ${foundBones}/4 huesos encontrados`);
     }
 
     /**
@@ -142,7 +137,6 @@ export class IKController {
      */
     update(delta: number): void {
         if (!this.lookTarget.enabled) {
-            // Volver suavemente a pose original
             this.returnToOriginalPose(delta);
             return;
         }
@@ -152,172 +146,93 @@ export class IKController {
     }
 
     /**
-     * Actualizar rotación de cabeza hacia target
+     * Actualizar rotación de cabeza hacia target usando Quaternions + Slerp
      */
-    private updateHeadLookAt(delta: number): void {
+    private updateHeadLookAt(_delta: number): void {
         if (!this.headBone) return;
 
-        // Calcular dirección al target
         const headWorldPos = new THREE.Vector3();
         this.headBone.getWorldPosition(headWorldPos);
 
         // Target real + micro offset
         const finalTarget = this.lookTarget.position.clone().add(this.microOffset);
+        const direction = new THREE.Vector3().subVectors(finalTarget, headWorldPos).normalize();
 
-        const direction = new THREE.Vector3()
-            .subVectors(finalTarget, headWorldPos)
-            .normalize();
-
-        // Convertir a rotación local
+        // Calculamos Euler para limitar ángulos, pero convertimos a Quaternion para aplicar
         const targetRotation = new THREE.Euler();
         targetRotation.y = Math.atan2(direction.x, direction.z);
-        targetRotation.x = -Math.asin(direction.y);
+        targetRotation.x = -Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
 
-        // Limitar rotación
+        // Calcular límites respecto a la pose original
+        const originalEuler = new THREE.Euler().setFromQuaternion(this.headOriginalQuat);
         targetRotation.x = THREE.MathUtils.clamp(
             targetRotation.x,
-            this.headOriginalRotation.x - this.settings.maxHeadRotation,
-            this.headOriginalRotation.x + this.settings.maxHeadRotation
+            originalEuler.x - this.settings.maxHeadRotation,
+            originalEuler.x + this.settings.maxHeadRotation
         );
         targetRotation.y = THREE.MathUtils.clamp(
             targetRotation.y,
-            this.headOriginalRotation.y - this.settings.maxHeadRotation,
-            this.headOriginalRotation.y + this.settings.maxHeadRotation
+            originalEuler.y - this.settings.maxHeadRotation,
+            originalEuler.y + this.settings.maxHeadRotation
         );
 
-        // Interpolar suavemente
-        this.currentHeadRotation.x = THREE.MathUtils.lerp(
-            this.currentHeadRotation.x,
-            targetRotation.x,
-            this.settings.headLookSpeed
-        );
-        this.currentHeadRotation.y = THREE.MathUtils.lerp(
-            this.currentHeadRotation.y,
-            targetRotation.y,
-            this.settings.headLookSpeed
-        );
+        // SLERP: Interpolación esférica fluida sin Gimbal Lock
+        const targetQuat = new THREE.Quaternion().setFromEuler(targetRotation);
+        this.headBone.quaternion.slerp(targetQuat, this.settings.headLookSpeed);
 
-        // Aplicar rotación
-        this.headBone.rotation.x = this.currentHeadRotation.x;
-        this.headBone.rotation.y = this.currentHeadRotation.y;
-
-        // Aplicar también al cuello (50% menos intenso)
+        // El cuello hace un 30% del movimiento (interpolación hacia identidad a 70%)
         if (this.neckBone) {
-            this.neckBone.rotation.y = this.currentHeadRotation.y * 0.5;
-            this.neckBone.rotation.x = this.currentHeadRotation.x * 0.3;
+            const neckTargetQuat = this.neckOriginalQuat.clone().slerp(targetQuat, 0.3);
+            this.neckBone.quaternion.slerp(neckTargetQuat, this.settings.headLookSpeed);
         }
     }
 
     /**
-     * Actualizar rotación de ojos hacia target
+     * Actualizar rotación de ojos hacia target usando Quaternions + Slerp
      */
-    private updateEyeLookAt(delta: number): void {
+    private updateEyeLookAt(_delta: number): void {
         if (!this.leftEye && !this.rightEye) return;
 
-        // Calcular dirección promedio de los ojos
         const eyeWorldPos = new THREE.Vector3();
-        if (this.leftEye) {
-            this.leftEye.getWorldPosition(eyeWorldPos);
-        } else if (this.rightEye) {
-            this.rightEye.getWorldPosition(eyeWorldPos);
-        }
+        if (this.leftEye) this.leftEye.getWorldPosition(eyeWorldPos);
+        else if (this.rightEye) this.rightEye.getWorldPosition(eyeWorldPos);
 
-        // Target real + micro offset (más notorio en ojos)
-        // Multiplicamos el offset para que los ojos se muevan más que la cabeza
+        // Target con micro-offset amplificado para los ojos
         const eyeOffset = this.microOffset.clone().multiplyScalar(1.5);
         const finalTarget = this.lookTarget.position.clone().add(eyeOffset);
+        const direction = new THREE.Vector3().subVectors(finalTarget, eyeWorldPos).normalize();
 
-        const direction = new THREE.Vector3()
-            .subVectors(finalTarget, eyeWorldPos)
-            .normalize();
-
-        // Calcular rotación target
         const targetRotation = new THREE.Euler();
         targetRotation.y = Math.atan2(direction.x, direction.z);
-        targetRotation.x = -Math.asin(direction.y);
+        targetRotation.x = -Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
 
-        // Limitar rotación de ojos
-        targetRotation.x = THREE.MathUtils.clamp(
-            targetRotation.x,
-            -this.settings.maxEyeRotation,
-            this.settings.maxEyeRotation
-        );
-        targetRotation.y = THREE.MathUtils.clamp(
-            targetRotation.y,
-            -this.settings.maxEyeRotation,
-            this.settings.maxEyeRotation
-        );
+        targetRotation.x = THREE.MathUtils.clamp(targetRotation.x, -this.settings.maxEyeRotation, this.settings.maxEyeRotation);
+        targetRotation.y = THREE.MathUtils.clamp(targetRotation.y, -this.settings.maxEyeRotation, this.settings.maxEyeRotation);
 
-        // Interpolar
-        this.currentEyeRotation.x = THREE.MathUtils.lerp(
-            this.currentEyeRotation.x,
-            targetRotation.x,
-            this.settings.eyeLookSpeed
-        );
-        this.currentEyeRotation.y = THREE.MathUtils.lerp(
-            this.currentEyeRotation.y,
-            targetRotation.y,
-            this.settings.eyeLookSpeed
-        );
+        const targetQuat = new THREE.Quaternion().setFromEuler(targetRotation);
 
-        // Aplicar a ambos ojos
         if (this.leftEye) {
-            this.leftEye.rotation.x = this.leftEyeOriginalRotation.x + this.currentEyeRotation.x;
-            this.leftEye.rotation.y = this.leftEyeOriginalRotation.y + this.currentEyeRotation.y;
+            // Combinar rotación base del ojo con la nueva rotación usando Slerp
+            const finalLeftQuat = this.leftEyeOriginalQuat.clone().multiply(targetQuat);
+            this.leftEye.quaternion.slerp(finalLeftQuat, this.settings.eyeLookSpeed);
         }
         if (this.rightEye) {
-            this.rightEye.rotation.x = this.rightEyeOriginalRotation.x + this.currentEyeRotation.x;
-            this.rightEye.rotation.y = this.rightEyeOriginalRotation.y + this.currentEyeRotation.y;
+            const finalRightQuat = this.rightEyeOriginalQuat.clone().multiply(targetQuat);
+            this.rightEye.quaternion.slerp(finalRightQuat, this.settings.eyeLookSpeed);
         }
     }
 
     /**
-     * Volver a pose original suavemente
+     * Volver a pose original suavemente usando Slerp
      */
-    private returnToOriginalPose(delta: number): void {
+    private returnToOriginalPose(_delta: number): void {
         const returnSpeed = 0.05;
 
-        // Cabeza
-        if (this.headBone) {
-            this.currentHeadRotation.x = THREE.MathUtils.lerp(
-                this.currentHeadRotation.x,
-                this.headOriginalRotation.x,
-                returnSpeed
-            );
-            this.currentHeadRotation.y = THREE.MathUtils.lerp(
-                this.currentHeadRotation.y,
-                this.headOriginalRotation.y,
-                returnSpeed
-            );
-
-            this.headBone.rotation.x = this.currentHeadRotation.x;
-            this.headBone.rotation.y = this.currentHeadRotation.y;
-        }
-
-        // Cuello
-        if (this.neckBone) {
-            this.neckBone.rotation.x = THREE.MathUtils.lerp(
-                this.neckBone.rotation.x,
-                this.neckOriginalRotation.x,
-                returnSpeed
-            );
-            this.neckBone.rotation.y = THREE.MathUtils.lerp(
-                this.neckBone.rotation.y,
-                this.neckOriginalRotation.y,
-                returnSpeed
-            );
-        }
-
-        // Ojos
-        this.currentEyeRotation.x = THREE.MathUtils.lerp(this.currentEyeRotation.x, 0, returnSpeed);
-        this.currentEyeRotation.y = THREE.MathUtils.lerp(this.currentEyeRotation.y, 0, returnSpeed);
-
-        if (this.leftEye) {
-            this.leftEye.rotation.copy(this.leftEyeOriginalRotation);
-        }
-        if (this.rightEye) {
-            this.rightEye.rotation.copy(this.rightEyeOriginalRotation);
-        }
+        // Slerp de vuelta a la pose original (mucho más natural que Lerp lineal)
+        if (this.headBone) this.headBone.quaternion.slerp(this.headOriginalQuat, returnSpeed);
+        if (this.neckBone) this.neckBone.quaternion.slerp(this.neckOriginalQuat, returnSpeed);
+        if (this.leftEye) this.leftEye.quaternion.slerp(this.leftEyeOriginalQuat, returnSpeed);
+        if (this.rightEye) this.rightEye.quaternion.slerp(this.rightEyeOriginalQuat, returnSpeed);
     }
 
     /**

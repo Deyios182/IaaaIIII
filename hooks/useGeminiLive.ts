@@ -29,6 +29,7 @@ export interface GeminiLiveReturn {
     sendAudio: (pcmData: Int16Array) => void;
     sendText: (text: string) => void;
     sendImage: (base64Data: string) => void;
+    sendToolResponse: (functionResponses: any[]) => void; // Responder a tool calls del modelo
     sessionRef: React.MutableRefObject<any>;
 }
 
@@ -218,6 +219,16 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         }
     }, []);
 
+    const sendToolResponse = useCallback((functionResponses: any[]) => {
+        if (!sessionRef.current) return;
+        try {
+            sessionRef.current.sendToolResponse({ functionResponses });
+            console.log('🛠️ Tool response enviada a Gemini:', functionResponses.map(r => r.name).join(', '));
+        } catch (err) {
+            console.error('Error enviando tool response:', err);
+        }
+    }, []);
+
     return {
         isConnected,
         isAiSpeaking,
@@ -226,6 +237,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         sendAudio,
         sendText,
         sendImage,
+        sendToolResponse,
         sessionRef
     };
 }

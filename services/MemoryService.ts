@@ -1,14 +1,21 @@
 /**
  * Memory Service - CRUD para Memoria Persistente con Supabase
- * Maneja: facts, known_people, memories, reminders
+ * Maneja: facts (con búsqueda semántica), known_people, memories, reminders
+ *
+ * HIPOCAMPO VECTORIAL: addFact guarda embeddings; searchFacts usa RAG semántico.
+ * Fallback automático a búsqueda literal si los embeddings no están disponibles.
  */
+import { GoogleGenAI } from '@google/genai';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
-// function to get current user ID
+// ============ HELPER: UserID ============
+
 const getCurrentUserId = async (): Promise<string> => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) return user.id;
-    return (import.meta as any).env?.VITE_USER_ID || process.env.VITE_USER_ID || '11111111-1111-1111-1111-111111111111';
+    return (import.meta as any).env?.VITE_USER_ID
+        || process.env.VITE_USER_ID
+        || '11111111-1111-1111-1111-111111111111';
 };
 
 // ============ TYPES ============
@@ -19,6 +26,7 @@ export interface Fact {
     content: string;
     category: 'like' | 'dislike' | 'interest' | 'habit' | 'fact';
     learned_at?: string;
+    embedding?: number[];
 }
 
 export interface KnownPerson {
@@ -54,18 +62,60 @@ export interface Reminder {
     created_at?: string;
 }
 
+// ============ HIPOCAMPO VECTORIAL ============
+
+/**
+ * Convierte un texto en un vector matemático de 768 dimensiones.
+ * Esto permite que Nova entienda "significado" en lugar de solo palabras exactas.
+ * Modelo: text-embedding-004 (Google, gratuito en el tier actual).
+ */
+async function generateEmbedding(text: string): Promise<number[] | null> {
+    try {
+        const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
+            || process.env.VITE_GEMINI_API_KEY
+            || process.env.API_KEY;
+
+        if (!apiKey) {
+            console.warn('⚠️ No API key para embeddings');
+            return null;
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await (ai.models as any).embedContent({
+            model: 'gemini-embedding-001',
+            contents: text,
+        });
+
+        return response.embeddings?.[0]?.values || null;
+    } catch (error) {
+        console.warn('⚠️ Error generando embedding (continuando sin él):', error);
+        return null;
+    }
+}
+
 // ============ FACTS ============
 
+/**
+ * Guarda un recuerdo en Supabase con su embedding semántico.
+ * Si la generación del embedding falla, el hecho se guarda igual (sin vector).
+ */
 export const addFact = async (content: string, category: Fact['category']): Promise<Fact | null> => {
     if (!isSupabaseConfigured()) {
-        console.warn('Supabase not configured, skipping cloud save');
+        console.warn('Supabase no configurado, omitiendo guardado en la nube');
         return null;
     }
 
     const userId = await getCurrentUserId();
+
+    // Generar el vector semántico antes de guardar
+    const embedding = await generateEmbedding(content);
+
+    const payload: any = { user_id: userId, content, category };
+    if (embedding) payload.embedding = embedding;
+
     const { data, error } = await supabase
         .from('nova_facts')
-        .insert({ user_id: userId, content, category })
+        .insert(payload)
         .select()
         .single();
 
@@ -73,7 +123,8 @@ export const addFact = async (content: string, category: Fact['category']): Prom
         console.error('Error adding fact:', error);
         return null;
     }
-    console.log('✅ Fact saved to Supabase:', content);
+
+    console.log(`🧠 Recuerdo ${embedding ? 'semántico' : 'literal'} guardado:`, content);
     return data;
 };
 
@@ -83,7 +134,7 @@ export const getFacts = async (): Promise<Fact[]> => {
     const userId = await getCurrentUserId();
     const { data, error } = await supabase
         .from('nova_facts')
-        .select('*')
+        .select('id, user_id, content, category, learned_at') // excluir embedding (pesado)
         .eq('user_id', userId)
         .order('learned_at', { ascending: false });
 
@@ -92,6 +143,90 @@ export const getFacts = async (): Promise<Fact[]> => {
         return [];
     }
     return data || [];
+};
+
+/**
+ * Búsqueda semántica (RAG).
+ * Si "perros" y "canes" están relacionados en el espacio vectorial, los encontrará.
+ * Fallback automático a búsqueda literal si pgvector no está disponible.
+ *
+ * @param query  Pregunta o concepto a buscar
+ * @param limit  Máximo de resultados (default 5)
+ * @returns      Array de strings con los contenidos relevantes
+ */
+export const searchFacts = async (query: string, limit: number = 5): Promise<string[]> => {
+    if (!isSupabaseConfigured()) return [];
+
+    const userId = await getCurrentUserId();
+
+    // --- Intentar búsqueda semántica primero ---
+    const queryEmbedding = await generateEmbedding(query);
+
+    if (queryEmbedding) {
+        const { data, error } = await supabase.rpc('match_facts', {
+            query_embedding: queryEmbedding,
+            match_threshold: 0.35,   // 35% de similitud mínima (más flexible/tolerante para lenguaje natural)
+            match_count: limit,
+            p_user_id: userId
+        });
+
+        if (!error && data && data.length > 0) {
+            console.log(`🔍 Búsqueda semántica: ${data.length} recuerdos relevantes para "${query}"`);
+            return data.map((f: any) => f.content);
+        }
+
+        if (error) {
+            console.warn('⚠️ match_facts RPC falló, usando búsqueda literal:', error.message);
+        }
+    }
+
+    // --- Fallback: búsqueda literal (ilike) ---
+    console.log('🔍 Búsqueda literal para:', query);
+    const { data: facts } = await supabase
+        .from('nova_facts')
+        .select('content')
+        .eq('user_id', userId)
+        .ilike('content', `%${query}%`)
+        .limit(limit);
+
+    return facts?.map((f: any) => f.content) || [];
+};
+
+/**
+ * Retrograda embeddings faltantes: pasa por todos los facts sin vector
+ * y los embeddea. Útil después de migrar la BD.
+ * Llama una sola vez desde DevTools o un panel de admin.
+ */
+export const backfillEmbeddings = async (): Promise<void> => {
+    if (!isSupabaseConfigured()) return;
+
+    const userId = await getCurrentUserId();
+    const { data: factsWithoutEmbedding } = await supabase
+        .from('nova_facts')
+        .select('id, content')
+        .eq('user_id', userId)
+        .is('embedding', null);
+
+    if (!factsWithoutEmbedding || factsWithoutEmbedding.length === 0) {
+        console.log('✅ Todos los facts ya tienen embedding');
+        return;
+    }
+
+    console.log(`⏳ Retrogradeando ${factsWithoutEmbedding.length} facts sin embedding...`);
+
+    for (const fact of factsWithoutEmbedding) {
+        const embedding = await generateEmbedding(fact.content);
+        if (embedding) {
+            await supabase
+                .from('nova_facts')
+                .update({ embedding })
+                .eq('id', fact.id);
+        }
+        // Pequeña pausa para no saturar la API de embeddings
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    console.log('✅ Backfill de embeddings completado');
 };
 
 // ============ KNOWN PEOPLE ============
@@ -154,7 +289,6 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
     if (!isSupabaseConfigured()) return null;
     const userId = await getCurrentUserId();
 
-    // Map frontend camelCase to DB snake_case
     const dbPayload = {
         id: person.id,
         user_id: userId,
@@ -162,7 +296,6 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
         relationship: person.relationship,
         visual_description: person.visual_description || person.visualDescription,
         voice_description: person.voice_description || person.voiceDescription,
-        // CRITICAL FIX: Convert Float32Array to regular Array for JSON compatibility
         face_descriptor: (person.face_descriptor || person.faceDescriptor)
             ? Array.from(person.face_descriptor || person.faceDescriptor)
             : null,
@@ -185,8 +318,6 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
     return data;
 };
 
-
-
 // ============ MEMORIES ============
 
 export const saveMemory = async (memory: Omit<Memory, 'id' | 'user_id'>): Promise<Memory | null> => {
@@ -207,7 +338,6 @@ export const saveMemory = async (memory: Omit<Memory, 'id' | 'user_id'>): Promis
     return data;
 };
 
-// Save an important conversation moment
 export const saveImportantConversation = async (
     userMessage: string,
     aiResponse: string,
@@ -243,23 +373,13 @@ export const loadAllMemory = async (): Promise<LoadedMemory> => {
         getPendingReminders()
     ]);
 
-    // Categorize facts
     const likes = facts.filter(f => f.category === 'like').map(f => f.content);
     const dislikes = facts.filter(f => f.category === 'dislike').map(f => f.content);
     const interests = facts.filter(f => f.category === 'interest').map(f => f.content);
-    const generalFacts = facts.filter(f => f.category === 'fact').map(f => f.content);
 
     console.log(`✅ Memoria cargada: ${facts.length} facts, ${knownPeople.length} personas, ${recentMemories.length} memories, ${pendingReminders.length} reminders`);
 
-    return {
-        facts,
-        likes,
-        dislikes,
-        interests,
-        knownPeople,
-        recentMemories,
-        pendingReminders
-    };
+    return { facts, likes, dislikes, interests, knownPeople, recentMemories, pendingReminders };
 };
 
 export const getRecentMemories = async (limit: number = 50): Promise<Memory[]> => {
@@ -278,21 +398,6 @@ export const getRecentMemories = async (limit: number = 50): Promise<Memory[]> =
         return [];
     }
     return data || [];
-};
-
-export const searchFacts = async (query: string): Promise<string[]> => {
-    if (!isSupabaseConfigured()) return [];
-    console.log('🔍 Buscando en Supabase:', query);
-
-    const userId = await getCurrentUserId();
-    const { data: facts } = await supabase
-        .from('nova_facts')
-        .select('content')
-        .eq('user_id', userId)
-        .ilike('content', `%${query}%`)
-        .limit(5);
-
-    return facts?.map(f => f.content) || [];
 };
 
 // ============ REMINDERS ============
@@ -357,33 +462,20 @@ export const syncLocalToCloud = async (localData: {
 }): Promise<void> => {
     if (!isSupabaseConfigured()) return;
 
-    console.log('☁️ Syncing local data to Supabase...');
+    console.log('☁️ Syncing local data to Supabase (con embeddings)...');
 
-    // Sync facts
-    if (localData.facts) {
-        for (const fact of localData.facts) {
-            await addFact(fact, 'fact');
+    const syncBatch = async (items: string[], category: Fact['category']) => {
+        for (const item of items) {
+            await addFact(item, category);
+            await new Promise(r => setTimeout(r, 150)); // Evitar rate limit de embeddings
         }
-    }
+    };
 
-    // Sync preferences
-    if (localData.likes) {
-        for (const like of localData.likes) {
-            await addFact(like, 'like');
-        }
-    }
-    if (localData.dislikes) {
-        for (const dislike of localData.dislikes) {
-            await addFact(dislike, 'dislike');
-        }
-    }
-    if (localData.interests) {
-        for (const interest of localData.interests) {
-            await addFact(interest, 'interest');
-        }
-    }
+    if (localData.facts)     await syncBatch(localData.facts, 'fact');
+    if (localData.likes)     await syncBatch(localData.likes, 'like');
+    if (localData.dislikes)  await syncBatch(localData.dislikes, 'dislike');
+    if (localData.interests) await syncBatch(localData.interests, 'interest');
 
-    // Sync known people
     if (localData.knownPeople) {
         for (const person of localData.knownPeople) {
             await addKnownPerson({
@@ -396,17 +488,23 @@ export const syncLocalToCloud = async (localData: {
         }
     }
 
-    console.log('✅ Sync complete!');
+    console.log('✅ Sync completo!');
 };
 
 export default {
     addFact,
     getFacts,
+    searchFacts,
+    backfillEmbeddings,
     addKnownPerson,
     getKnownPeople,
     updatePersonLastSeen,
+    upsertKnownPerson,
+    deleteKnownPerson,
     saveMemory,
+    saveImportantConversation,
     getRecentMemories,
+    loadAllMemory,
     addReminder,
     getPendingReminders,
     completeReminder,

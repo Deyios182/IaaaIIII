@@ -496,3 +496,67 @@ export async function playAiVoice(audioBase64: string): Promise<void> {
     console.error("Error playing AI voice:", error);
   }
 }
+
+// --- OPENROUTER INTEGRATION PARA MODO NSFW ---
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Genera respuestas de texto usando OpenRouter (modelo Dolphin sin censura).
+ * Úsala en tu componente principal cuando isBold === true (Modo Ninfómana).
+ *
+ * Requiere: VITE_OPENROUTER_API_KEY en el archivo .env
+ */
+export const generateUncensoredText = async (
+  systemInstruction: string,
+  conversationHistory: ChatMessage[],
+  userPrompt: string
+): Promise<string> => {
+  try {
+    // Vite expone env vars a través de import.meta.env; Electron usa process.env
+    const openRouterKey = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_OPENROUTER_API_KEY)
+      || process.env.VITE_OPENROUTER_API_KEY
+      || process.env.OPENROUTER_API_KEY;
+
+    if (!openRouterKey) {
+      throw new Error('Falta VITE_OPENROUTER_API_KEY en el archivo .env');
+    }
+
+    const messages = [
+      { role: 'system', content: systemInstruction },
+      ...conversationHistory,
+      { role: 'user', content: userPrompt }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        // Dolphin: experto en roleplay, sigue instrucciones al pie de la letra, sin filtros
+        model: 'cognitivecomputations/dolphin-mixtral-8x7b',
+        messages,
+        temperature: 0.9,
+        max_tokens: 500
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error OpenRouter:', errorData);
+      throw new Error(`OpenRouter API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    console.error('Error generando texto sin censura:', error);
+    return '*Te miro intensamente pero las palabras no me salen...* [Fallo de conexión, pero el modo sigue activo]';
+  }
+};

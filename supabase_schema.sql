@@ -72,6 +72,52 @@ CREATE TABLE IF NOT EXISTS nova_reminders (
 CREATE INDEX IF NOT EXISTS idx_nova_reminders_user ON nova_reminders(user_id);
 CREATE INDEX IF NOT EXISTS idx_nova_reminders_pending ON nova_reminders(completed, trigger_time);
 
+-- ============================================
+-- HIPOCAMPO VECTORIAL (RAG)
+-- Ejecutar SOLO si pgvector aún no está activo
+-- ============================================
+
+-- 1. Habilitar la extensión pgvector (cerebro matemático)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2. Añadir columna de embeddings a nova_facts
+--    768 dimensiones = estándar de text-embedding-004 de Google
+ALTER TABLE nova_facts
+    ADD COLUMN IF NOT EXISTS embedding vector(768);
+
+-- 3. Índice HNSW para búsqueda por similitud coseno (rápido en producción)
+CREATE INDEX IF NOT EXISTS idx_nova_facts_embedding
+    ON nova_facts
+    USING hnsw (embedding vector_cosine_ops);
+
+-- 4. Función de búsqueda semántica (retorna los N facts más similares)
+CREATE OR REPLACE FUNCTION match_facts (
+    query_embedding vector(768),
+    match_threshold  float,
+    match_count      int,
+    p_user_id        uuid
+)
+RETURNS TABLE (
+    id         uuid,
+    content    text,
+    category   text,
+    similarity float
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        id,
+        content,
+        category,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM  nova_facts
+    WHERE user_id = p_user_id
+      AND embedding IS NOT NULL
+      AND 1 - (embedding <=> query_embedding) > match_threshold
+    ORDER BY similarity DESC
+    LIMIT match_count;
+$$;
+
 -- ============ VERIFICATION ============
-SELECT 'Tables created successfully!' as status;
+SELECT 'Schema updated successfully! Vector search enabled.' AS status;
 SELECT username, is_pro FROM nova_profiles WHERE id = '11111111-1111-1111-1111-111111111111';
