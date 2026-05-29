@@ -83,6 +83,22 @@ export class AnimationManager {
                 } else if (lowerName.includes('wave')) {
                     // Si no hay wave, intentar saludar con lo que haya o ignore
                     console.warn(`⚠️ No se encontró animación de saludo (${animationName})`);
+                } else if (lowerName.includes('think')) {
+                    // FALLBACK INTELIGENTE PARA PENSAR (THINKING STATE)
+                    // Intentar buscar 'Think_Idle', 'Think' o usar el clip principal 'GrokAniAction' / primer clip
+                    const thinkKey = keys.find(k => k.toLowerCase().includes('think'));
+                    const fallbackKey = thinkKey || keys.find(k => k.includes('Action')) || keys[0];
+                    if (fallbackKey) {
+                        action = this.actions.get(fallbackKey);
+                        actualName = fallbackKey;
+                        console.log(`ℹ️ [AnimationManager] Think no encontrado. Usando fallback procedural: ${actualName}`);
+                        
+                        // Emitir un evento customizado para que ikController realice un head look procedural oscilante
+                        // que simule un movimiento de cabeza de reflexión natural humana.
+                        setTimeout(() => {
+                            window.dispatchEvent(new CustomEvent('nova-thinking-procedural', { detail: { active: true } }));
+                        }, 100);
+                    }
                 }
             }
         }

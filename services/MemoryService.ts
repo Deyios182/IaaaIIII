@@ -62,70 +62,119 @@ export interface Reminder {
     created_at?: string;
 }
 
-// ============ HIPOCAMPO VECTORIAL ============
+/**
+ * Normaliza y valida estrictamente las dimensiones del vector.
+ * Si el vector tiene 3072 dimensiones, lo trunca a 768.
+ */
+export function normalizeEmbedding(vector: number[]): number[] {
+    if (!vector || !Array.isArray(vector)) return [];
+    if (vector.length === 768) {
+        return vector;
+    } else if (vector.length >= 3072) {
+        console.log(`✂️ [MemoryService] Detectado vector de ${vector.length} dimensiones. Truncando a 768 para compatibilidad Supabase.`);
+        return vector.slice(0, 768);
+    } else if (vector.length > 768) {
+        console.log(`✂️ [MemoryService] Detectado vector largo de ${vector.length} dimensiones. Truncando a 768.`);
+        return vector.slice(0, 768);
+    }
+    return vector;
+}
 
 /**
  * Convierte un texto en un vector matemático de 768 dimensiones.
- * Esto permite que Nova entienda "significado" en lugar de solo palabras exactas.
- * Modelo: text-embedding-004 (Google, gratuito en el tier actual).
+ * Implementa reintentos exponenciales automáticos ante fallos transitorios de red o límites de cuota (SaaS robusto).
  */
 async function generateEmbedding(text: string): Promise<number[] | null> {
-    try {
-        const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
-            || process.env.VITE_GEMINI_API_KEY
-            || process.env.API_KEY;
+    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
+        || (import.meta as any).env?.VITE_API_KEY
+        || process.env.VITE_GEMINI_API_KEY
+        || process.env.VITE_API_KEY
+        || process.env.API_KEY;
 
-        if (!apiKey) {
-            console.warn('⚠️ No API key para embeddings');
-            return null;
-        }
-
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await (ai.models as any).embedContent({
-            model: 'gemini-embedding-001',
-            contents: text,
-        });
-
-        return response.embeddings?.[0]?.values || null;
-    } catch (error) {
-        console.warn('⚠️ Error generando embedding (continuando sin él):', error);
+    if (!apiKey) {
+        console.warn('⚠️ [MemoryService] No API key configurada para embeddings.');
         return null;
     }
+
+    const ai = new GoogleGenAI({ apiKey });
+    
+    const modelsToTry = ['gemini-embedding-2', 'gemini-embedding-001', 'text-embedding-004'];
+    // Configuración de reintentos exponenciales
+    const maxRetries = 3;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+        const currentModel = modelsToTry[attempt % modelsToTry.length];
+        try {
+            console.log(`🧠 [MemoryService] Intentando generar embedding con modelo: ${currentModel} (intento ${attempt + 1}/${maxRetries})...`);
+            const response = await (ai.models as any).embedContent({
+                model: currentModel,
+                contents: text,
+            });
+
+            const values = response.embeddings?.[0]?.values;
+            if (values) {
+                return normalizeEmbedding(values);
+            }
+        } catch (error: any) {
+            attempt++;
+            const isRateLimit = JSON.stringify(error).includes('429') || JSON.stringify(error).includes('Quota');
+            const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+            
+            console.warn(`⚠️ [MemoryService] Error en generateEmbedding con modelo ${currentModel} (intento ${attempt}/${maxRetries}):`, error.message || error);
+            
+            if (attempt >= maxRetries) {
+                console.error('❌ [MemoryService] Reintentos agotados para generateEmbedding. Continuando sin embedding.');
+                return null;
+            }
+
+            console.log(`🔄 [MemoryService] Esperando ${delay}ms para reintentar debido a ${isRateLimit ? 'límite de cuota' : 'error de red'}...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    return null;
 }
 
 // ============ FACTS ============
 
 /**
- * Guarda un recuerdo en Supabase con su embedding semántico.
- * Si la generación del embedding falla, el hecho se guarda igual (sin vector).
+ * Guarda un recuerdo en Supabase con su embedding semántico de manera asíncrona y segura.
+ * Si la generación del embedding o la base de datos fallan, el sistema no bloquea el hilo principal.
  */
 export const addFact = async (content: string, category: Fact['category']): Promise<Fact | null> => {
     if (!isSupabaseConfigured()) {
-        console.warn('Supabase no configurado, omitiendo guardado en la nube');
+        console.warn('⚠️ [MemoryService] Supabase no configurado, omitiendo guardado en la nube');
         return null;
     }
 
-    const userId = await getCurrentUserId();
+    try {
+        const userId = await getCurrentUserId();
 
-    // Generar el vector semántico antes de guardar
-    const embedding = await generateEmbedding(content);
+        // Generar vector de manera segura
+        const embedding = await generateEmbedding(content);
 
-    const payload: any = { user_id: userId, content, category };
-    if (embedding) payload.embedding = embedding;
+        const payload: any = { user_id: userId, content, category };
+        if (embedding) {
+            payload.embedding = embedding;
+        }
 
-    const { data, error } = await supabase
-        .from('nova_facts')
-        .insert(payload)
-        .select()
-        .single();
+        const { data, error } = await supabase
+            .from('nova_facts')
+            .insert(payload)
+            .select()
+            .single();
 
-    if (error) {
-        console.error('Error adding fact:', error);
+        if (error) {
+            console.error('❌ [MemoryService] Error insertando hecho en Supabase:', error.message);
+            return null;
+        }
+
+        console.log(`🧠 [MemoryService] Hecho guardado con éxito (${embedding ? 'Semántico' : 'Literal'}):`, content);
+        return data;
+    } catch (err: any) {
+        console.error('❌ [MemoryService] Excepción crítica no controlada en addFact:', err.message || err);
         return null;
     }
-
-    console.log(`🧠 Recuerdo ${embedding ? 'semántico' : 'literal'} guardado:`, content);
-    return data;
 };
 
 export const getFacts = async (): Promise<Fact[]> => {
@@ -361,25 +410,30 @@ export interface LoadedMemory {
     knownPeople: KnownPerson[];
     recentMemories: Memory[];
     pendingReminders: Reminder[];
+    username?: string;
 }
 
 export const loadAllMemory = async (): Promise<LoadedMemory> => {
     console.log('☁️ Cargando memoria desde Supabase...');
 
-    const [facts, knownPeople, recentMemories, pendingReminders] = await Promise.all([
+    const userId = await getCurrentUserId();
+
+    const [facts, knownPeople, recentMemories, pendingReminders, profileResult] = await Promise.all([
         getFacts(),
         getKnownPeople(),
         getRecentMemories(20),
-        getPendingReminders()
+        getPendingReminders(),
+        supabase.from('nova_profiles').select('username').eq('id', userId).maybeSingle()
     ]);
 
     const likes = facts.filter(f => f.category === 'like').map(f => f.content);
     const dislikes = facts.filter(f => f.category === 'dislike').map(f => f.content);
     const interests = facts.filter(f => f.category === 'interest').map(f => f.content);
+    const username = profileResult?.data?.username || undefined;
 
-    console.log(`✅ Memoria cargada: ${facts.length} facts, ${knownPeople.length} personas, ${recentMemories.length} memories, ${pendingReminders.length} reminders`);
+    console.log(`✅ Memoria cargada: ${facts.length} facts, ${knownPeople.length} personas, ${recentMemories.length} memories, ${pendingReminders.length} reminders, username: ${username}`);
 
-    return { facts, likes, dislikes, interests, knownPeople, recentMemories, pendingReminders };
+    return { facts, likes, dislikes, interests, knownPeople, recentMemories, pendingReminders, username };
 };
 
 export const getRecentMemories = async (limit: number = 50): Promise<Memory[]> => {

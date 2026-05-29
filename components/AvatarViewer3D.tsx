@@ -21,9 +21,11 @@ import { isMixamoAnimation, retargetMixamoClip, getModelBoneNames } from '../uti
 import { SimplexNoise } from '../utils/perlin';
 
 interface AvatarViewer3DProps {
-    avatar: any; // El estado del avatar desde App.tsx
+    avatar?: any; // El estado del avatar desde App.tsx
+    modelUrl?: string; // Permitir modelUrl directo para retrocompatibilidad
     emotion?: Emotion;
     activeAction?: string | null;
+    action?: string | null; // Permitir action directo para retrocompatibilidad
     audioElement?: HTMLAudioElement | null;
     isAiSpeaking?: boolean;
     disableControls?: boolean;
@@ -1807,8 +1809,10 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
 
 const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     avatar,
+    modelUrl,
     emotion = 'neutral',
     activeAction = null,
+    action = null,
     audioElement = null,
     isAiSpeaking = false,
     disableControls = false,
@@ -1893,10 +1897,10 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
 
                 <Suspense fallback={<FallbackAvatar />}>
                     <AvatarModel
-                        key={avatar?.modelUrl || 'default-model'}
-                        modelUrl={avatar?.modelUrl || '/models/grokani_lipsync.glb'}
+                        key={modelUrl || avatar?.modelUrl || 'default-model'}
+                        modelUrl={modelUrl || avatar?.modelUrl || '/models/grokani_lipsync.glb'}
                         emotion={emotion}
-                        action={activeAction}
+                        action={activeAction || action}
                         audioElement={audioElement}
                         isAiSpeaking={isAiSpeaking}
                         isHotMode={isHotMode}

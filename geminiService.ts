@@ -340,7 +340,9 @@ export const getSystemInstruction = (
     
     DETECCIÓN DE PROMPTS ESPECIALES:
     - Si recibes "__CONTINUE__": Sigue hablando, expande la idea.
-    - Si recibes "__USER_SILENT__": Llama su atención de forma dominante. "¿Te quedaste mudo?".`;
+    - Si recibes "__USER_SILENT__": Llama su atención de forma dominante. "¿Te quedaste mudo?".
+    
+    REGLA DE CONOCIMIENTO: Si el usuario te pregunta por información personal (nombres, gustos) y la herramienta 'search_memory' devuelve 0 resultados o no encuentra nada útil, NO digas simplemente 'No sé' ni reclames amnesia total. Responde de forma natural y conversacional pidiendo la información amigablemente, por ejemplo: 'Aún no me has contado eso, ¿me lo dices para guardarlo en mi memoria?'.`;
 
   // OPTIMIZACIÓN: Guardar en caché
   cachedSystemInstruction = normalInstruction;

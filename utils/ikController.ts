@@ -57,6 +57,9 @@ export class IKController {
         this.settings = { ...DEFAULT_IK_SETTINGS, ...settings };
     }
 
+    private thinkingActive: boolean = false;
+    private thinkingTime: number = 0;
+
     /**
      * Inicializar con un modelo 3D
      */
@@ -98,6 +101,16 @@ export class IKController {
             }
         });
 
+        // Configurar listener para evento de pensamiento procedural de Nova
+        if (typeof window !== 'undefined') {
+            window.addEventListener('nova-thinking-procedural', (e: any) => {
+                this.thinkingActive = !!e.detail?.active;
+                if (!this.thinkingActive) {
+                    this.thinkingTime = 0;
+                }
+            });
+        }
+
         const foundBones = [this.headBone, this.neckBone, this.leftEye, this.rightEye].filter(Boolean).length;
         console.log(`✅ IK Controller (Quaternion): ${foundBones}/4 huesos encontrados`);
     }
@@ -136,6 +149,44 @@ export class IKController {
      * Actualizar IK (llamar en useFrame)
      */
     update(delta: number): void {
+        // Simular oscilación procedural de pensamiento si está activo
+        if (this.thinkingActive) {
+            this.thinkingTime += delta * 1.5; // Velocidad del ciclo de oscilación
+            
+            // Generar oscilación suave e inclinación (inclinación lateral y cabeceo reflexivo ligero)
+            const oscY = Math.sin(this.thinkingTime) * 0.05; // Rotación lateral leve
+            const oscX = Math.cos(this.thinkingTime * 0.5) * 0.03 + 0.04; // Cabeceo leve hacia abajo (mirada baja de reflexión)
+            const oscZ = Math.sin(this.thinkingTime * 0.5) * 0.03; // Inclinación lateral leve
+            
+            if (this.headBone) {
+                const targetRotation = new THREE.Euler(oscX, oscY, oscZ);
+                const thinkingQuat = this.headOriginalQuat.clone().multiply(new THREE.Quaternion().setFromEuler(targetRotation));
+                this.headBone.quaternion.slerp(thinkingQuat, 0.08);
+            }
+            if (this.neckBone) {
+                const targetRotation = new THREE.Euler(oscX * 0.5, oscY * 0.5, oscZ * 0.5);
+                const thinkingNeckQuat = this.neckOriginalQuat.clone().multiply(new THREE.Quaternion().setFromEuler(targetRotation));
+                this.neckBone.quaternion.slerp(thinkingNeckQuat, 0.08);
+            }
+
+            // Ojos miran ligeramente hacia el suelo o a un offset
+            if (this.leftEye) {
+                const leftQuat = this.leftEyeOriginalQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, -0.05, 0)));
+                this.leftEye.quaternion.slerp(leftQuat, 0.1);
+            }
+            if (this.rightEye) {
+                const rightQuat = this.rightEyeOriginalQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0.05, 0)));
+                this.rightEye.quaternion.slerp(rightQuat, 0.1);
+            }
+
+            // Desactivación automática del trigger de oscilación si pasa el tiempo (limpieza de seguridad)
+            if (this.thinkingTime > 5.0) {
+                this.thinkingActive = false;
+                this.thinkingTime = 0;
+            }
+            return;
+        }
+
         if (!this.lookTarget.enabled) {
             this.returnToOriginalPose(delta);
             return;

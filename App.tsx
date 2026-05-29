@@ -278,46 +278,46 @@ const App: React.FC = () => {
     const loadCloudMemory = async () => {
       try {
         const memory = await loadAllMemory();
-        if (memory.knownPeople && memory.knownPeople.length > 0) {
-          console.log('☁️ Sincronizando personas conocidas desde Supabase...');
+        console.log('☁️ Sincronizando memoria desde Supabase...');
 
-          const people: PersonEntry[] = memory.knownPeople.map(p => ({
-            id: p.id || crypto.randomUUID(),
-            name: p.name,
-            relationship: p.relationship || 'Conocido',
-            visualDescription: p.visual_description || '',
-            voiceDescription: p.voice_description || '',
-            faceDescriptor: p.face_descriptor ? Array.from(p.face_descriptor) : undefined,
-            photoData: p.photo_data, // Correct field from KnownPerson
-            isUnknown: p.is_unknown || false,
-            detectedAt: p.first_seen ? new Date(p.first_seen).getTime() : Date.now(),
-            lastSeen: p.last_seen ? new Date(p.last_seen).getTime() : Date.now()
-          }));
+        const people: PersonEntry[] = (memory.knownPeople || []).map(p => ({
+          id: p.id || crypto.randomUUID(),
+          name: p.name,
+          relationship: p.relationship || 'Conocido',
+          visualDescription: p.visual_description || '',
+          voiceDescription: p.voice_description || '',
+          faceDescriptor: p.face_descriptor ? Array.from(p.face_descriptor) : undefined,
+          photoData: p.photo_data,
+          isUnknown: p.is_unknown || false,
+          detectedAt: p.first_seen ? new Date(p.first_seen).getTime() : Date.now(),
+          lastSeen: p.last_seen ? new Date(p.last_seen).getTime() : Date.now()
+        }));
 
-          setState(prev => {
-            // Buscar si el usuario ya tiene descriptor registrado
-            const userPerson = people.find(p => p.name.toLowerCase().trim() === prev.userName.toLowerCase().trim());
-            const existingUserDescriptor = userPerson?.faceDescriptor || prev.userFaceDescriptor;
+        setState(prev => {
+          const resolvedName = memory.username || prev.userName;
+          // Buscar si el usuario ya tiene descriptor registrado
+          const userPerson = people.find(p => p.name.toLowerCase().trim() === resolvedName.toLowerCase().trim());
+          const existingUserDescriptor = userPerson?.faceDescriptor || prev.userFaceDescriptor;
 
-            if (userPerson && userPerson.faceDescriptor) {
-              console.log('👤 Descriptor facial del usuario recuperado de la nube.');
+          if (userPerson && userPerson.faceDescriptor) {
+            console.log('👤 Descriptor facial del usuario recuperado de la nube.');
+          }
+
+          return {
+            ...prev,
+            userName: resolvedName,
+            knownPeople: people,
+            userFaceDescriptor: existingUserDescriptor,
+            // También cargar preferencias
+            userProfile: {
+              ...prev.userProfile,
+              likes: memory.likes || [],
+              dislikes: memory.dislikes || [],
+              interests: memory.interests || [],
+              facts: memory.facts?.map(f => f.content) || []
             }
-
-            return {
-              ...prev,
-              knownPeople: people,
-              userFaceDescriptor: existingUserDescriptor,
-              // También cargar preferencias
-              userProfile: {
-                ...prev.userProfile,
-                likes: memory.likes || [],
-                dislikes: memory.dislikes || [],
-                interests: memory.interests || [],
-                facts: memory.facts.map(f => f.content) || []
-              }
-            };
-          });
-        }
+          };
+        });
       } catch (e) {
         console.error('Error loading cloud memory:', e);
       }
