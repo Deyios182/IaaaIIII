@@ -69,6 +69,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const leftArmOriginalRot = useRef<THREE.Euler | null>(null);
     const rightForeArmRef = useRef<THREE.Bone | null>(null);
     const leftForeArmRef = useRef<THREE.Bone | null>(null);
+    const leftLegRef = useRef<THREE.Bone | null>(null);
+    const rightLegRef = useRef<THREE.Bone | null>(null);
     // Body Parts Refs
     const hipsRef = useRef<THREE.Object3D | null>(null); // Detected Hips
     const spineRef = useRef<THREE.Object3D | null>(null); // Para respiración mejorada
@@ -612,34 +614,43 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
 
                     // Brazos (Upper Arm)
-                    const isDefUpperArm = name === 'def-upper_arml' || name === 'def-upper_armr';
-                    const isRPMArm = (name.includes('arm') && !name.includes('fore') && !name.includes('hand') && !name.includes('upper_arm'));
-
-                    if (isDefUpperArm) {
-                        if (name === 'def-upper_arml' && !leftArmRef.current) {
-                            leftArmRef.current = child as any;
-                            leftArmOriginalRot.current = child.rotation.clone();
-                            console.log('💪 Brazo IZQUIERDO (DEF) asignado:', child.name);
-                        }
-                        if (name === 'def-upper_armr' && !rightArmRef.current) {
-                            rightArmRef.current = child as any;
-                            rightArmOriginalRot.current = child.rotation.clone();
-                            console.log('💪 Brazo DERECHO (DEF) asignado:', child.name);
-                        }
-                    } else if (isRPMArm) {
+                    const isUpperArm = name.includes('upper_arm') || (name.includes('arm') && !name.includes('fore') && !name.includes('hand') && !name.includes('shoulder'));
+                    if (isUpperArm) {
                         if (isRight && !rightArmRef.current) {
                             rightArmRef.current = child as any;
-                            console.log('💪 Brazo DERECHO (RPM) asignado:', child.name);
+                            rightArmOriginalRot.current = child.rotation.clone();
+                            console.log('💪 Brazo DERECHO asignado:', child.name);
                         }
                         if (isLeft && !leftArmRef.current) {
                             leftArmRef.current = child as any;
-                            console.log('💪 Brazo IZQUIERDO (RPM) asignado:', child.name);
+                            leftArmOriginalRot.current = child.rotation.clone();
+                            console.log('💪 Brazo IZQUIERDO asignado:', child.name);
                         }
                     }
+
                     // Antebrazos
-                    if (name.includes('fore') || name.includes('lower') || name.includes('elbow')) {
-                        if (isRight && !rightForeArmRef.current) rightForeArmRef.current = child as any;
-                        if (isLeft && !leftForeArmRef.current) leftForeArmRef.current = child as any;
+                    const isForeArm = name.includes('forearm') || name.includes('fore_arm') || name.includes('lowerarm') || name.includes('lower_arm') || name.includes('elbow');
+                    if (isForeArm) {
+                        if (isRight && !rightForeArmRef.current) {
+                            rightForeArmRef.current = child as any;
+                            console.log('💪 Antebrazo DERECHO asignado:', child.name);
+                        }
+                        if (isLeft && !leftForeArmRef.current) {
+                            leftForeArmRef.current = child as any;
+                            console.log('💪 Antebrazo IZQUIERDO asignado:', child.name);
+                        }
+                    }
+                    // Piernas (thigh/upleg)
+                    const isLeg = name.includes('thigh') || name.includes('upleg') || name.includes('upper_leg') || name.includes('upperleg');
+                    if (isLeg) {
+                        if (isRight && !rightLegRef.current) {
+                            rightLegRef.current = child as any;
+                            console.log('🦵 Pierna DERECHA asignada:', child.name);
+                        }
+                        if (isLeft && !leftLegRef.current) {
+                            leftLegRef.current = child as any;
+                            console.log('🦵 Pierna IZQUIERDA asignada:', child.name);
+                        }
                     }
                 }
             });
@@ -660,13 +671,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const filtered = clip.clone();
                     filtered.tracks = clip.tracks.filter(track => {
                         const tn = track.name.toLowerCase();
-                        // Excluir tracks de upper_arm, forearm, hand, shoulder, finger
+                        // Excluir tracks de upper_arm, forearm, hand, shoulder, finger y pierna para que el IK tenga control total
                         const isArmTrack = (
-                            tn.includes('upper_arm') || tn.includes('forearm') || 
-                            tn.includes('hand') || tn.includes('shoulder') ||
-                            tn.includes('f_index') || tn.includes('f_middle') ||
-                            tn.includes('f_ring') || tn.includes('f_pinky') ||
-                            tn.includes('thumb') || tn.includes('palm')
+                            /upper_?arm|fore_?arm|lower_?arm|hand|shoulder|clavicle|elbow|wrist|finger|f_index|f_middle|f_ring|f_pinky|thumb|palm|thigh|upleg|upper_?leg|shin|knee|calf|foot|leg/i.test(tn)
                         );
                         return !isArmTrack;
                     });
@@ -679,7 +686,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 console.warn('⚠️ No hay animaciones en el modelo - AnimationManager no inicializado');
             }
 
-            // 2. IK Controller - Head & Eye tracking natural
+            // 2. IK Controller - Head & Eye tracking + Arm IK (Sistema Nervioso)
             ikControllerRef.current = new IKController();
             ikControllerRef.current.initialize(modelRef.current);
 
@@ -742,6 +749,23 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             };
             forceArmsDown();
 
+            // 🦾 SISTEMA NERVIOSO — Conectar cuerpo completo al IK Controller
+            // IMPORTANTE: Llamar DESPUÉS de forceArmsDown() para que originalRot
+            // capture la posición de descanso final (no la T-pose del modelo).
+            if (ikControllerRef.current) {
+                ikControllerRef.current.initializeFullBody({
+                    leftArm: leftArmRef.current || undefined,
+                    rightArm: rightArmRef.current || undefined,
+                    leftForeArm: leftForeArmRef.current || undefined,
+                    rightForeArm: rightForeArmRef.current || undefined,
+                    torso: spineRef.current as THREE.Bone || undefined,
+                    hips: hipsRef.current as THREE.Bone || undefined,
+                    leftLeg: leftLegRef.current || undefined,
+                    rightLeg: rightLegRef.current || undefined,
+                });
+                console.log('🦾 Sistema Nervioso: Cuerpo completo conectado al IK Controller');
+            }
+
             // 5. Procedural Animator - Gestos sin clips de Blender
             proceduralAnimatorRef.current = new ProceduralAnimator();
             proceduralAnimatorRef.current.initialize({
@@ -754,6 +778,17 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 leftForeArm: leftForeArmRef.current || undefined,
             });
             console.log('✅ ProceduralAnimator inicializado');
+
+            // Registrar listener de acciones procedurales disparadas por el sistema nervioso
+            if (typeof window !== 'undefined') {
+                const proceduralHandler = (e: Event) => {
+                    const { action } = (e as CustomEvent<{ action: string }>).detail;
+                    if (proceduralAnimatorRef.current) {
+                        proceduralAnimatorRef.current.play(action);
+                    }
+                };
+                window.addEventListener('aiko-play-procedural', proceduralHandler);
+            }
         }
 
         // Cleanup on unmount
@@ -873,6 +908,97 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         window.addEventListener('nova-load-animation', handler);
         return () => window.removeEventListener('nova-load-animation', handler);
     }, [gltf]);
+
+
+    // --- EFECTO: WEBCAM MOTION CAPTURE (REALTIME RETARGETING) ---
+    useEffect(() => {
+        let stream: MediaStream | null = null;
+        let videoEl: HTMLVideoElement | null = null;
+        let mcap: any = null;
+
+        const toggleHandler = async (e: Event) => {
+            const { active } = (e as CustomEvent<{ active: boolean }>).detail;
+            
+            if (active) {
+                console.log('🎥 [AvatarViewer3D] Solicitando cámara para Live Mirror...');
+                // Detener cualquier animación en el mixer para que el IK tenga control 100% libre sobre los huesos
+                if (mixerRef.current) mixerRef.current.stopAllAction();
+                if (animationManagerRef.current) {
+                    animationManagerRef.current.stop();
+                }
+                externalAnimPlayingRef.current = false;
+
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { width: 640, height: 480, facingMode: 'user' } 
+                    });
+                    
+                    videoEl = document.createElement('video');
+                    videoEl.srcObject = stream;
+                    videoEl.autoplay = true;
+                    videoEl.playsInline = true;
+                    videoEl.style.position = 'fixed';
+                    videoEl.style.bottom = '20px';
+                    videoEl.style.right = '20px';
+                    videoEl.style.width = '160px';
+                    videoEl.style.height = '120px';
+                    videoEl.style.borderRadius = '12px';
+                    videoEl.style.border = '3px solid #ff4a9e';
+                    videoEl.style.boxShadow = '0 8px 30px rgba(0,0,0,0.5)';
+                    videoEl.style.zIndex = '99999';
+                    videoEl.style.transform = 'scaleX(-1)'; // Modo espejo visual
+                    document.body.appendChild(videoEl);
+
+                    // Import dinámico de MotionCaptureSystem para evitar cargar código si no se usa
+                    const { MotionCaptureSystem } = await import('../utils/motionCapture');
+                    mcap = new MotionCaptureSystem();
+
+                    await mcap.start(videoEl, (rotations: any) => {
+                        if (ikControllerRef.current) {
+                            ikControllerRef.current.applyWebcamRotations(rotations);
+                        }
+                    });
+                    
+                    console.log('✅ [AvatarViewer3D] Live Mirror activo y gesticulando');
+                } catch (err) {
+                    console.error('❌ [AvatarViewer3D] Error iniciando Mirror:', err);
+                    window.dispatchEvent(new CustomEvent('aiko-camera-error', { detail: { error: String(err) } }));
+                    // Detener si falló
+                    if (videoEl) videoEl.remove();
+                    if (stream) stream.getTracks().forEach(t => t.stop());
+                }
+            } else {
+                console.log('🎥 [AvatarViewer3D] Apagando Live Mirror...');
+                if (mcap) {
+                    mcap.stop();
+                    mcap = null;
+                }
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+                if (videoEl) {
+                    videoEl.remove();
+                    videoEl = null;
+                }
+                if (ikControllerRef.current) {
+                    ikControllerRef.current.resetAllLimbs();
+                }
+                // Restaurar la animación por defecto de Idle al apagar el mirror
+                if (animationManagerRef.current) {
+                    animationManagerRef.current.play('Idle', { priority: 1, loop: true, blendDuration: 0.5 });
+                }
+            }
+        };
+
+        window.addEventListener('aiko-camera-toggle', toggleHandler);
+        return () => {
+            window.removeEventListener('aiko-camera-toggle', toggleHandler);
+            if (mcap) mcap.stop();
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            if (videoEl) videoEl.remove();
+        };
+    }, []);
 
 
     // --- EFECTO: APLICAR COLOR DE CABELLO ---

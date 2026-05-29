@@ -82,6 +82,24 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const [boneMappingRaw, setBoneMappingRaw] = useState<Record<string, string>>({});
   const [modelBones, setModelBones] = useState<string[]>([]);
   const [availableModels, setAvailableModels] = useState<{name: string, url: string, emoji?: string}[]>([]);
+  const [jointValues, setJointValues] = useState<Record<string, number>>({
+    rightArmX: -80,
+    rightElbow: 0,
+    leftArmX: -80,
+    leftElbow: 0,
+    torsoX: 0,
+    hipsZ: 0,
+    rightLegZ: 0,
+    leftLegZ: 0,
+    rightFingers: 0,
+    leftFingers: 0,
+  });
+
+  const handleJointChange = (joint: string, degVal: number) => {
+    setJointValues(prev => ({ ...prev, [joint]: degVal }));
+    const rad = (degVal * Math.PI) / 180;
+    window.dispatchEvent(new CustomEvent('aiko-studio-joint', { detail: { joint, val: rad } }));
+  };
 
   // Cargar modelos disponibles desde el sistema de archivos (Electron)
   useEffect(() => {
@@ -408,13 +426,141 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
           {/* ═══ TAB: CALIBRACIÓN ═══ */}
           {activeTab === 'calibration' && (<>
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Mapeo de Huesos</label>
+            {/* 🎛️ SLIDERS DE PRUEBA DE ARTICULACIONES Y DEDOS */}
+            <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4 space-y-4">
+              <label className="text-[10px] font-black text-violet-400 uppercase tracking-widest block flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-xs">tune</span>
+                Mando de Pruebas Articulares (QA Manual)
+              </label>
+              
+              <div className="space-y-3 text-[10px]">
+                {/* Brazo Derecho */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Brazo Derecho (Ángulo)</span>
+                    <span className="text-violet-300 font-bold">{jointValues.rightArmX}°</span>
+                  </div>
+                  <input type="range" min="-120" max="90" value={jointValues.rightArmX}
+                    onChange={(e) => handleJointChange('rightArmX', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Codo Derecho */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Codo Derecho (Flexión)</span>
+                    <span className="text-violet-300 font-bold">{jointValues.rightElbow}°</span>
+                  </div>
+                  <input type="range" min="0" max="130" value={jointValues.rightElbow}
+                    onChange={(e) => handleJointChange('rightElbow', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Dedos Derechos */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Dedos Derechos (Grip)</span>
+                    <span className="text-violet-300 font-bold">{Math.round((jointValues.rightFingers / 70) * 100)}%</span>
+                  </div>
+                  <input type="range" min="0" max="70" value={jointValues.rightFingers}
+                    onChange={(e) => handleJointChange('rightFingers', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Brazo Izquierdo */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Brazo Izquierdo (Ángulo)</span>
+                    <span className="text-violet-300 font-bold">{jointValues.leftArmX}°</span>
+                  </div>
+                  <input type="range" min="-120" max="90" value={jointValues.leftArmX}
+                    onChange={(e) => handleJointChange('leftArmX', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Codo Izquierdo */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Codo Izquierdo (Flexión)</span>
+                    <span className="text-violet-300 font-bold">{jointValues.leftElbow}°</span>
+                  </div>
+                  <input type="range" min="0" max="130" value={jointValues.leftElbow}
+                    onChange={(e) => handleJointChange('leftElbow', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Dedos Izquierdos */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Dedos Izquierdos (Grip)</span>
+                    <span className="text-violet-300 font-bold">{Math.round((jointValues.leftFingers / 70) * 100)}%</span>
+                  </div>
+                  <input type="range" min="0" max="70" value={jointValues.leftFingers}
+                    onChange={(e) => handleJointChange('leftFingers', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Torso */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Inclinación Torso</span>
+                    <span className="text-violet-300 font-bold">{jointValues.torsoX}°</span>
+                  </div>
+                  <input type="range" min="-15" max="20" value={jointValues.torsoX}
+                    onChange={(e) => handleJointChange('torsoX', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Caderas */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Giro Cadera (Sway)</span>
+                    <span className="text-violet-300 font-bold">{jointValues.hipsZ}°</span>
+                  </div>
+                  <input type="range" min="-15" max="15" value={jointValues.hipsZ}
+                    onChange={(e) => handleJointChange('hipsZ', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                {/* Piernas */}
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Pierna Derecha</span>
+                    <span className="text-violet-300 font-bold">{jointValues.rightLegZ}°</span>
+                  </div>
+                  <input type="range" min="-15" max="30" value={jointValues.rightLegZ}
+                    onChange={(e) => handleJointChange('rightLegZ', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between font-medium text-slate-400">
+                    <span>Pierna Izquierda</span>
+                    <span className="text-violet-300 font-bold">{jointValues.leftLegZ}°</span>
+                  </div>
+                  <input type="range" min="-30" max="15" value={jointValues.leftLegZ}
+                    onChange={(e) => handleJointChange('leftLegZ', Number(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-violet-400" />
+                </div>
+
+                <button
+                  onClick={() => {
+                    const defaults = { rightArmX: -80, rightElbow: 0, leftArmX: -80, leftElbow: 0, torsoX: 0, hipsZ: 0, rightLegZ: 0, leftLegZ: 0, rightFingers: 0, leftFingers: 0 };
+                    Object.entries(defaults).forEach(([k, v]) => handleJointChange(k, v));
+                  }}
+                  className="w-full bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 hover:text-white border border-violet-500/30 rounded-lg py-2 mt-2 transition-all font-bold uppercase tracking-wider text-[9px]"
+                >
+                  Restablecer Pose
+                </button>
+              </div>
+            </div>
+
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mt-4 mb-2">Mapeo de Huesos para Animaciones FBX</label>
 
             {boneMapping.length === 0 ? (
-              <div className="text-center py-8">
-                <span className="material-symbols-outlined text-3xl text-slate-600 block mb-2">skeleton</span>
-                <p className="text-[10px] text-slate-400">Carga una animación .fbx para ver el mapeo de huesos</p>
-                <p className="text-[9px] text-slate-600 mt-1">El sistema auto-detecta los huesos del modelo</p>
+              <div className="text-center py-4 bg-white/[0.01] border border-white/5 rounded-xl">
+                <span className="material-symbols-outlined text-xl text-slate-600 block mb-1">skeleton</span>
+                <p className="text-[9px] text-slate-400">Carga una animación .fbx para ver el mapeo automático</p>
               </div>
             ) : (<>
               {/* Stats */}

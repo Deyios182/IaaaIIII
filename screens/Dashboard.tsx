@@ -70,6 +70,13 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   }, [isAiSpeaking]);
   const [isVisionSyncing, setIsVisionSyncing] = useState(false);
   const [viewMode, setViewMode] = useState('default'); // Default, Face, Body, Selfie
+  const [isLiveMirror, setIsLiveMirror] = useState(false);
+
+  const toggleLiveMirror = () => {
+    const nextState = !isLiveMirror;
+    setIsLiveMirror(nextState);
+    window.dispatchEvent(new CustomEvent('aiko-camera-toggle', { detail: { active: nextState } }));
+  };
 
   // 🧠 GROK SECOND OPINION STATES
   const [showGrokPanel, setShowGrokPanel] = useState(false);
@@ -2067,6 +2074,46 @@ ${sessionLog}
                 }
               }
               cleanText = cleanText.replace(systemCmdRegex, '');
+
+              // ─── 🦾 PARSER DEL SISTEMA NERVIOSO [MOVE:LIMB:TARGET] y [DO:ACTION] ───────────────
+              // Detecta comandos de movimiento corporal de Aiko y los intercepta ANTES
+              // de que lleguen al TTS o a los subtítulos.
+              // Formato: [MOVE:LEFT_ARM:WAVE], [MOVE:BOTH_ARMS:REST], [DO:NOD], etc.
+              const moveRegex = /\[MOVE:([A-Z_]+):([A-Z_]+)\]/gi;
+              let moveMatch: RegExpExecArray | null;
+
+              moveRegex.lastIndex = 0;
+              while ((moveMatch = moveRegex.exec(cleanText)) !== null) {
+                const limb   = moveMatch[1].toUpperCase();
+                const target = moveMatch[2].toUpperCase();
+
+                console.log(`🦾 [SistemaNervioso] Aiko mueve: ${limb} → ${target}`);
+
+                window.dispatchEvent(new CustomEvent('aiko-movement', {
+                  detail: { limb, target }
+                }));
+              }
+
+              const doRegex = /\[DO:([A-Z_]+)\]/gi;
+              let doMatch: RegExpExecArray | null;
+              doRegex.lastIndex = 0;
+              while ((doMatch = doRegex.exec(cleanText)) !== null) {
+                const action = doMatch[1].toLowerCase();
+
+                console.log(`🎭 [SistemaNervioso] Aiko acción: ${action}`);
+
+                window.dispatchEvent(new CustomEvent('aiko-action', {
+                  detail: { action }
+                }));
+              }
+
+              // Eliminar TODOS los tokens [MOVE:...] y [DO:...] del texto visible/TTS
+              cleanText = cleanText
+                .replace(/\[MOVE:[A-Z_]+:[A-Z_]+\]/gi, '')
+                .replace(/\[DO:[A-Z_]+\]/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+              // ─────────────────────────────────────────────────────────────────────
 
               // Parsing [CANTA] (Modo Canto Hack)
               if (textChunk.includes('[CANTA]')) {
