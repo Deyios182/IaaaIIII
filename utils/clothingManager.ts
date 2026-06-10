@@ -82,6 +82,8 @@ export function getDisplayName(meshName: string): string {
 }
 
 // Clase principal para manejar ropa
+const SHOW_VERBOSE_LOGS = false;
+
 export class ClothingManager {
     private items: ClothingItem[] = [];
     private model: THREE.Object3D | null = null;
@@ -95,7 +97,7 @@ export class ClothingManager {
             if ((child as any).isMesh) {
                 const mesh = child as THREE.Mesh;
                 const category = getCategoryForMesh(mesh.name);
-                console.log(`👗 [ClothingManager] Mesh: "${mesh.name}" -> ${category}`);
+                if (SHOW_VERBOSE_LOGS) console.log(`👗 [ClothingManager] Mesh: "${mesh.name}" -> ${category}`);
 
                 // Solo incluir items que no son parte del cuerpo
                 if (category !== 'body') {
@@ -110,10 +112,12 @@ export class ClothingManager {
             }
         });
 
-        console.log(`👗 Clothing Manager: ${this.items.length} prendas detectadas`);
-        this.items.forEach(item => {
-            console.log(`  ${item.visible ? '👁' : '🚫'} [${item.category}] ${item.displayName}`);
-        });
+        if (SHOW_VERBOSE_LOGS) {
+            console.log(`👗 Clothing Manager: ${this.items.length} prendas detectadas`);
+            this.items.forEach(item => {
+                console.log(`  ${item.visible ? '👁' : '🚫'} [${item.category}] ${item.displayName}`);
+            });
+        }
 
         return this.items;
     }

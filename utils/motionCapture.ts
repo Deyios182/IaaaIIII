@@ -266,8 +266,9 @@ export class MotionCaptureSystem {
                 -(kneeR.y - hipR.y),
                 -(kneeR.z - hipR.z)
             ).normalize();
+            // Calcular elevación frontal (eje X) a partir del ángulo vertical de la pierna
             const angle = Math.atan2(vLegR.x, -vLegR.y);
-            rotations.rightLeg = new THREE.Euler(0, 0, THREE.MathUtils.clamp(angle, deg(-15), deg(30)));
+            rotations.rightLeg = new THREE.Euler(THREE.MathUtils.clamp(angle, deg(-15), deg(30)), 0, 0);
         }
 
         if (hipL && kneeL) {
@@ -277,7 +278,7 @@ export class MotionCaptureSystem {
                 -(kneeL.z - hipL.z)
             ).normalize();
             const angle = Math.atan2(vLegL.x, -vLegL.y);
-            rotations.leftLeg = new THREE.Euler(0, 0, THREE.MathUtils.clamp(angle, deg(-30), deg(15)));
+            rotations.leftLeg = new THREE.Euler(THREE.MathUtils.clamp(angle, deg(-15), deg(30)), 0, 0);
         }
 
         // 6. RASTREO DE DEDOS (FINGERS RETARGETING)

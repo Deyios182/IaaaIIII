@@ -68,6 +68,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   useEffect(() => {
     isAiSpeakingRef.current = isAiSpeaking;
   }, [isAiSpeaking]);
+
+  // Refs para acceso closure-safe en el timer de autonomía
+  const isCameraCapturingRef = useRef(false);
+  const isScreenCapturingRef = useRef(false);
+  const isScreenSharingRef = useRef(false);
+  const lastVisionRequestRef = useRef<number>(0);
   const [isVisionSyncing, setIsVisionSyncing] = useState(false);
   const [viewMode, setViewMode] = useState('default'); // Default, Face, Body, Selfie
   const [isLiveMirror, setIsLiveMirror] = useState(false);
@@ -147,6 +153,30 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
           }
         }
       }
+
+      // 👁️ VISUAL REQUEST TRIGGER: Si lleva 30s sin visión activa, Nova solicita activar cámara/pantalla
+      const visionActive = isCameraCapturingRef.current || isScreenCapturingRef.current || isScreenSharingRef.current;
+      const timeSinceVisionRequest = now - lastVisionRequestRef.current;
+      if (
+        timeSinceLastInteraction > 30000 &&
+        !visionActive &&
+        !isAiSpeakingRef.current &&
+        !isSearchingRef.current &&
+        !isUserDisconnectingRef.current &&
+        timeSinceVisionRequest > 60000 && // Máx una vez por minuto
+        liveSessionRef.current
+      ) {
+        lastVisionRequestRef.current = now;
+        console.log('👁️ TRIGGER: Nova solicita activación de visión (30s sin cámara/pantalla)');
+        try {
+          // @ts-ignore
+          liveSessionRef.current.sendRealtimeInput({
+            text: `[SYSTEM_EVENT: IDLE_30S_NO_VISION] Llevas más de 30 segundos sin visión activa (ni cámara ni pantalla compartida). USA la herramienta 'request_user_action' AHORA para pedirle al usuario que active la cámara o comparta su pantalla. Sé${isBold ? ' seductora y provocativa' : ' natural y curiosa'} en tu razón.`
+          });
+        } catch (e) {
+          console.warn('⚠️ Error enviando vision request trigger:', e);
+        }
+      }
     }, 5000); // Verificación constante cada 5s
 
     return () => {
@@ -155,10 +185,19 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   }, [isInCall, isBold]); // Solo re-iniciar si cambia modo/llamada; isAiSpeakingRef maneja el estado de habla sin re-iniciar. // Solo re-iniciar si cambia modo/llamada; isAiSpeakingRef maneja el estado de habla sin re-iniciar.
   const [excitationLevel, setExcitationLevel] = useState(85);
   const [isScreenSharing, setIsScreenSharing] = useState(false); // Nueva: Compartir pantalla
+  const [isCameraCapturing, setIsCameraCapturing] = useState(false);
+  const [isScreenCapturing, setIsScreenCapturing] = useState(false);
+  const [highlightCamera, setHighlightCamera] = useState(false);
+  const [highlightScreen, setHighlightScreen] = useState(false);
   const [reconnectTrigger, setReconnectTrigger] = useState(0);
   const [micVolume, setMicVolume] = useState(0); // Visualizador de volumen del micrófono
   const [isChatVisible, setIsChatVisible] = useState(false); // Toggle para ocultar chat (Default OFF por performance)
   const analyserRef = useRef<AnalyserNode | null>(null);
+
+  // Mantener refs sincronizadas con el estado (para closures del timer)
+  useEffect(() => { isCameraCapturingRef.current = isCameraCapturing; }, [isCameraCapturing]);
+  useEffect(() => { isScreenCapturingRef.current = isScreenCapturing; }, [isScreenCapturing]);
+  useEffect(() => { isScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]);
 
   const getCameraFrame = () => {
     const canvas = canvasRef.current;
@@ -176,6 +215,192 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     }
     return null;
   };
+
+  // ============ VISUAL ANALYSIS: Captura de frames periódica y envío al LLM ============
+
+  /**
+   * Envía un frame Base64 al LLM activo para análisis visual.
+   * Si Gemini Live está conectado → usa sendRealtimeInput (más eficiente).
+   * Si no → usa Gemini Flash REST y muestra la respuesta en el chat.
+   */
+  const sendVisualFrame = async (base64: string, source: 'camera' | 'screen') => {
+    if (liveSessionRef.current) {
+      try {
+        // @ts-ignore
+        liveSessionRef.current.sendRealtimeInput({ media: { data: base64, mimeType: 'image/jpeg' } });
+        // @ts-ignore
+        liveSessionRef.current.sendRealtimeInput({
+          text: source === 'camera'
+            ? '[VISUAL_CONTEXT: Frame de cámara del usuario. Comenta brevemente lo que ves de forma natural.]'
+            : '[VISUAL_CONTEXT: Frame de pantalla del usuario. Comenta o ayuda con lo que está haciendo.]'
+        });
+        return;
+      } catch (e) {
+        console.warn('[VisualCapture] Error en live session, usando REST fallback:', e);
+      }
+    }
+
+    // REST fallback: Gemini Flash vision (sin llamada activa)
+    try {
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) return;
+      const ai = new GoogleGenAI({ apiKey });
+      const promptText = source === 'camera'
+        ? 'Estás viendo un frame de la cámara del usuario. Describe brevemente lo que ves y reacciona de forma natural como Nova.'
+        : 'Estás viendo una captura de pantalla del usuario. Describe qué está haciendo y ofrece un comentario o ayuda relevante.';
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [
+          { inlineData: { data: base64, mimeType: 'image/jpeg' } },
+          { text: promptText }
+        ]}],
+        config: {
+          systemInstruction: getSystemInstruction(
+            isBold, state.avatar.voiceTone, excitationLevel,
+            getLiveTimeContext(), state.userName, state.knownPeople,
+            state.avatar.personality, { ...novaMemory, habits: [] },
+            state.allowWebSearch, source === 'screen'
+          )
+        }
+      });
+      const text = response.text?.trim();
+      if (text) addMessage({ text: `👁️ ${text}`, sender: 'ai' });
+    } catch (e) {
+      console.error('[VisualCapture] REST analysis error:', e);
+    }
+  };
+
+  /** Activa la captura periódica desde la cámara (un frame cada 10 segundos) */
+  const startCameraCapture = async () => {
+    try {
+      // Reutilizar stream de la llamada si está activa; si no, abrir uno propio
+      if (!streamRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+        });
+        separateCameraStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      }
+      setIsCameraCapturing(true);
+      isCameraCapturingRef.current = true;
+      addMessage({ text: '📷 Análisis de cámara activado — capturaré un frame cada 10s para que Nova te vea.', sender: 'ai' });
+      if (cameraAnalysisIntervalRef.current) clearInterval(cameraAnalysisIntervalRef.current);
+      cameraAnalysisIntervalRef.current = setInterval(() => {
+        const frame = getCameraFrame();
+        if (frame) sendVisualFrame(frame, 'camera');
+      }, 10000);
+    } catch (e: any) {
+      console.error('[CameraCapture] Error:', e);
+      addMessage({
+        text: e.name === 'NotAllowedError'
+          ? '❌ Permiso de cámara denegado. Permite el acceso en la configuración del navegador.'
+          : `❌ Error al activar la cámara: ${e.message}`,
+        sender: 'ai'
+      });
+    }
+  };
+
+  const stopCameraCapture = () => {
+    if (cameraAnalysisIntervalRef.current) {
+      clearInterval(cameraAnalysisIntervalRef.current);
+      cameraAnalysisIntervalRef.current = null;
+    }
+    if (separateCameraStreamRef.current) {
+      separateCameraStreamRef.current.getTracks().forEach(t => t.stop());
+      separateCameraStreamRef.current = null;
+      if (videoRef.current && !isInCall) videoRef.current.srcObject = null;
+    }
+    setIsCameraCapturing(false);
+    isCameraCapturingRef.current = false;
+    addMessage({ text: '📷 Análisis de cámara desactivado.', sender: 'ai' });
+  };
+
+  /** Activa la captura periódica de la pantalla (un frame cada 10 segundos) */
+  const startScreenAnalysis = async () => {
+    try {
+      // ── Electron: obtener sourceId igual que el botón de Screen Share principal ──
+      const isElectron = typeof window !== 'undefined' && (window as any).isElectron === true;
+      let sourceId: string | undefined;
+
+      if (isElectron && (window as any).electronAPI) {
+        try {
+          const sources = await (window as any).electronAPI.getScreenSources();
+          if (sources.length > 0) {
+            const screenSource =
+              sources.find((s: any) => s.name.includes('Screen') || s.name.includes('Pantalla')) ||
+              sources[0];
+            sourceId = screenSource.id;
+            console.log('[ScreenAnalysis] Fuente Electron seleccionada:', screenSource.name);
+          }
+        } catch (e) {
+          console.warn('[ScreenAnalysis] Error obteniendo fuentes Electron:', e);
+        }
+      }
+
+      // ── Iniciar captura usando el mismo hook que el Screen Share principal ──
+      const result = await startScreenCapture({
+        width: 1280,
+        height: 720,
+        captureAudio: false,
+        sourceId
+      });
+
+      if (!result.success) {
+        addMessage({ text: '❌ No se pudo iniciar el análisis de pantalla. Cancela el diálogo.', sender: 'ai' });
+        return;
+      }
+
+      setIsScreenCapturing(true);
+      isScreenCapturingRef.current = true;
+      addMessage({ text: '🖥️ Análisis de pantalla activado — capturaré un frame cada 10s para que Nova vea tu pantalla.', sender: 'ai' });
+
+      // ── Capturar frames cada 10s usando captureFrame() del hook ──
+      if (screenAnalysisIntervalRef.current) clearInterval(screenAnalysisIntervalRef.current);
+      screenAnalysisIntervalRef.current = setInterval(() => {
+        if (!checkScreenSharing()) {
+          // El usuario detuvo la captura desde la barra del navegador
+          stopScreenAnalysis(false);
+          return;
+        }
+        const frame = captureFrame(0.6);
+        if (frame) {
+          sendVisualFrame(frame, 'screen');
+          console.log('[ScreenAnalysis] Frame de pantalla capturado y enviado');
+        }
+      }, 10000);
+
+    } catch (e: any) {
+      console.error('[ScreenAnalysis] Error:', e);
+      addMessage({
+        text: e.name === 'NotAllowedError'
+          ? '❌ Compartir pantalla cancelado o denegado.'
+          : `❌ Error al iniciar análisis de pantalla: ${e.message}`,
+        sender: 'ai'
+      });
+    }
+  };
+
+  const stopScreenAnalysis = (stopCapture: boolean = true) => {
+    if (screenAnalysisIntervalRef.current) {
+      clearInterval(screenAnalysisIntervalRef.current);
+      screenAnalysisIntervalRef.current = null;
+    }
+    if (separateScreenStreamRef.current) {
+      separateScreenStreamRef.current.getTracks().forEach(t => t.stop());
+      separateScreenStreamRef.current = null;
+    }
+    // Solo detener el stream subyacente si el Screen Share principal NO está activo
+    if (stopCapture && !isScreenSharing) {
+      stopScreenCapture();
+    }
+    setIsScreenCapturing(false);
+    isScreenCapturingRef.current = false;
+    addMessage({ text: '🖥️ Análisis de pantalla desactivado.', sender: 'ai' });
+  };
+
 
   // DEEP MEMORY: Track when we last announced/injected context about a person to avoid spam
   const personAnnouncementRef = useRef<Record<string, number>>({});
@@ -514,6 +739,7 @@ ${sessionLog}
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const aiSpeechAnalyserRef = useRef<AnalyserNode | null>(null); // 👄 Analizador para Lipsync
   const liveSessionRef = useRef<any>(null);
   const nextStartTimeRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -521,6 +747,10 @@ ${sessionLog}
   const frameIntervalRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const screenCaptureIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const cameraAnalysisIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const screenAnalysisIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const separateCameraStreamRef = useRef<MediaStream | null>(null);
+  const separateScreenStreamRef = useRef<MediaStream | null>(null);
 
   const currentInputTranscription = useRef('');
   const lastUserQuery = useRef(''); // Backup del último input para búsqueda diferida
@@ -959,7 +1189,11 @@ ${sessionLog}
         is_unknown: true,
         first_seen: new Date(newPerson.detectedAt).toISOString(),
         last_seen: new Date(newPerson.lastSeen!).toISOString()
-      }).then(() => console.log('💾 Nueva persona guardada en nube:', newPerson.name));
+      }).then((data) => {
+        if (data) console.log('💾 Nueva persona guardada en nube:', newPerson.name);
+      }).catch(err => {
+        console.error('Error guardando persona en Supabase:', err);
+      });
 
       addMessage({
         text: `🆕 He detectado a alguien nuevo (Desconocido #${unknownCount}). ¿Quién es?`,
@@ -1082,9 +1316,18 @@ ${sessionLog}
     // Si el contexto está cerrado o no existe, crear uno nuevo
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
+      aiSpeechAnalyserRef.current = null;
     }
     const ctx = audioContextRef.current;
     if (ctx.state === 'suspended') await ctx.resume();
+
+    // Crear AnalyserNode si no existe
+    if (!aiSpeechAnalyserRef.current) {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      aiSpeechAnalyserRef.current = analyser;
+    }
 
     setIsAiSpeaking(true);
     try {
@@ -1094,6 +1337,9 @@ ${sessionLog}
       source.buffer = buffer;
       // Aplicar PITCH (velocidad de reproducción afecta el tono)
       source.playbackRate.value = state.avatar.voicePitch || 1.0;
+      
+      // Conectar a AnalyserNode y a destination
+      source.connect(aiSpeechAnalyserRef.current);
       source.connect(ctx.destination);
 
       // Guardar referencia al audio actual en el array de fuentes activas
@@ -1405,7 +1651,13 @@ ${sessionLog}
             }, 3000); // OPTIMIZACIÓN: 3s (antes 1s) para reducir carga de red y evitar desconexiones
           },
           onmessage: async (msg: LiveServerMessage) => {
-            console.log('📡 SERVER MSG:', JSON.stringify(msg).substring(0, 500));
+            // Evitar imprimir chunks de audio gigantes
+            const hasAudioChunk = msg.serverContent?.modelTurn?.parts?.some(p => p.inlineData?.mimeType?.startsWith('audio/'));
+            if (hasAudioChunk) {
+              console.log('📡 SERVER MSG: [Audio Chunk]');
+            } else {
+              console.log('📡 SERVER MSG:', JSON.stringify(msg).substring(0, 500));
+            }
 
             // DETECTAR BLOQUEO/SCENSURA (Refusal)
             const turnComplete = msg.serverContent?.turnComplete;
@@ -1498,13 +1750,21 @@ ${sessionLog}
                   console.log('🛠️ Tool Called (Procesando):', fc.name, fc.args);
 
                   // 🔒 ACCESS CONTROL / SEGURIDAD
-                  // Verificar si el usuario principal está presente (Face o Voz reciente)
+                  // Lógica: Si estamos en una llamada activa, el usuario es considerado
+                  // autorizado por defecto (él inició la llamada). El face-recognition
+                  // es una capa adicional, no un requisito obligatorio.
                   const mainUser = state.knownPeople.find(p =>
                     (p.relationship === 'self' || p.name.toLowerCase() === state.userName.toLowerCase()) && !p.isUnknown
                   );
 
-                  // Tiempo de tolerancia: 20 segundos desde última detección
-                  const isAuthorized = mainUser && (Date.now() - (mainUser.lastSeen || 0) < 20000);
+                  // Autorizado si:
+                  // 1. Estamos en llamada activa (usuario inició la sesión) ← SIEMPRE PERMITIDO
+                  // 2. O la cámara detectó al usuario en los últimos 2 minutos
+                  // 3. O no hay knownPeople configurado (usuario nuevo, sin perfil de cara)
+                  const hasNoFaceProfile = state.knownPeople.length === 0 || !state.knownPeople.some(p => p.relationship === 'self' && p.faceDescriptor);
+                  const isAuthorized = isInCall ||
+                    hasNoFaceProfile ||
+                    (mainUser && (Date.now() - (mainUser.lastSeen || 0) < 120000));
 
                   // Comandos sensitivos que requieren autorización
                   const restrictedTools = ['manageClothing', 'changeOutfit', 'performAction', 'simulateFluid', 'system_command'];
@@ -1512,9 +1772,10 @@ ${sessionLog}
                   let toolResult = "Action performed successfully";
 
                   if (restrictedTools.includes(fc.name) && !isAuthorized) {
-                    console.warn(`⛔ COMANDO BLOQUEADO: ${fc.name} - Usuario no identificado o no es el principal.`);
-                    toolResult = "ACCESS DENIED: Authentication Failed. The Main User is not currently identified (Face/Voice). You cannot execute physical or system commands for unauthorized users.";
-                    addMessage({ text: `🔒 Acceso denegado: Necesito verificar tu identidad para eso.`, sender: 'ai' });
+                    console.warn(`⛔ COMANDO BLOQUEADO: ${fc.name} - Sesión no activa o usuario desconocido frente a la cámara.`);
+                    toolResult = "ACCESS DENIED: No active session. Cannot execute commands outside of an active call.";
+                    addMessage({ text: `🔒 Necesitas iniciar una llamada primero para que pueda hacer eso.`, sender: 'ai' });
+
                   } else if (fc.name === 'learnPreference') {
                     const { type, value } = fc.args as any;
                     setNovaMemory(prev => addPreference(prev, type, value));
@@ -1662,6 +1923,19 @@ ${sessionLog}
                     pendingFactsRef.current.push({ content: financeNote, category: 'fact' });
                     addMessage({ text: `📈 Finanzas (en búfer): ${note}`, sender: 'ai' });
                     toolResult = `Finance recorded in session buffer: ${note}`;
+                  } else if (fc.name === 'request_user_action') {
+                    // 🖐️ AUTONOMÍA VISUAL: Nova pide al usuario que active cámara o pantalla
+                    const { action, reason } = fc.args as any;
+                    if (action === 'activate_camera') {
+                      setHighlightCamera(true);
+                      setTimeout(() => setHighlightCamera(false), 8000);
+                      addMessage({ text: `👁️ Nova quiere verte: "${reason}" — Activa tu cámara 📷`, sender: 'ai' });
+                    } else if (action === 'activate_screen_share') {
+                      setHighlightScreen(true);
+                      setTimeout(() => setHighlightScreen(false), 8000);
+                      addMessage({ text: `🖥️ Nova quiere ver tu pantalla: "${reason}" — Compártela 🖥️`, sender: 'ai' });
+                    }
+                    toolResult = `Visual request sent to UI. Button highlighted for 8 seconds.`;
                   } else if (fc.name === 'save_memory') {
                     // 🧠 HIPOCAMPO VECTORIAL: Guardar con embedding semántico
                     const { content, category } = fc.args as any;
@@ -2107,10 +2381,26 @@ ${sessionLog}
                 }));
               }
 
-              // Eliminar TODOS los tokens [MOVE:...] y [DO:...] del texto visible/TTS
+              // Parsing Mano/Dedos [HAND:LEFT:POSE]
+              const handRegex = /\[HAND:(LEFT|RIGHT|BOTH):([A-Z_]+)\]/gi;
+              let handMatch: RegExpExecArray | null;
+              handRegex.lastIndex = 0;
+              while ((handMatch = handRegex.exec(cleanText)) !== null) {
+                const side = handMatch[1].toUpperCase();
+                const pose = handMatch[2].toUpperCase();
+
+                console.log(`🖐️ [SistemaNervioso] Pose de mano: ${side} → ${pose}`);
+
+                window.dispatchEvent(new CustomEvent('aiko-hand-pose', {
+                  detail: { side, pose }
+                }));
+              }
+
+              // Eliminar TODOS los tokens [MOVE:...], [DO:...] y [HAND:...] del texto visible/TTS
               cleanText = cleanText
                 .replace(/\[MOVE:[A-Z_]+:[A-Z_]+\]/gi, '')
                 .replace(/\[DO:[A-Z_]+\]/gi, '')
+                .replace(/\[HAND:[A-Z_]+:[A-Z_]+\]/gi, '')
                 .replace(/\s{2,}/g, ' ')
                 .trim();
               // ─────────────────────────────────────────────────────────────────────
@@ -2120,6 +2410,9 @@ ${sessionLog}
                 console.log('🎤 MODO CANTO DETECTADO');
                 // 1. Silenciar cualquier audio del servidor que haya empezado
                 stopAiAudio();
+
+                // 2. Disparar animación procedural de canto (Sway de cuerpo completo + gestos)
+                window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'sing' } }));
 
                 // 2. Generar audio con instrucción de estilo forzada (HACK)
                 const songLyrics = textChunk.replace('[CANTA]', '').trim();
@@ -2439,6 +2732,26 @@ ${sessionLog}
                     },
                     required: ["query"]
                   }
+                },
+                // 🖐️ AUTONOMÍA VISUAL: Solicitar activación de cámara/pantalla al usuario
+                {
+                  name: "request_user_action",
+                  description: "Solicita al usuario que active la cámara o comparta su pantalla cuando quieras verlo o ver lo que hace. Úsalo cuando llevas más de 30s sin visión activa. La UI resaltará el botón correspondiente visualmente.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      action: {
+                        type: Type.STRING,
+                        enum: ["activate_camera", "activate_screen_share"],
+                        description: "Tipo de visión que quieres activar: cámara del usuario o su pantalla."
+                      },
+                      reason: {
+                        type: Type.STRING,
+                        description: "Razón natural y directa por la que quieres ver al usuario o su pantalla."
+                      }
+                    },
+                    required: ["action", "reason"]
+                  }
                 }
               ]
             }
@@ -2738,6 +3051,26 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       clearInterval(screenCaptureIntervalRef.current);
       screenCaptureIntervalRef.current = null;
     }
+    if (cameraAnalysisIntervalRef.current) {
+      clearInterval(cameraAnalysisIntervalRef.current);
+      cameraAnalysisIntervalRef.current = null;
+    }
+    if (screenAnalysisIntervalRef.current) {
+      clearInterval(screenAnalysisIntervalRef.current);
+      screenAnalysisIntervalRef.current = null;
+    }
+    if (separateCameraStreamRef.current) {
+      separateCameraStreamRef.current.getTracks().forEach(t => t.stop());
+      separateCameraStreamRef.current = null;
+    }
+    if (separateScreenStreamRef.current) {
+      separateScreenStreamRef.current.getTracks().forEach(t => t.stop());
+      separateScreenStreamRef.current = null;
+    }
+    setIsCameraCapturing(false);
+    setIsScreenCapturing(false);
+    setHighlightCamera(false);
+    setHighlightScreen(false);
 
     // Resetear refs de audio
     audioProcessorRef.current = null;
@@ -3024,6 +3357,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               viewMode={viewMode}
               isAiSpeaking={isAiSpeaking}
               isHotMode={isBold}
+              audioAnalyser={aiSpeechAnalyserRef.current}
             />
           </AvatarErrorBoundary>
         </div>
@@ -3149,6 +3483,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                 isAiSpeaking={isAiSpeaking}
                 isHotMode={isBold}
                 hairColor={state.avatar.hairColor}
+                audioAnalyser={aiSpeechAnalyserRef.current}
               />
             </AvatarErrorBoundary>
 
@@ -3352,6 +3687,38 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             title={isScreenSharing ? 'Dejar de compartir' : 'Compartir pantalla + Audio'}
           >
             <span className="material-symbols-outlined text-4xl">{isScreenSharing ? 'stop_screen_share' : 'screen_share'}</span>
+          </button>
+
+          {/* 📷 CAMERA ANALYSIS BUTTON — Captura un frame cada 10s y lo envía al LLM */}
+          <button
+            id="btn-camera-analysis"
+            onClick={() => isCameraCapturing ? stopCameraCapture() : startCameraCapture()}
+            className={`p-7 rounded-full border-2 transition-all duration-300 hover:scale-110 active:scale-95
+              ${isCameraCapturing
+                ? 'bg-cyan-600/30 border-cyan-400 text-cyan-300 shadow-[0_0_60px_rgba(6,182,212,0.5)]'
+                : 'bg-white/5 border-white/10 text-slate-400 hover:border-cyan-500/50 hover:text-cyan-400'}
+              ${highlightCamera ? 'ring-4 ring-cyan-400 ring-offset-2 ring-offset-black animate-pulse !scale-110 border-cyan-400 bg-cyan-600/40' : ''}`}
+            title={isCameraCapturing ? 'Detener análisis de cámara (cada 10s)' : '📷 Activar análisis de cámara — Nova verá un frame cada 10 segundos'}
+          >
+            <span className="material-symbols-outlined text-4xl">
+              {isCameraCapturing ? 'videocam_off' : 'photo_camera'}
+            </span>
+          </button>
+
+          {/* 🖥️ SCREEN ANALYSIS BUTTON — Captura pantalla cada 10s y la envía al LLM */}
+          <button
+            id="btn-screen-analysis"
+            onClick={() => isScreenCapturing ? stopScreenAnalysis() : startScreenAnalysis()}
+            className={`p-7 rounded-full border-2 transition-all duration-300 hover:scale-110 active:scale-95
+              ${isScreenCapturing
+                ? 'bg-violet-600/30 border-violet-400 text-violet-300 shadow-[0_0_60px_rgba(139,92,246,0.5)]'
+                : 'bg-white/5 border-white/10 text-slate-400 hover:border-violet-500/50 hover:text-violet-400'}
+              ${highlightScreen ? 'ring-4 ring-violet-400 ring-offset-2 ring-offset-black animate-pulse !scale-110 border-violet-400 bg-violet-600/40' : ''}`}
+            title={isScreenCapturing ? 'Detener análisis de pantalla (cada 10s)' : '🖥️ Activar análisis de pantalla — Nova verá tu pantalla cada 10 segundos'}
+          >
+            <span className="material-symbols-outlined text-4xl">
+              {isScreenCapturing ? 'cancel_presentation' : 'screenshot_monitor'}
+            </span>
           </button>
 
 

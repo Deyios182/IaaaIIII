@@ -6,6 +6,8 @@
 
 import * as THREE from 'three';
 
+const SHOW_VERBOSE_LOGS = false;
+
 export type Viseme = 'neutral' | 'A' | 'E' | 'I' | 'O' | 'U' | 'F' | 'M' | 'TH' | 'L';
 
 export interface LipSyncState {
@@ -156,13 +158,13 @@ export class UniversalLipSync {
         // Reportar resultado
         if (this.availableMorphs.size > 0) {
             const morphNames = Array.from(this.availableMorphs.keys());
-            console.log(`👄 LipSync inicializado (MORPHS): ${morphNames.join(', ')}`);
+            if (SHOW_VERBOSE_LOGS) console.log(`👄 LipSync inicializado (MORPHS): ${morphNames.join(', ')}`);
             return { mode: 'morphs', details: `${this.availableMorphs.size} morphs: ${morphNames.slice(0, 5).join(', ')}` };
         } else if (this.jawBone) {
-            console.log(`👄 LipSync inicializado (BONE): ${this.jawBone.name}`);
+            if (SHOW_VERBOSE_LOGS) console.log(`👄 LipSync inicializado (BONE): ${this.jawBone.name}`);
             return { mode: 'bone', details: `Hueso: ${this.jawBone.name}` };
         } else {
-            console.log('👄 LipSync: Modelo sin soporte (sin morphs ni hueso de mandíbula)');
+            if (SHOW_VERBOSE_LOGS) console.log('👄 LipSync: Modelo sin soporte (sin morphs ni hueso de mandíbula)');
             return { mode: 'none', details: 'Sin morphs ni hueso de mandíbula' };
         }
     }
@@ -374,7 +376,7 @@ export class UniversalLipSync {
         );
 
         // Debug para verificar que se está aplicando
-        if (adjustedIntensity > 0.1 && Math.random() < 0.01) {
+        if (SHOW_VERBOSE_LOGS && adjustedIntensity > 0.1 && Math.random() < 0.01) {
             console.log(`👄 Jaw rotation: intensity=${adjustedIntensity.toFixed(2)}, x=${this.jawBone.rotation.x.toFixed(3)}`);
         }
     }
@@ -415,6 +417,30 @@ export class UniversalLipSync {
     }
 
     /**
+     * Establece un AnalyserNode externo
+     */
+    setExternalAnalyser(analyser: AnalyserNode): void {
+        this.analyser = analyser;
+        const bufferLength = this.analyser.frequencyBinCount;
+        this.dataArray = new Uint8Array(bufferLength);
+        console.log('👄 LipSync: Analizador externo conectado.');
+    }
+
+    /**
+     * Verifica si ya hay un analizador configurado
+     */
+    hasAnalyser(): boolean {
+        return this.analyser !== null;
+    }
+
+    /**
+     * Obtiene el estado actual del lipsync
+     */
+    getState(): LipSyncState {
+        return this.state;
+    }
+
+    /**
      * Verifica si el sistema está activo
      */
     isActive(): boolean {
@@ -433,7 +459,8 @@ export class UniversalLipSync {
      */
     dispose(): void {
         this.forceReset();
-        if (this.audioContext) {
+        // Solo cerrar el audioContext si lo creamos nosotros internamente
+        if (this.audioContext && !this.analyser) {
             this.audioContext.close().catch(() => { });
         }
     }
@@ -441,3 +468,4 @@ export class UniversalLipSync {
 
 // Exportar clase legacy para compatibilidad
 export { UniversalLipSync as LipSyncAnalyzer };
+

@@ -49,6 +49,7 @@ export interface LimbIKState {
     originalRot: THREE.Euler;
     targetRot: THREE.Euler;
     currentRot: THREE.Euler;
+    active?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,12 +114,12 @@ const HIPS_POSES: Record<string, THREE.Euler> = {
     NEUTRAL:    new THREE.Euler(0, 0, 0),
 };
 
-/** Poses de las PIERNAS (Bones thigh/upleg) */
+/** Poses de las PIERNAS (Bones thigh/upleg) - Estrictamente limitadas a micro-movimientos estéticos y ultra-sutiles */
 const LEG_POSES_RIGHT: Record<string, THREE.Euler> = {
-    FORWARD: new THREE.Euler(deg(15), 0, 0),
-    SIDE:    new THREE.Euler(0, 0, deg(12)),
+    FORWARD: new THREE.Euler(deg(1.5), 0, 0),   // Paso ultra-sutil (1.5°)
+    SIDE:    new THREE.Euler(0, 0, deg(1.2)), // Abertura mínima (1.2°)
     STAND:   new THREE.Euler(0, 0, 0),
-    WIDE:    new THREE.Euler(0, 0, deg(8)),
+    WIDE:    new THREE.Euler(0, 0, deg(1.0)),   // Postura firme sutil (1.0°)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,9 +183,28 @@ export class IKController {
     private fingerBones: Map<string, THREE.Bone> = new Map();
     private isVRMModel: boolean = false;
 
+    // Timer para auto-retorno de piernas al reposo
+    private leftLegTimer: number = 0;
+    private rightLegTimer: number = 0;
+    private readonly LEG_AUTO_RETURN_DELAY = 3.0; // segundos
+
+    private leftHandPose: string = 'RELAX';
+    private rightHandPose: string = 'RELAX';
+    private leftHandPoseWeight: number = 0.0;
+    private rightHandPoseWeight: number = 0.0;
+
     private movementListener: ((e: Event) => void) | null = null;
     private actionListener: ((e: Event) => void) | null = null;
     private jointListener: ((e: Event) => void) | null = null;
+    private handPoseListener: ((e: Event) => void) | null = null;
+
+    private HAND_POSES: Record<string, Record<string, number>> = {
+        RELAX: { index: 0.1, middle: 0.1, ring: 0.1, pinky: 0.1, thumb: 0.1 },
+        FIST:  { index: 1.0, middle: 1.0, ring: 1.0, pinky: 1.0, thumb: 1.0 },
+        POINT: { index: 0.0, middle: 1.0, ring: 1.0, pinky: 1.0, thumb: 1.0 },
+        OPEN:  { index: -0.2, middle: -0.2, ring: -0.2, pinky: -0.2, thumb: -0.2 },
+        PINCH: { index: 0.9, middle: 0.3, ring: 0.3, pinky: 0.3, thumb: 0.9 },
+    };
 
     constructor(settings?: Partial<IKSettings>) {
         this.settings = { ...DEFAULT_IK_SETTINGS, ...settings };
@@ -326,6 +346,7 @@ export class IKController {
             if (this.movementListener) window.removeEventListener('aiko-movement', this.movementListener);
             if (this.actionListener) window.removeEventListener('aiko-action', this.actionListener);
             if (this.jointListener) window.removeEventListener('aiko-studio-joint', this.jointListener);
+            if (this.handPoseListener) window.removeEventListener('aiko-hand-pose', this.handPoseListener);
 
             this.movementListener = (e: Event) => {
                 const { limb, target } = (e as CustomEvent<{ limb: LimbType; target: LimbTarget }>).detail;
@@ -344,9 +365,21 @@ export class IKController {
                 this.setJointAngle(joint, val);
             };
 
+            this.handPoseListener = (e: Event) => {
+                const { side, pose } = (e as CustomEvent<{ side: 'LEFT' | 'RIGHT' | 'BOTH'; pose: string }>).detail;
+                console.log(`🖐️ [IKController] aiko-hand-pose recibido → ${side} : ${pose}`);
+                if (side === 'LEFT' || side === 'BOTH') {
+                    this.leftHandPose = pose.toUpperCase();
+                }
+                if (side === 'RIGHT' || side === 'BOTH') {
+                    this.rightHandPose = pose.toUpperCase();
+                }
+            };
+
             window.addEventListener('aiko-movement', this.movementListener);
             window.addEventListener('aiko-action', this.actionListener);
             window.addEventListener('aiko-studio-joint', this.jointListener);
+            window.addEventListener('aiko-hand-pose', this.handPoseListener);
         }
     }
 
@@ -367,8 +400,14 @@ export class IKController {
             case 'RIGHT_ARM':
             case 'BOTH_ARMS': {
                 const preset = ARM_POSES_RIGHT[tStr] || ARM_POSES_RIGHT.REST;
-                if (limb === 'RIGHT_ARM' || limb === 'BOTH_ARMS') this.rightArm.targetRot.copy(preset);
-                if (limb === 'LEFT_ARM' || limb === 'BOTH_ARMS') this.leftArm.targetRot.copy(buildLeftArmPose(preset));
+                if (limb === 'RIGHT_ARM' || limb === 'BOTH_ARMS') {
+                    this.rightArm.targetRot.copy(preset);
+                    this.rightArm.active = true;
+                }
+                if (limb === 'LEFT_ARM' || limb === 'BOTH_ARMS') {
+                    this.leftArm.targetRot.copy(buildLeftArmPose(preset));
+                    this.leftArm.active = true;
+                }
                 break;
             }
             case 'LEFT_FOREARM':
@@ -381,36 +420,51 @@ export class IKController {
                 
                 if (limb === 'RIGHT_FOREARM' || limb === 'BOTH_FOREARMS') {
                     this.rightForeArm.targetRot.copy(preset);
+                    this.rightForeArm.active = true;
                 }
                 if (limb === 'LEFT_FOREARM' || limb === 'BOTH_FOREARMS') {
                     const leftPreset = this.isVRMModel
                         ? new THREE.Euler(0, -preset.y, 0)
                         : buildLeftForeArmPose(preset);
                     this.leftForeArm.targetRot.copy(leftPreset);
+                    this.leftForeArm.active = true;
                 }
                 break;
             }
             case 'HEAD': {
                 const preset = HEAD_POSES[tStr] || HEAD_POSES.NEUTRAL;
                 this.headPose.targetRot.copy(preset);
+                this.headPose.active = true;
                 break;
             }
             case 'TORSO': {
                 const preset = TORSO_POSES[tStr] || TORSO_POSES.NEUTRAL;
                 this.torso.targetRot.copy(preset);
+                this.torso.active = (tStr !== 'NEUTRAL');
                 break;
             }
             case 'HIPS': {
                 const preset = HIPS_POSES[tStr] || HIPS_POSES.NEUTRAL;
                 this.hips.targetRot.copy(preset);
+                this.hips.active = (tStr !== 'NEUTRAL');
                 break;
             }
             case 'LEFT_LEG':
             case 'RIGHT_LEG':
             case 'BOTH_LEGS': {
                 const preset = LEG_POSES_RIGHT[tStr] || LEG_POSES_RIGHT.STAND;
-                if (limb === 'RIGHT_LEG' || limb === 'BOTH_LEGS') this.rightLeg.targetRot.copy(preset);
-                if (limb === 'LEFT_LEG' || limb === 'BOTH_LEGS') this.leftLeg.targetRot.copy(buildLeftLegPose(preset));
+                const isStand = (tStr === 'STAND');
+                if (limb === 'RIGHT_LEG' || limb === 'BOTH_LEGS') {
+                    this.rightLeg.targetRot.copy(preset);
+                    this.rightLeg.active = !isStand;
+                    // Resetear timer al activar, para que el auto-retorno empiece a contar
+                    this.rightLegTimer = isStand ? 0 : this.LEG_AUTO_RETURN_DELAY;
+                }
+                if (limb === 'LEFT_LEG' || limb === 'BOTH_LEGS') {
+                    this.leftLeg.targetRot.copy(buildLeftLegPose(preset));
+                    this.leftLeg.active = !isStand;
+                    this.leftLegTimer = isStand ? 0 : this.LEG_AUTO_RETURN_DELAY;
+                }
                 break;
             }
         }
@@ -423,10 +477,16 @@ export class IKController {
         this.leftForeArm.targetRot.copy(this.leftForeArm.originalRot);
         this.rightForeArm.targetRot.copy(this.rightForeArm.originalRot);
         this.headPose.targetRot.copy(this.headPose.originalRot);
+        
+        // Reset a original y desactivar para dar control al mixer
         this.torso.targetRot.copy(this.torso.originalRot);
+        this.torso.active = false;
         this.hips.targetRot.copy(this.hips.originalRot);
+        this.hips.active = false;
         this.leftLeg.targetRot.copy(this.leftLeg.originalRot);
+        this.leftLeg.active = false;
         this.rightLeg.targetRot.copy(this.rightLeg.originalRot);
+        this.rightLeg.active = false;
     }
 
     /**
@@ -447,11 +507,11 @@ export class IKController {
                 if (this.isVRMModel) this.rightForeArm.targetRot.set(0, angleRad, 0);
                 else this.rightForeArm.targetRot.set(0, 0, angleRad); 
                 break;
-            case 'torsoX': this.torso.targetRot.x = angleRad; break;
-            case 'torsoY': this.torso.targetRot.y = angleRad; break;
-            case 'hipsZ': this.hips.targetRot.z = angleRad; break;
-            case 'leftLegZ': this.leftLeg.targetRot.z = angleRad; break;
-            case 'rightLegZ': this.rightLeg.targetRot.z = angleRad; break;
+            case 'torsoX': this.torso.targetRot.x = angleRad; this.torso.active = true; break;
+            case 'torsoY': this.torso.targetRot.y = angleRad; this.torso.active = true; break;
+            case 'hipsZ': this.hips.targetRot.z = angleRad; this.hips.active = true; break;
+            case 'leftLegZ': this.leftLeg.targetRot.z = THREE.MathUtils.clamp(angleRad * 0.04, deg(-1.5), deg(2.2)); this.leftLeg.active = true; break; // Aún más sutil (máximo 2.2 grados)
+            case 'rightLegZ': this.rightLeg.targetRot.z = THREE.MathUtils.clamp(angleRad * 0.04, deg(-2.2), deg(1.5)); this.rightLeg.active = true; break;
             case 'leftFingers': this.applyFingerBends('L', { index: angleRad, middle: angleRad, ring: angleRad, pinky: angleRad, thumb: angleRad }); break;
             case 'rightFingers': this.applyFingerBends('R', { index: angleRad, middle: angleRad, ring: angleRad, pinky: angleRad, thumb: angleRad }); break;
         }
@@ -478,10 +538,25 @@ export class IKController {
         if (rotations.leftForeArm) this.leftForeArm.targetRot.copy(rotations.leftForeArm);
         if (rotations.rightForeArm) this.rightForeArm.targetRot.copy(rotations.rightForeArm);
         if (rotations.head) this.headPose.targetRot.copy(rotations.head);
-        if (rotations.torso) this.torso.targetRot.copy(rotations.torso);
-        if (rotations.hips) this.hips.targetRot.copy(rotations.hips);
-        if (rotations.leftLeg) this.leftLeg.targetRot.copy(rotations.leftLeg);
-        if (rotations.rightLeg) this.rightLeg.targetRot.copy(rotations.rightLeg);
+        if (rotations.torso) { this.torso.targetRot.copy(rotations.torso); this.torso.active = true; }
+        if (rotations.hips) { this.hips.targetRot.copy(rotations.hips); this.hips.active = true; }
+        if (rotations.leftLeg) { 
+            // Amortiguar aún más la elevación por webcam (~2.0° máx)
+            this.leftLeg.targetRot.set(
+                THREE.MathUtils.clamp(rotations.leftLeg.x * 0.04, deg(-1.5), deg(2.0)), 
+                0,
+                0
+            ); 
+            this.leftLeg.active = true; 
+        }
+        if (rotations.rightLeg) { 
+            this.rightLeg.targetRot.set(
+                THREE.MathUtils.clamp(rotations.rightLeg.x * 0.04, deg(-1.5), deg(2.0)),
+                0,
+                0
+            ); 
+            this.rightLeg.active = true; 
+        }
         
         if (rotations.leftFingers) {
             this.applyFingerBends('L', rotations.leftFingers);
@@ -568,9 +643,34 @@ export class IKController {
     // UPDATE
     // ─────────────────────────────────────────────────────────────────────────
 
-    update(delta: number): void {
+    update(delta: number, skipLimbs: boolean = false): void {
         // Interpolaciones suaves de todos los limbs
-        this.updateLimbs(delta);
+        if (!skipLimbs) {
+            this.updateLimbs(delta);
+        }
+
+        // Auto-retorno de piernas al reposo
+        if (this.leftLeg.active && this.leftLegTimer > 0) {
+            this.leftLegTimer -= delta;
+            if (this.leftLegTimer <= 0) {
+                this.leftLeg.targetRot.copy(this.leftLeg.originalRot);
+                this.leftLeg.active = false;
+                this.leftLegTimer = 0;
+                console.log('🦵 IK: Pierna izquierda retornó automáticamente a STAND');
+            }
+        }
+        if (this.rightLeg.active && this.rightLegTimer > 0) {
+            this.rightLegTimer -= delta;
+            if (this.rightLegTimer <= 0) {
+                this.rightLeg.targetRot.copy(this.rightLeg.originalRot);
+                this.rightLeg.active = false;
+                this.rightLegTimer = 0;
+                console.log('🦵 IK: Pierna derecha retornó automáticamente a STAND');
+            }
+        }
+
+        // Actualizar posturas de las manos (procedural + slerp)
+        this.updateHandPoses(delta);
 
         // Pensamiento procedural (bloquea look-at)
         if (this.thinkingActive) {
@@ -578,14 +678,100 @@ export class IKController {
             return;
         }
 
-        // Si no hay target, volver a pose original
+        // Si no hay target, volver a pose original o no hacer nada si estamos en modo skipLimbs (animación externa activa)
         if (!this.lookTarget.enabled) {
-            this.returnToOriginalPose(delta);
+            if (!skipLimbs) {
+                this.returnToOriginalPose(delta);
+            }
             return;
         }
 
         this.updateHeadLookAt(delta);
         this.updateEyeLookAt(delta);
+    }
+
+    private updateHandPoses(delta: number): void {
+        if (!this.fullBodyReady) return;
+
+        // Suavizado para lograr la velocidad humana deseada (aprox 150-200ms por transición)
+        const transitionSpeed = 6.5; 
+        
+        const leftTargetWeight = this.leftHandPose === 'RELAX' ? 0.0 : 1.0;
+        this.leftHandPoseWeight = THREE.MathUtils.lerp(this.leftHandPoseWeight, leftTargetWeight, delta * transitionSpeed);
+        if (Math.abs(this.leftHandPoseWeight - leftTargetWeight) < 0.005) {
+            this.leftHandPoseWeight = leftTargetWeight;
+        }
+
+        const rightTargetWeight = this.rightHandPose === 'RELAX' ? 0.0 : 1.0;
+        this.rightHandPoseWeight = THREE.MathUtils.lerp(this.rightHandPoseWeight, rightTargetWeight, delta * transitionSpeed);
+        if (Math.abs(this.rightHandPoseWeight - rightTargetWeight) < 0.005) {
+            this.rightHandPoseWeight = rightTargetWeight;
+        }
+
+        // Aplicar rotaciones procedurales combinando animación e IK usando Slerp
+        if (this.leftHandPoseWeight > 0) {
+            this.applyHandPoseBends('L', this.leftHandPose, this.leftHandPoseWeight);
+        }
+        if (this.rightHandPoseWeight > 0) {
+            this.applyHandPoseBends('R', this.rightHandPose, this.rightHandPoseWeight);
+        }
+    }
+
+    private applyHandPoseBends(side: string, poseName: string, weight: number): void {
+        const pose = this.HAND_POSES[poseName] || this.HAND_POSES.RELAX;
+        const fingerNames = ['f_index', 'f_middle', 'f_ring', 'f_pinky', 'thumb'];
+        
+        fingerNames.forEach(f => {
+            const shortName = f.replace('f_', '');
+            const vrmName = shortName === 'pinky' ? 'little' : shortName;
+            const val = pose[shortName] || 0;
+
+            for (let i = 1; i <= 3; i++) {
+                const formats = [
+                    `${f}.0${i}.${side}`,
+                    `${f}_0${i}_${side.toLowerCase()}`,
+                    `def-${f}.0${i}.${side}`,
+                    `def-${f}_0${i}_${side.toLowerCase()}`,
+                    
+                    // VRM (J_Bip)
+                    `j_bip_${side.toLowerCase()}_${vrmName}${i}`,
+                    `j_bip_${side}_${vrmName}${i}`,
+                    
+                    // Mixamo / RPM
+                    `${side === 'L' ? 'left' : 'right'}hand${shortName}${i}`,
+                    `${side === 'L' ? 'left' : 'right'}hand${vrmName}${i}`,
+                    `${side === 'L' ? 'Left' : 'Right'}Hand${shortName.charAt(0).toUpperCase() + shortName.slice(1)}${i}`,
+                    `${side === 'L' ? 'Left' : 'Right'}Hand${vrmName.charAt(0).toUpperCase() + vrmName.slice(1)}${i}`
+                ];
+
+                for (const format of formats) {
+                    const bone = this.fingerBones.get(format.toLowerCase()) || this.fingerBones.get(format);
+                    if (bone) {
+                        const isVRMBone = format.toLowerCase().includes('j_bip');
+                        
+                        const targetEuler = new THREE.Euler();
+                        if (f === 'thumb') {
+                            if (isVRMBone) {
+                                targetEuler.set(0, 0, (side === 'L' ? -1 : 1) * val * THREE.MathUtils.degToRad(35));
+                            } else {
+                                targetEuler.set(val * THREE.MathUtils.degToRad(35), (side === 'L' ? -1 : 1) * val * THREE.MathUtils.degToRad(25), 0);
+                            }
+                        } else {
+                            if (isVRMBone) {
+                                targetEuler.set(0, 0, (side === 'L' ? -1 : 1) * val * THREE.MathUtils.degToRad(70));
+                            } else {
+                                targetEuler.set(val * THREE.MathUtils.degToRad(70), 0, 0);
+                            }
+                        }
+
+                        // Slerp gradual entre la animación y la pose procedural deseada
+                        const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
+                        bone.quaternion.slerp(targetQuat, weight);
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -600,22 +786,39 @@ export class IKController {
         this.interpolateLimb(this.leftForeArm, LERP_SPEED_NORMAL);
         this.interpolateLimb(this.rightForeArm, LERP_SPEED_NORMAL);
         this.interpolateLimb(this.headPose, LERP_SPEED_NORMAL);
-        this.interpolateLimb(this.torso, LERP_SPEED_NORMAL);
-        this.interpolateLimb(this.hips, LERP_SPEED_NORMAL);
-        this.interpolateLimb(this.leftLeg, LERP_SPEED_NORMAL);
-        this.interpolateLimb(this.rightLeg, LERP_SPEED_NORMAL);
+        
+        this.interpolateFlexibleLimb(this.torso, LERP_SPEED_NORMAL);
+        this.interpolateFlexibleLimb(this.hips, LERP_SPEED_NORMAL);
+        this.interpolateFlexibleLimb(this.leftLeg, LERP_SPEED_NORMAL);
+        this.interpolateFlexibleLimb(this.rightLeg, LERP_SPEED_NORMAL);
     }
 
     private interpolateLimb(limb: LimbIKState, speed: number): void {
         if (!limb.bone) return;
 
-        limb.currentRot.x = THREE.MathUtils.lerp(limb.currentRot.x, limb.targetRot.x, speed);
-        limb.currentRot.y = THREE.MathUtils.lerp(limb.currentRot.y, limb.targetRot.y, speed);
-        limb.currentRot.z = THREE.MathUtils.lerp(limb.currentRot.z, limb.targetRot.z, speed);
+        // Slerp gradual usando cuaterniones para evitar gimbal lock y deformaciones en rigs de Rigify
+        const targetQuat = new THREE.Quaternion().setFromEuler(limb.targetRot);
+        limb.bone.quaternion.slerp(targetQuat, speed);
+    }
 
-        limb.bone.rotation.x = limb.currentRot.x;
-        limb.bone.rotation.y = limb.currentRot.y;
-        limb.bone.rotation.z = limb.currentRot.z;
+    private interpolateFlexibleLimb(limb: LimbIKState, speed: number): void {
+        if (!limb.bone) return;
+
+        if (limb.active) {
+            // Slerp gradual hacia targetRot
+            const targetQuat = new THREE.Quaternion().setFromEuler(limb.targetRot);
+            limb.bone.quaternion.slerp(targetQuat, speed);
+        } else {
+            // Si no está activo, slerp gradual hacia originalRot para retorno fluido y natural
+            const originalQuat = new THREE.Quaternion().setFromEuler(limb.originalRot);
+            const angle = limb.bone.quaternion.angleTo(originalQuat);
+            if (angle > 0.005) {
+                limb.bone.quaternion.slerp(originalQuat, speed);
+            } else {
+                // Ajustar al valor exacto una vez alcanzado el reposo
+                limb.bone.quaternion.copy(originalQuat);
+            }
+        }
     }
 
     private updateThinking(delta: number): void {
@@ -757,6 +960,14 @@ export class IKController {
             if (this.actionListener) {
                 window.removeEventListener('aiko-action', this.actionListener);
                 this.actionListener = null;
+            }
+            if (this.jointListener) {
+                window.removeEventListener('aiko-studio-joint', this.jointListener);
+                this.jointListener = null;
+            }
+            if (this.handPoseListener) {
+                window.removeEventListener('aiko-hand-pose', this.handPoseListener);
+                this.handPoseListener = null;
             }
         }
     }

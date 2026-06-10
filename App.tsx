@@ -23,7 +23,7 @@ const getDefaultState = (): AppState => ({
   knownPeople: [], // Se llenará dinámicamente al cambiar el nombre
   avatar: {
     baseModel: 'Realista',
-    modelUrl: '/models/grokani_lipsync.glb', // Default LOCAL seguro
+    modelUrl: '/models/grokani_lipsync.glb', // ÚNICO modelo estable — no cambiar
     hairStyle: 'Ondulado',
     hairColor: '#e2b464',
     outfit: 'Traje Futurista',
@@ -75,7 +75,7 @@ const loadState = (): AppState => {
         '6185a4acfb622cf1cdc49348', // Cyberpunk RPM - crash GPU
       ];
 
-      // También resetear modelos locales que causan crash GPU
+      // Modelos locales que causan crash GPU
       const crashingModels = ['Android.glb', 'android.glb', 'nova_anime.glb'];
 
       const isBrokenUrl = brokenUrls.some(id => parsed.avatar?.modelUrl?.includes(id));
@@ -83,21 +83,18 @@ const loadState = (): AppState => {
 
       if (isBrokenUrl || isCrashingModel) {
         console.warn('⚠️ Avatar URL problemática detectada, restaurando default.');
-        parsed.avatar.modelUrl = '/models/nova-avatar.glb';
       }
 
-      // Actualizar tiempos de sesión
+      // MODELO FIJO: siempre usar grokani_lipsync.glb para evitar bugs de cambio de modelo
+      const CANONICAL_MODEL = '/models/grokani_lipsync.glb';
+
       return {
         ...getDefaultState(),
         ...parsed,
-        // Asegurar que el objeto avatar tenga la estructura correcta
         avatar: {
           ...getDefaultState().avatar,
           ...parsed.avatar,
-          // Force override si sigue rota (doble check)
-          modelUrl: (isBrokenUrl || isCrashingModel)
-            ? '/models/nova-avatar.glb'
-            : (parsed.avatar?.modelUrl || getDefaultState().avatar.modelUrl)
+          modelUrl: CANONICAL_MODEL // siempre forzar el modelo estáble
         },
         // Asegurar que el perfil de usuario existe y está actualizado
         knownPeople: (() => {

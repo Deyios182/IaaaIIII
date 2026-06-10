@@ -71,7 +71,7 @@ export class ProceduralAnimator {
       'dance': 4.0, 'excited': 2.5, 'sad': 3.0, 'thinking': 3.0,
       'surprised': 1.5, 'angry': 2.0, 'happy': 2.5, 'clap': 2.0,
       'point': 2.0, 'bow': 2.5, 'stretch': 3.0, 'confused': 2.0,
-      'flirt': 3.0, 'laugh': 2.5, 'shy': 2.5
+      'flirt': 3.0, 'laugh': 2.5, 'shy': 2.5, 'sing': 8.0
     };
 
     const key = actionName.toLowerCase().replace(/[_\s-]/g, '_');
@@ -203,6 +203,46 @@ export class ProceduralAnimator {
         if (leftArm) {
           const rest = this.restPose.get('leftArm');
           leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(20) * intensity + Math.sin(beat + Math.PI) * deg(10) * intensity, 0.08);
+        }
+        break;
+      }
+
+      case 'sing': {
+        const beat = t * 3.5;
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(10) * intensity, 0.08);
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + Math.cos(beat * 0.5) * deg(4) * intensity, 0.08);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-3) * intensity + Math.sin(beat * 0.5) * deg(3) * intensity, 0.08);
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + Math.sin(beat) * deg(6) * intensity, 0.08);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, (rest?.y || 0) + Math.cos(beat) * deg(6) * intensity, 0.08);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + Math.sin(beat * 0.5) * deg(5) * intensity, 0.08);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          const liftX = (rest?.x || 0) + deg(45) * intensity + Math.sin(beat) * deg(15) * intensity;
+          const liftZ = (rest?.z || 0) + deg(-25) * intensity + Math.cos(beat) * deg(10) * intensity;
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, liftX, 0.06);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, liftZ, 0.06);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          const liftX = (rest?.x || 0) + deg(40) * intensity + Math.sin(beat + Math.PI * 0.5) * deg(15) * intensity;
+          const liftZ = (rest?.z || 0) + deg(25) * intensity + Math.cos(beat + Math.PI) * deg(10) * intensity;
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, liftX, 0.06);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, liftZ, 0.06);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(15) + Math.sin(beat) * deg(10), 0.08);
+        }
+        if (leftForeArm) {
+          leftForeArm.rotation.z = THREE.MathUtils.lerp(leftForeArm.rotation.z, deg(-15) - Math.sin(beat + Math.PI * 0.5) * deg(10), 0.08);
         }
         break;
       }

@@ -30,7 +30,7 @@ export class MaterialManager {
     /**
      * Inicializar con modelo 3D
      */
-    initialize(model: THREE.Object3D): void {
+    initialize(model: THREE.Object3D, isGrokAniPassed?: boolean): void {
         this.materials = [];
 
         model.traverse((child) => {
@@ -65,6 +65,7 @@ export class MaterialManager {
         console.log(`🎨 MaterialManager: ${this.materials.length} materiales detectados`);
 
         // === FIX AUTOMÁTICO DE MATERIALES ===
+        // Ajustamos la piel, el cabello, los ojos y la ropa para evitar que se rendericen en blanco puro
         this.materials.forEach(ref => {
             if (!(ref.material instanceof THREE.MeshStandardMaterial)) return;
             const mat = ref.material as THREE.MeshStandardMaterial;

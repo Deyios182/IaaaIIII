@@ -8,6 +8,19 @@
 import { GoogleGenAI } from '@google/genai';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
+// ============ HELPER: Error Logging ============
+const logSupabaseError = (context: string, error: any) => {
+    const isNetworkError = error?.message?.includes('Failed to fetch') || 
+                          (typeof error === 'string' && error.includes('Failed to fetch')) ||
+                          error?.message?.includes('fetch') ||
+                          error?.details?.includes('Failed to fetch');
+    if (isNetworkError) {
+        console.warn(`⚠️ [MemoryService] Conexión fallida con Supabase en: ${context} (Offline/Unreachable)`);
+    } else {
+        console.error(`❌ [MemoryService] Error en ${context}:`, error);
+    }
+};
+
 // ============ HELPER: UserID ============
 
 const getCurrentUserId = async (): Promise<string> => {
@@ -165,7 +178,7 @@ export const addFact = async (content: string, category: Fact['category']): Prom
             .single();
 
         if (error) {
-            console.error('❌ [MemoryService] Error insertando hecho en Supabase:', error.message);
+            logSupabaseError('addFact', error);
             return null;
         }
 
@@ -188,7 +201,7 @@ export const getFacts = async (): Promise<Fact[]> => {
         .order('learned_at', { ascending: false });
 
     if (error) {
-        console.error('Error fetching facts:', error);
+        logSupabaseError('getFacts', error);
         return [];
     }
     return data || [];
@@ -291,7 +304,7 @@ export const addKnownPerson = async (person: Omit<KnownPerson, 'id' | 'user_id'>
         .single();
 
     if (error) {
-        console.error('Error adding person:', error);
+        logSupabaseError('addKnownPerson', error);
         return null;
     }
     console.log('✅ Person saved to Supabase:', person.name);
@@ -309,7 +322,7 @@ export const getKnownPeople = async (): Promise<KnownPerson[]> => {
         .order('last_seen', { ascending: false });
 
     if (error) {
-        console.error('Error fetching people:', error);
+        logSupabaseError('getKnownPeople', error);
         return [];
     }
     return data || [];
@@ -330,7 +343,7 @@ export const deleteKnownPerson = async (personId: string): Promise<void> => {
         .from('nova_known_people')
         .delete()
         .eq('id', personId);
-    if (error) console.error('Error deleting person:', error);
+    if (error) logSupabaseError('deleteKnownPerson', error);
     else console.log('🗑️ Person deleted from Supabase:', personId);
 };
 
@@ -360,8 +373,8 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
         .single();
 
     if (error) {
-        console.error('❌ Error upserting person:', error);
-        throw error;
+        logSupabaseError('upsertKnownPerson', error);
+        return null;
     }
     console.log('✅ Person saved/updated:', person.name);
     return data;
@@ -380,7 +393,7 @@ export const saveMemory = async (memory: Omit<Memory, 'id' | 'user_id'>): Promis
         .single();
 
     if (error) {
-        console.error('Error saving memory:', error);
+        logSupabaseError('saveMemory', error);
         return null;
     }
     console.log('✅ Memory saved to Supabase');
@@ -448,7 +461,7 @@ export const getRecentMemories = async (limit: number = 50): Promise<Memory[]> =
         .limit(limit);
 
     if (error) {
-        console.error('Error fetching memories:', error);
+        logSupabaseError('getRecentMemories', error);
         return [];
     }
     return data || [];
@@ -472,7 +485,7 @@ export const addReminder = async (message: string, triggerTime: Date): Promise<R
         .single();
 
     if (error) {
-        console.error('Error adding reminder:', error);
+        logSupabaseError('addReminder', error);
         return null;
     }
     return data;
@@ -490,7 +503,7 @@ export const getPendingReminders = async (): Promise<Reminder[]> => {
         .lte('trigger_time', new Date().toISOString());
 
     if (error) {
-        console.error('Error fetching reminders:', error);
+        logSupabaseError('getPendingReminders', error);
         return [];
     }
     return data || [];
