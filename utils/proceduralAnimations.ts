@@ -48,6 +48,11 @@ export class ProceduralAnimator {
   };
   private restPose: Map<string, THREE.Euler> = new Map();
   private initialized = false;
+  private swayIntensity = 1.0;
+
+  setSwayIntensity(intensity: number): void {
+    this.swayIntensity = intensity;
+  }
 
   initialize(bones: BoneRefs): void {
     this.bones = bones;
@@ -190,11 +195,11 @@ export class ProceduralAnimator {
         const beat = t * 4; // Ritmo más lento y controlado
         if (hips) {
           const rest = this.restPose.get('hips');
-          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(8) * intensity, 0.08);
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(8) * intensity * this.swayIntensity, 0.08);
         }
         if (spine) {
           const rest = this.restPose.get('spine');
-          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + Math.sin(beat + 1) * deg(5) * intensity, 0.08);
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + Math.sin(beat + 1) * deg(5) * intensity * this.swayIntensity, 0.08);
         }
         if (rightArm) {
           const rest = this.restPose.get('rightArm');
@@ -211,13 +216,13 @@ export class ProceduralAnimator {
         const beat = t * 3.5;
         if (hips) {
           const rest = this.restPose.get('hips');
-          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(10) * intensity, 0.08);
-          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + Math.cos(beat * 0.5) * deg(4) * intensity, 0.08);
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(10) * intensity * this.swayIntensity, 0.08);
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + Math.cos(beat * 0.5) * deg(4) * intensity * this.swayIntensity, 0.08);
         }
         if (spine) {
           const rest = this.restPose.get('spine');
           spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-3) * intensity + Math.sin(beat * 0.5) * deg(3) * intensity, 0.08);
-          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + Math.sin(beat) * deg(6) * intensity, 0.08);
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + Math.sin(beat) * deg(6) * intensity * this.swayIntensity, 0.08);
         }
         if (head) {
           const rest = this.restPose.get('head');

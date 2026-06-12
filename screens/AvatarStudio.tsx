@@ -691,6 +691,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               activeAction={activeAction}
               emotion="neutral"
               isAiSpeaking={false}
+              isHotMode={avatar.isBoldMode}
             />
           </React.Suspense>
         </ErrorBoundary>

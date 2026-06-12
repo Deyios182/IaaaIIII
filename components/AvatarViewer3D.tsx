@@ -81,7 +81,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
     // --- FINGER BONE REFS ---
     const fingerBonesRef = useRef<{
-        left:  Array<{ bone: THREE.Bone; segment: number; isThumb: boolean; fingerName: string }>;
+        left: Array<{ bone: THREE.Bone; segment: number; isThumb: boolean; fingerName: string }>;
         right: Array<{ bone: THREE.Bone; segment: number; isThumb: boolean; fingerName: string }>;
     }>({ left: [], right: [] });
     const fingerPoseRef = useRef<{ name: string; timer: number }>({ name: 'RELAX', timer: 0 });
@@ -159,17 +159,35 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         return currentEmotion && currentEmotion !== 'neutral' ? 1.0 : 0.0;
     };
 
-    const updateFacialExpression = (meshes: THREE.Mesh[], currentEmotion: string) => {
+    const updateFacialExpression = (meshes: THREE.Mesh[], currentEmotion: string, isSpeaking: boolean) => {
         // Reset morphs first (simple approach)
         // ... implementation details for brows/mouth based on emotion ...
         meshes.forEach(mesh => {
             if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
 
             // Mapeo básico de emociones a morphs comunes
-            const morphsToReset = ['BrowsDown', 'BrowsUp', 'Smile', 'Frown', 'MouthOpen'];
+            // NOTA: Añadimos morphs de VRoid/VRM comunes ('Joy', 'Fun', 'Fcl_ALL_Joy', etc)
+            // porque si se quedan atascados en 1.0, bloquean completamente el movimiento de los labios.
+            const morphsToReset = ['BrowsDown', 'BrowsUp', 'Smile', 'Frown', 'MouthOpen', 'Joy', 'Fun', 'Angry', 'Sorrow', 'Fcl_ALL_Joy', 'Fcl_ALL_Fun', 'Fcl_ALL_Angry', 'Fcl_ALL_Sorrow', 'Fcl_MTH_Joy', 'Fcl_MTH_Fun'];
             morphsToReset.forEach(m => {
+                // Busqueda case insensitive
+                const key = Object.keys(mesh.morphTargetDictionary).find(k => k.toLowerCase() === m.toLowerCase());
+                if (key !== undefined) {
+                    const idx = mesh.morphTargetDictionary[key];
+                    if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0, 0.1);
+                }
+            });
+
+            const morphKeys = Object.keys(mesh.morphTargetDictionary);
+            const closeMorphs = morphKeys.filter(k => {
+                const lower = k.toLowerCase();
+                return lower.includes('sil') || lower === 'vrc.v_sil' || lower.includes('mouthclose') || lower === 'fcl_mth_close';
+            });
+            
+            closeMorphs.forEach(m => {
                 const idx = mesh.morphTargetDictionary[m];
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0, 0.1);
+                const targetVal = isSpeaking ? 0.0 : 1.0;
+                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], targetVal, 0.2);
             });
 
             // Aplicar nuevos según emoción
@@ -251,6 +269,34 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             lipSyncRef.current.setExternalAnalyser(audioAnalyser);
         }
     }, [audioAnalyser, lipSyncRef.current]);
+
+    // Hook para controlar el modo hot / ninfómana
+    useEffect(() => {
+        if (isHotMode) {
+            console.log("🔥 MODO NINFÓMANO ACTIVADO - Intensidad máxima");
+
+            // Aumentar física de jiggle
+            if (jiggleState.current) {
+                jiggleState.current.lBreast.velocity = 1.2;
+                jiggleState.current.rBreast.velocity = 1.2;
+                jiggleState.current.lButt.velocity = 1.0;
+                jiggleState.current.rButt.velocity = 1.0;
+            }
+
+            // Breathing más sensual
+            if (spineRef.current) {
+                spineRef.current.userData.hotBreathIntensity = 1.5;
+            }
+
+            // Sway de caderas más pronunciado
+            proceduralAnimatorRef.current?.setSwayIntensity(1.4);
+        } else {
+            if (spineRef.current) {
+                spineRef.current.userData.hotBreathIntensity = 1.0;
+            }
+            proceduralAnimatorRef.current?.setSwayIntensity(1.0);
+        }
+    }, [isHotMode]);
 
     const [morphTargetMeshes, setMorphTargetMeshes] = useState<THREE.Mesh[]>([]);
 
@@ -393,53 +439,51 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('✨ Configurado como DECAL:', child.name);
                             } else if (meshName.includes('eye')) {
-                                // OJOS: Toning down brightness
+                                // OJOS: Mantener brillantes
                                 mat.side = THREE.DoubleSide;
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    mat.roughness = 0.5; // Less shiny
-                                    mat.metalness = 0.1;
-                                    mat.envMapIntensity = 0.5; // Lower reflections
-                                    mat.emissiveIntensity = 0; // Ensure no glow
+                                    mat.roughness = 1.0;
+                                    mat.metalness = 0.0;
+                                    mat.envMapIntensity = 0.0;
+                                    // Mantener emissive intacto
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('👁️ Configurado como OJO:', child.name);
                             } else if (isSkin) {
-                                // PIEL/CUERPO: Material sólido natural
+                                // PIEL/CUERPO: Material mate suave (Anime)
                                 mat.side = THREE.DoubleSide;
                                 mat.transparent = false;
                                 mat.depthWrite = true;
                                 mat.polygonOffset = false;
 
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    mat.roughness = 0.72;        // Más mate = menos blow-out especular
-                                    mat.metalness = 0.0;
-                                    mat.envMapIntensity = 0.25;  // Menos reflexión blanca del env
-                                    // Escalar normal map para que los detalles sean más visibles
-                                    if (mat.normalMap) {
-                                        mat.normalScale.set(1.5, 1.5);
-                                    }
-                                    // Intensificar AO map (sombras en concavidades — pezones, ombligo, etc.)
-                                    mat.aoMapIntensity = 1.5;
-                                    // Forzar colorSpace correcto en la textura de piel
+                                    mat.roughness = 1.0;         // Completamente mate
+                                    mat.metalness = 0.0;         // Nada metálico
+                                    mat.envMapIntensity = 0.1;   // Casi sin reflejo de entorno
+
+                                    // Restaurar aoMapIntensity para evitar sombras sucias
+                                    mat.aoMapIntensity = 0.5;
+
+                                    // Forzar colorSpace correcto
                                     if (mat.map) {
                                         mat.map.colorSpace = THREE.SRGBColorSpace;
                                         mat.map.needsUpdate = true;
                                     }
                                     if (!mat.map) {
-                                        mat.color.set(0xf0b090); // Tono piel cálido más saturado si no hay textura
+                                        mat.color.set(0xffe0c8);
                                     }
                                     mat.needsUpdate = true;
                                 }
                             } else {
-                                // Ropa, accesorios, etc.
+                                // Ropa, pelo, accesorios, etc. (Anime)
                                 mat.side = THREE.DoubleSide;
                                 mat.transparent = false;
                                 mat.depthWrite = true;
                                 mat.polygonOffset = false;
 
-                                // Mejora genérica: evitar materiales demasiado mates
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    if (mat.roughness > 0.92) mat.roughness = 0.78;
-                                    mat.envMapIntensity = Math.max(mat.envMapIntensity ?? 0, 0.3);
+                                    mat.roughness = 1.0; // Pelo/ropa mate
+                                    mat.metalness = 0.0; // Nada metálico (corrige el pelo rojo metálico)
+                                    mat.envMapIntensity = 0.1;
                                     mat.needsUpdate = true;
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('👕 Configurado como OTRO:', child.name);
@@ -806,18 +850,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     // --- FINGERS: Capturar TODOS los segmentos (proximal, medio, distal) ---
                     const isFingerBone = (
                         name.includes('f_index') || name.includes('f_middle') ||
-                        name.includes('f_ring')  || name.includes('f_pinky')  || name.includes('thumb') ||
+                        name.includes('f_ring') || name.includes('f_pinky') || name.includes('thumb') ||
                         /def-f_\w+\.\d+/.test(name)
                     );
                     if (isFingerBone) {
                         // Detectar qué dedo es por nombre
-                        const isThumb  = name.includes('thumb');
-                        const fingerN  = isThumb ? 'thumb'
-                            : name.includes('index')  ? 'index'
-                            : name.includes('middle') ? 'middle'
-                            : name.includes('ring')   ? 'ring'
-                            : name.includes('pinky')  ? 'pinky'
-                            : 'unknown';
+                        const isThumb = name.includes('thumb');
+                        const fingerN = isThumb ? 'thumb'
+                            : name.includes('index') ? 'index'
+                                : name.includes('middle') ? 'middle'
+                                    : name.includes('ring') ? 'ring'
+                                        : name.includes('pinky') ? 'pinky'
+                                            : 'unknown';
 
                         // Segmento: .01 = proximal, .02 = medio, .03 = distal
                         const segMatch = name.match(/\.(0[1-3])(?:\.[lr])?$/);
@@ -897,11 +941,11 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // 1. Animation Manager - Gestiona animaciones de Blender
             const isGrokAni = allBones.some(name => {
                 const ln = name.toLowerCase();
-                return ln.includes('grokani') || 
-                       ln.includes('breast_master') || 
-                       ln.includes('jaw_master') || 
-                       ln.includes('org-breast') || 
-                       ln.includes('def-breast');
+                return ln.includes('grokani') ||
+                    ln.includes('breast_master') ||
+                    ln.includes('jaw_master') ||
+                    ln.includes('org-breast') ||
+                    ln.includes('def-breast');
             });
             isGrokAniRef.current = isGrokAni;
 
@@ -1182,7 +1226,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
         const toggleHandler = async (e: Event) => {
             const { active } = (e as CustomEvent<{ active: boolean }>).detail;
-            
+
             if (active) {
                 console.log('🎥 [AvatarViewer3D] Solicitando cámara para Live Mirror...');
                 // Detener cualquier animación en el mixer para que el IK tenga control 100% libre sobre los huesos
@@ -1193,10 +1237,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 externalAnimPlayingRef.current = false;
 
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { width: 640, height: 480, facingMode: 'user' } 
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 640, height: 480, facingMode: 'user' }
                     });
-                    
+
                     videoEl = document.createElement('video');
                     videoEl.srcObject = stream;
                     videoEl.autoplay = true;
@@ -1222,7 +1266,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             ikControllerRef.current.applyWebcamRotations(rotations);
                         }
                     });
-                    
+
                     console.log('✅ [AvatarViewer3D] Live Mirror activo y gesticulando');
                 } catch (err) {
                     console.error('❌ [AvatarViewer3D] Error iniciando Mirror:', err);
@@ -1283,7 +1327,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     useEffect(() => {
         if (action) {
             console.log('🎬 Action prop changed:', action);
-            
+
             const animName = getAnimationName(action);
 
             // 1. Intentar con AnimationManager (clips de Blender)
@@ -1304,7 +1348,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // Volver a Idle / detener procedural
             externalAnimPlayingRef.current = false;
             if (mixerRef.current) mixerRef.current.stopAllAction();
-            
+
             if (animationManagerRef.current) {
                 animationManagerRef.current.play('Idle', { priority: 1, loop: true, blendDuration: 0.5 });
             }
@@ -1413,8 +1457,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 const noiseY = simplex.noise2D(t * 0.3, 100) * 0.015 * moodInfluence.idleVariation * proceduralLayerWeight;
                 const noiseZ = simplex.noise2D(t * 0.4, 200) * 0.01 * moodInfluence.idleVariation * proceduralLayerWeight;
 
+                // Combinar micro-balanceo con respiración (hot breathing)
+                const breathIntensity = spineRef.current.userData.hotBreathIntensity || 1.0;
+                const breathX = inhale * 0.015 * breathIntensity * proceduralLayerWeight;
+                const targetRotX = noiseX + breathX;
+
                 // Aplicar suavemente
-                spineRef.current.rotation.x = THREE.MathUtils.lerp(spineRef.current.rotation.x, noiseX, 0.1);
+                spineRef.current.rotation.x = THREE.MathUtils.lerp(spineRef.current.rotation.x, targetRotX, 0.1);
                 spineRef.current.rotation.y = THREE.MathUtils.lerp(spineRef.current.rotation.y, noiseY, 0.1);
                 spineRef.current.rotation.z = THREE.MathUtils.lerp(spineRef.current.rotation.z, noiseZ, 0.1);
 
@@ -1525,10 +1574,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 // --- MODO ACTIVO (LEVANTADO): Biomecánica Realista y Gravedad ---
                 // 1. Flexión del fémur: Desviación absoluta respecto al reposo únicamente en el eje X (elevación frontal)
                 // Excluimos Z e Y de este cálculo para romper el bucle de retroalimentación infinita
-                const leftFemurFlex = leftLegOriginalRot.current 
+                const leftFemurFlex = leftLegOriginalRot.current
                     ? Math.abs(leftLegRef.current.rotation.x - leftLegOriginalRot.current.x)
                     : 0;
-                const rightFemurFlex = rightLegOriginalRot.current 
+                const rightFemurFlex = rightLegOriginalRot.current
                     ? Math.abs(rightLegRef.current.rotation.x - rightLegOriginalRot.current.x)
                     : 0;
 
@@ -1649,8 +1698,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     lastHandPoseTime.current = now;
                     speakerPoseIndex.current = (speakerPoseIndex.current + 1) % speakerPoseCycle.current.length;
                     const nextPose = speakerPoseCycle.current[speakerPoseIndex.current];
-                    window.dispatchEvent(new CustomEvent('aiko-hand-pose', { 
-                        detail: { side: 'BOTH', pose: nextPose } 
+                    window.dispatchEvent(new CustomEvent('aiko-hand-pose', {
+                        detail: { side: 'BOTH', pose: nextPose }
                     }));
                 }
                 wasSpeakingRef.current = true;
@@ -1707,18 +1756,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             type PoseTable = { x: number; y?: number; z?: number };
             const FINGER_ANGLES: Record<string, Record<string, PoseTable[]>> = {
                 // [pose][seg1, seg2, seg3]
-                RELAX:     { normal: [{ x:  8 },{ x:  5 },{ x:  3 }],  thumb: [{ x: 5, y: -8 },{ x: 3 },{ x: 2 }] },
-                SOFT_CURL: { normal: [{ x: 30 },{ x: 25 },{ x: 18 }],  thumb: [{ x: 20, y: -5 },{ x: 15 },{ x: 10 }] },
-                OPEN:      { normal: [{ x: -5, z: 0 },{ x: -3 },{ x: -2 }], thumb: [{ x: -3, y: -12 },{ x: -2 },{ x: -1 }] },
-                PINCH:     {
-                    normal: [{ x: 45 },{ x: 40 },{ x: 30 }],
-                    thumb:  [{ x: 35, y: -5 },{ x: 25 },{ x: 15 }]
+                RELAX: { normal: [{ x: 8 }, { x: 5 }, { x: 3 }], thumb: [{ x: 5, y: -8 }, { x: 3 }, { x: 2 }] },
+                SOFT_CURL: { normal: [{ x: 30 }, { x: 25 }, { x: 18 }], thumb: [{ x: 20, y: -5 }, { x: 15 }, { x: 10 }] },
+                OPEN: { normal: [{ x: -5, z: 0 }, { x: -3 }, { x: -2 }], thumb: [{ x: -3, y: -12 }, { x: -2 }, { x: -1 }] },
+                PINCH: {
+                    normal: [{ x: 45 }, { x: 40 }, { x: 30 }],
+                    thumb: [{ x: 35, y: -5 }, { x: 25 }, { x: 15 }]
                 },
-                POINT:     { normal: [{ x: 40 },{ x: 35 },{ x: 25 }],  thumb: [{ x: 5, y: -10 },{ x: 3 },{ x: 2 }] },
+                POINT: { normal: [{ x: 40 }, { x: 35 }, { x: 25 }], thumb: [{ x: 5, y: -10 }, { x: 3 }, { x: 2 }] },
             };
             // Para PINCH/POINT el índice se extiende
-            const POINT_INDEX:  PoseTable[] = [{ x: -5 },{ x: -3 },{ x: -2 }];
-            const PINCH_INDEX:  PoseTable[] = [{ x: 50 },{ x: 45 },{ x: 35 }];
+            const POINT_INDEX: PoseTable[] = [{ x: -5 }, { x: -3 }, { x: -2 }];
+            const PINCH_INDEX: PoseTable[] = [{ x: 50 }, { x: 45 }, { x: 35 }];
 
             const applyFingerPose = (fingers: typeof fingerBonesRef.current.left) => {
                 fingers.forEach(({ bone, segment, isThumb, fingerName }) => {
@@ -1927,7 +1976,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             if (isDazModel) {
                 // DAZ: rotación en Z (hacia abajo)
-                const targetZ = jawOriginalRotation.current.z - (autoMouthOpen * jawFactor * maxJawRotation);
+                const baseJawZ = isAiSpeaking ? 0 : 0.05; // Forzar cierre (Z positivo sube mandíbula)
+                const targetZ = jawOriginalRotation.current.z + baseJawZ - (autoMouthOpen * jawFactor * maxJawRotation);
                 const clampedTargetZ = THREE.MathUtils.clamp(
                     targetZ,
                     jawOriginalRotation.current.z - Math.PI / 4,
@@ -1945,7 +1995,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 }
             } else {
                 // Blender/otros: rotación en X
-                const targetX = jawOriginalRotation.current.x + (autoMouthOpen * jawFactor * maxJawRotation);
+                // Sin forzar cierre para evitar que los dientes sobresalgan hacia adelante
+                const baseJawX = 0; 
+                const targetX = jawOriginalRotation.current.x + baseJawX + (autoMouthOpen * jawFactor * maxJawRotation);
                 const clampedTargetX = THREE.MathUtils.clamp(
                     targetX,
                     jawOriginalRotation.current.x - Math.PI / 12,
@@ -1978,14 +2030,15 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             if (stickerDropRef.current) stickerDropRef.current.visible = emotion === 'sad' || emotion === 'confused';
 
             // Actualizar morphs faciales (ojos, cejas, boca base)
-            updateFacialExpression(morphTargetMeshes, emotion);
+            updateFacialExpression(morphTargetMeshes, emotion, isAiSpeaking);
 
             // Calcular offsets de labios 3D según el viseme
-            let topYOffset = 0; // hacia adelante/atrás (Profundidad)
-            let topZOffset = 0; // hacia arriba/abajo (Apertura vertical)
+            // Dejar que el modelo mantenga su pose original
+            let topYOffset = 0;    
+            let topZOffset = 0;    
             let bottomYOffset = 0;
-            let bottomZOffset = 0;
-            let cornerXOffset = 0; // ensanchamiento horizontal (Left +, Right -)
+            let bottomZOffset = 0;      
+            let cornerXOffset = 0;
 
             if (isAiSpeaking && autoMouthOpen > 0.01) {
                 const amt = autoMouthOpen;
@@ -1998,7 +2051,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     case 'E':
                         topZOffset = -0.008 * amt;
                         bottomZOffset = 0.012 * amt;
-                        cornerXOffset = 0.016 * amt; // pull outward
+                        cornerXOffset = 0.000 * amt; // pull outward
                         break;
                     case 'I':
                         topZOffset = -0.004 * amt;
@@ -2254,6 +2307,67 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             });
         }
 
+        // --- Breast and Butt Jiggle Physics ---
+        if (leftBreastRef.current || rightBreastRef.current || leftButtRef.current || rightButtRef.current) {
+            const jiggleStiffness = 0.15;
+            const jiggleDamping = 0.85;
+            let hotFactor = 1.0;
+
+            if (isHotMode) {
+                hotFactor = 1.5;
+
+                // Aplicar amplificación de velocidad solicitada en el parche
+                jiggleState.current.lBreast.velocity *= hotFactor;
+                jiggleState.current.rBreast.velocity *= hotFactor;
+
+                // Oscilación orgánica sensual adicional en hot mode
+                jiggleState.current.lBreast.velocity += Math.sin(t * 8) * 0.015;
+                jiggleState.current.rBreast.velocity += Math.sin(t * 8 + Math.PI) * 0.015;
+                jiggleState.current.lButt.velocity += Math.cos(t * 6) * 0.01;
+                jiggleState.current.rButt.velocity += Math.cos(t * 6 + Math.PI) * 0.01;
+            } else {
+                // Movimiento muy sutil en reposo normal
+                jiggleState.current.lBreast.velocity += Math.sin(t * 4) * 0.002;
+                jiggleState.current.rBreast.velocity += Math.sin(t * 4 + Math.PI) * 0.002;
+            }
+
+            // Left Breast
+            if (leftBreastRef.current) {
+                const force = (0 - jiggleState.current.lBreast.position) * jiggleStiffness;
+                jiggleState.current.lBreast.velocity += force;
+                jiggleState.current.lBreast.velocity *= jiggleDamping;
+                jiggleState.current.lBreast.position += jiggleState.current.lBreast.velocity;
+                leftBreastRef.current.rotation.x = jiggleState.current.lBreast.position;
+            }
+
+            // Right Breast
+            if (rightBreastRef.current) {
+                const force = (0 - jiggleState.current.rBreast.position) * jiggleStiffness;
+                jiggleState.current.rBreast.velocity += force;
+                jiggleState.current.rBreast.velocity *= jiggleDamping;
+                jiggleState.current.rBreast.position += jiggleState.current.rBreast.velocity;
+                rightBreastRef.current.rotation.x = jiggleState.current.rBreast.position;
+            }
+
+            // Left Butt
+            if (leftButtRef.current) {
+                const force = (0 - jiggleState.current.lButt.position) * jiggleStiffness;
+                jiggleState.current.lButt.velocity += force;
+                jiggleState.current.lButt.velocity *= jiggleDamping;
+                jiggleState.current.lButt.position += jiggleState.current.lButt.velocity;
+                leftButtRef.current.rotation.x = jiggleState.current.lButt.position;
+            }
+
+            // Right Butt
+            if (rightButtRef.current) {
+                const force = (0 - jiggleState.current.rButt.position) * jiggleStiffness;
+                jiggleState.current.rButt.velocity += force;
+                jiggleState.current.rButt.velocity *= jiggleDamping;
+                jiggleState.current.rButt.position += jiggleState.current.rButt.velocity;
+                rightButtRef.current.rotation.x = jiggleState.current.rButt.position;
+            }
+        }
+
         // --- SECONDARY PHYSICS (HAIR & SKIRT SWAY) ---
         const windX = simplex.noise2D(t * 1.5, 0) * 0.05;
         const windZ = simplex.noise2D(0, t * 1.5) * 0.05;
@@ -2274,8 +2388,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // Animar vestido/falda: viento + SEGUIMIENTO DE PIERNAS (evitar clipping)
         if (skirtBonesRef.current.length > 0) {
             // Leer cuánto se desvió cada pierna de su posición de reposo
-            const leftLegDelta  = (leftLegRef.current  && leftLegOriginalRot.current)
-                ? leftLegRef.current.rotation.x  - leftLegOriginalRot.current.x
+            const leftLegDelta = (leftLegRef.current && leftLegOriginalRot.current)
+                ? leftLegRef.current.rotation.x - leftLegOriginalRot.current.x
                 : 0;
             const rightLegDelta = (rightLegRef.current && rightLegOriginalRot.current)
                 ? rightLegRef.current.rotation.x - rightLegOriginalRot.current.x
@@ -2289,14 +2403,14 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 if (!st) return;
 
                 const bn = bone.name.toLowerCase();
-                const isL = bn.includes('.l') || bn.includes('_l') || bn.includes('left')  || bn.endsWith('l');
+                const isL = bn.includes('.l') || bn.includes('_l') || bn.includes('left') || bn.endsWith('l');
                 const isR = bn.includes('.r') || bn.includes('_r') || bn.includes('right') || bn.endsWith('r');
 
                 // Influencia de pierna correspondiente
                 let legInfluenceX = 0;
-                if (isL)       legInfluenceX = leftLegDelta  * LEG_INFLUENCE;
-                else if (isR)  legInfluenceX = rightLegDelta * LEG_INFLUENCE;
-                else           legInfluenceX = (leftLegDelta + rightLegDelta) * 0.3; // Huesos centrales: promedio
+                if (isL) legInfluenceX = leftLegDelta * LEG_INFLUENCE;
+                else if (isR) legInfluenceX = rightLegDelta * LEG_INFLUENCE;
+                else legInfluenceX = (leftLegDelta + rightLegDelta) * 0.3; // Huesos centrales: promedio
 
                 // Target = base de reposo + viento sutil + influencia de pierna
                 const targetRotX = st.baseRot.x + windX * 0.3 + legInfluenceX;
@@ -2748,19 +2862,19 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
 
                 <CameraManager viewMode={viewMode} controlsRef={controlsRef} />
 
-                {/* ILUMINACIÓN CONTRASTADA: ambient muy bajo para que las micro-sombras del normal map sean visibles */}
-                {/* Sin sombras = sin detalle corporal. Alta luz ambiente = piel blanca y plana. */}
-                <ambientLight intensity={0.18} />
+                {/* ILUMINACIÓN SUAVE ESTILO ANIME: Mayor luz ambiente para reducir sombras duras */}
+                <ambientLight intensity={1.2} color="#ffffff" />
                 <directionalLight
                     position={[2, 5, 5]}
-                    intensity={1.8}
+                    intensity={0.8}
+                    color="#fff0e0"
                     castShadow
                 />
-                {/* Fill light cálido sutil desde abajo-izquierda */}
-                <pointLight position={[-1.5, 1.5, 3]} intensity={0.35} color="#ffd4a0" />
+                {/* Fill light suave para resaltar detalles sin quemar */}
+                <pointLight position={[-1.5, 1.5, 3]} intensity={0.5} color="#ffd4a0" />
 
-                {/* Environment oscuro: night no añade luz ambiente extra que lave la piel */}
-                <Environment preset="night" />
+                {/* Environment neutro para reflejos mínimos */}
+                <Environment preset="studio" environmentIntensity={0.2} />
 
                 <Suspense fallback={<FallbackAvatar />}>
                     <AvatarModel

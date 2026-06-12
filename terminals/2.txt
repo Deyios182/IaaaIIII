@@ -1,0 +1,44 @@
+---
+pid: 28704
+cwd: "D:\Proyectos\Nueva carpeta\IaaaIIII"
+command: "Set-Location \"D:\\Proyectos\\Nueva carpeta\\IaaaIIII\"; npm run dev"
+started_at: 2026-06-10T18:29:16.163Z
+running_for_ms: 360005   
+---
+
+> nova-ia@1.0.0 dev
+> vite
+
+
+  VITE v6.4.1  ready in 1233 ms
+
+  ➜  Local:   http://localhost:3001/
+  ➜  Network: http://169.254.156.13:3001/
+  ➜  Network: http://192.168.1.213:3001/
+vite v6.4.1 building for development...
+
+watching for file changes...
+vite v6.4.1 building for development...
+
+watching for file changes...
+
+build started...
+
+build started...
+transforming...
+transforming...
+✓ 1 modules transformed.
+✓ 1 modules transformed.
+rendering chunks...
+rendering chunks...
+computing gzip size...
+computing gzip size...
+dist-electron/preload.js  1.40 kB │ gzip: 0.60 kB
+built in 208ms.
+dist-electron/main.js  12.63 kB │ gzip: 3.85 kB
+built in 210ms.
+
+⚙️ Configuración cargada: { autoStart: false, startMode: 'tray' }
+🚀 Auto-inicio: false | Modo: tray
+[32280:0610/142922.585:ERROR:CONSOLE:1] "Request Autofill.enable failed. {"code":-32601,"message":"'Autofill.enable' wasn't found"}", source: devtools://devtools/bundled/core/protocol_client/protocol_client.js (1)
+[32280:0610/142922.586:ERROR:CONSOLE:1] "Request Autofill.setAddresses failed. {"code":-32601,"message":"'Autofill.setAddresses' wasn't found"}", source: devtools://devtools/bundled/core/protocol_client/protocol_client.js (1)

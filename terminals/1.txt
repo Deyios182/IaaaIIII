@@ -1,0 +1,18 @@
+---
+pid: 30560
+cwd: "D:\Proyectos\Nueva carpeta\IaaaIIII"
+command: "npm run dev"
+started_at: 2026-06-10T18:29:08.955Z
+running_for_ms: 365009   
+---
+En l�nea: 1 Car�cter: 45
++ (cd "D:\\Proyectos\\Nueva carpeta\\IaaaIIII" ; npm run dev)
++                                             ~
+Falta el parntesis de cierre ')' en la expresi�n.
+En l�nea: 1 Car�cter: 59
++ (cd "D:\\Proyectos\\Nueva carpeta\\IaaaIIII" ; npm run dev)
++                                                           ~
+Token ')' inesperado en la expresi�n o la instrucci�n.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingEndParenthesisInExpression
+ 

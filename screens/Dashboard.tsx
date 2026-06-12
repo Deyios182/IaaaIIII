@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AppState, ChatMessage, PersonEntry } from '../types';
-import { GoogleGenAI, Modality, LiveServerMessage, Type } from "@google/genai";
+import { GoogleGenAI, Modality, LiveServerMessage, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import {
   decodeBase64,
   encodeBase64,
@@ -2236,7 +2236,13 @@ ${sessionLog}
                     config: {
                       // ❌ BÚSQUEDA WEB DESHABILITADA PERMANENTEMENTE
                       // tools: [{ googleSearch: {} }],
-                      systemInstruction: { parts: [{ text: "Eres Nova. Responde basándote en tu conocimiento. NO tienes acceso a búsqueda web." }] }
+                      systemInstruction: { parts: [{ text: "Eres Nova. Responde basándote en tu conocimiento. NO tienes acceso a búsqueda web." }] },
+                      safetySettings: [
+                        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                      ]
                     }
                   });
 
@@ -2531,9 +2537,9 @@ ${sessionLog}
             }
 
           },
-          onclose: () => {
+          onclose: (e: any) => {
             if (!isUserDisconnectingRef.current) {
-              console.warn('⚠️ Desconexión inesperada (Socket cerrado). Intentando reconectar...');
+              console.warn('⚠️ Desconexión inesperada (Socket cerrado). Intentando reconectar...', e);
               addMessage({ text: '🔄 Señal inestable. Reconectando...', sender: 'ai' });
               endCall();
               // Intentar reconectar en 1.5s
@@ -2759,6 +2765,12 @@ ${sessionLog}
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
+          safetySettings: [
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+          ],
           // Configuración generativa (Flattened por deprecación de generation_config)
           // @ts-ignore
           temperature: isBold ? 1.2 : 0.9,
@@ -2990,7 +3002,11 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               mimeType: 'audio/pcm;rate=16000'
             }
           });
-        } catch (err) {
+        } catch (err: any) {
+          if (err?.message?.includes('CLOSING or CLOSED') || err?.name === 'InvalidStateError') {
+            // Ignorar el error silenciosamente si el socket se está cerrando
+            return;
+          }
           console.error('❌ Error enviando audio:', err);
         }
       };
