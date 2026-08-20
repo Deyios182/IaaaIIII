@@ -8,9 +8,9 @@ interface ChatHistoryProps {
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({ messages }) => {
   return (
-    <div className="flex h-full overflow-hidden">
-      <aside className="w-80 lg:w-96 flex flex-col border-r border-surface-border bg-[#111118]">
-        <div className="p-4 border-b border-surface-border">
+    <div className="flex flex-col md:flex-row h-full overflow-hidden">
+      <aside className="w-full md:w-80 lg:w-96 shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-surface-border bg-[#111118] max-h-[35vh] md:max-h-full">
+        <div className="p-3 sm:p-4 border-b border-surface-border">
           <div className="relative flex items-center">
             <span className="material-symbols-outlined absolute left-3 text-slate-500">search</span>
             <input className="w-full h-11 bg-surface-dark border-none rounded-xl pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary text-white placeholder-slate-500" placeholder="Buscar conversaciones..." />

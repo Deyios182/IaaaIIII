@@ -60,12 +60,33 @@ export class UniversalLipSync {
     private morphMeshes: THREE.Mesh[] = [];
     private jawBone: THREE.Bone | null = null;
     private jawOriginalRotation: THREE.Euler | null = null;
+
+    // Huesos faciales avanzados (Rigify)
+    private lipTopBones: THREE.Bone[] = [];
+    private lipBottomBones: THREE.Bone[] = [];
+    private cornerLeftBones: THREE.Bone[] = [];
+    private cornerRightBones: THREE.Bone[] = [];
+
+    // Transforms originales para reset
+    private originalTransforms: Map<string, { rot: THREE.Euler, pos: THREE.Vector3 }> = new Map();
+
     private availableMorphs: Map<string, { mesh: THREE.Mesh, index: number }> = new Map();
 
     // Configuración
     private smoothing = 0.15; // Suavizado de transiciones (0-1)
     private silenceThreshold = 0.02; // Umbral de silencio
     private resetDelay = 150; // ms después de dejar de hablar para resetear
+    // Bandera para deshabilitar manipulación de huesos interna
+    public disableBoneManipulation: boolean = false;
+
+    // Offset base para corregir el labio superior si el modelo viene con una mueca/sonrisa forzada de fábrica
+    public restingTopLipOffsetY: number = 0;
+    
+    // Escala del movimiento de mandíbula (útil para modelos anime donde la mandíbula se mueve poco)
+    public jawMovementScale: number = 1.0;
+    
+    // Escala global para compensar exportaciones de Blender (ej: escala 0.01)
+    public positionScale: number = 1.0;
 
     constructor() {
         if (typeof window !== 'undefined') {
@@ -86,10 +107,25 @@ export class UniversalLipSync {
      * Inicializa el sistema con un modelo 3D
      * Detecta automáticamente si usar morphs o huesos
      */
-    initialize(model: THREE.Object3D): { mode: 'morphs' | 'bone' | 'none', details: string } {
+    initialize(model: THREE.Object3D, options?: { disableBones?: boolean, restingTopLipOffsetY?: number, jawMovementScale?: number }): { mode: 'morphs' | 'bone' | 'none', details: string } {
+        if (options && options.disableBones) {
+            this.disableBoneManipulation = true;
+            console.log('🛑 UniversalLipSync: Manipulación de huesos interna DESHABILITADA (AvatarViewer3D tiene el control).');
+        } else {
+            this.disableBoneManipulation = false;
+        }
+
+        this.restingTopLipOffsetY = options?.restingTopLipOffsetY || 0;
+        this.jawMovementScale = options?.jawMovementScale !== undefined ? options.jawMovementScale : 1.0;
+
         this.morphMeshes = [];
         this.availableMorphs.clear();
         this.jawBone = null;
+        this.lipTopBones = [];
+        this.lipBottomBones = [];
+        this.cornerLeftBones = [];
+        this.cornerRightBones = [];
+        this.originalTransforms.clear();
 
         // Buscar meshes con morph targets y hueso de mandíbula
         model.traverse((child) => {
@@ -111,49 +147,52 @@ export class UniversalLipSync {
                 }
             }
 
-            // Buscar huesos de MANDÍBULA SOLAMENTE (no mentón/chin)
             if ((child as any).isBone) {
                 const bone = child as THREE.Bone;
                 const lower = bone.name.toLowerCase();
+                const isJaw = (lower.includes('jaw') || lower.includes('mandible')) && !lower.includes('chin');
 
-                // Solo buscar huesos que contengan 'jaw' (mandíbula real)
-                // NO incluir 'chin' porque es el mentón, no la mandíbula
-                const isJawBone = (lower.includes('jaw') && !lower.includes('chin')) ||
-                    lower.includes('mandible') ||
-                    lower.includes('lowerjaw');
+                if (isJaw && !this.jawBone) {
+                    this.jawBone = bone;
+                    this.jawOriginalRotation = bone.rotation.clone();
+                }
 
-                if (isJawBone) {
-                    // Priorizar huesos de deformación (DEF-) sobre control bones
-                    const isDeformBone = lower.startsWith('def-') || lower.startsWith('def_');
-                    const isControlBone = lower.includes('master') || lower.includes('(drv)') ||
-                        lower.includes('_drv') || lower.includes('ik') ||
-                        lower.includes('fk') || lower.includes('ctrl');
+                // Detectar labios y comisuras
+                const isLipTop = lower.includes('liptop') || lower.includes('lip.t') || lower.includes('lipt') || lower.includes('upperlip') || lower.includes('upper_lip');
+                const isLipBottom = lower.includes('lipbot') || lower.includes('lip.b') || lower.includes('lipb') || lower.includes('lowerlip') || lower.includes('lower_lip');
+                const isCornerLeft = lower.includes('corner') && lower.includes('l');
+                const isCornerRight = lower.includes('corner') && lower.includes('r');
 
-                    // Priorizar DEF-jaw central (sin L/R suffix) sobre los laterales
-                    const isCentralJaw = lower === 'def-jaw' || lower === 'jaw' || lower === 'lowerjaw';
-                    const isSideJaw = lower.includes('jawl') || lower.includes('jawr');
-
-                    // Solo asignar si:
-                    // 1. No tenemos uno aún
-                    // 2. Encontramos el jaw central (mejor que lateral)
-                    // 3. Es DEF- y no tenemos DEF- aún
-                    if (isCentralJaw) {
-                        // El jaw central siempre gana
-                        this.jawBone = bone;
-                        this.jawOriginalRotation = bone.rotation.clone();
-                        console.log(`👄 Jaw bone central encontrado: ${bone.name}`);
-                    } else if (!this.jawBone && isDeformBone && !isSideJaw) {
-                        // Fallback a DEF-jaw_master si no hay central
-                        this.jawBone = bone;
-                        this.jawOriginalRotation = bone.rotation.clone();
-                    } else if (!this.jawBone && !isControlBone) {
-                        // Último recurso: cualquier jaw que no sea de control
-                        this.jawBone = bone;
-                        this.jawOriginalRotation = bone.rotation.clone();
-                    }
+                if (isLipTop) {
+                    this.lipTopBones.push(bone);
+                    this.originalTransforms.set(bone.uuid, { rot: bone.rotation.clone(), pos: bone.position.clone() });
+                }
+                if (isLipBottom) {
+                    this.lipBottomBones.push(bone);
+                    this.originalTransforms.set(bone.uuid, { rot: bone.rotation.clone(), pos: bone.position.clone() });
+                }
+                if (isCornerLeft) {
+                    this.cornerLeftBones.push(bone);
+                    this.originalTransforms.set(bone.uuid, { rot: bone.rotation.clone(), pos: bone.position.clone() });
+                }
+                if (isCornerRight) {
+                    this.cornerRightBones.push(bone);
+                    this.originalTransforms.set(bone.uuid, { rot: bone.rotation.clone(), pos: bone.position.clone() });
                 }
             }
         });
+
+        // Calcular escala de posición (compensar exportaciones 0.01 de Blender)
+        this.positionScale = 1.0;
+        const refBone = this.lipTopBones[0] || this.jawBone;
+        if (refBone) {
+            const worldScale = new THREE.Vector3();
+            refBone.getWorldScale(worldScale);
+            if (worldScale.y > 0.0001 && worldScale.y < 0.1) {
+                this.positionScale = 1.0 / worldScale.y;
+                console.log(`📏 UniversalLipSync: Escala compensada detectada (x${this.positionScale})`);
+            }
+        }
 
         // Reportar resultado
         if (this.availableMorphs.size > 0) {
@@ -161,7 +200,7 @@ export class UniversalLipSync {
             if (SHOW_VERBOSE_LOGS) console.log(`👄 LipSync inicializado (MORPHS): ${morphNames.join(', ')}`);
             return { mode: 'morphs', details: `${this.availableMorphs.size} morphs: ${morphNames.slice(0, 5).join(', ')}` };
         } else if (this.jawBone) {
-            if (SHOW_VERBOSE_LOGS) console.log(`👄 LipSync inicializado (BONE): ${this.jawBone.name}`);
+            console.log(`👄 LipSync inicializado (BONE): ${this.jawBone.name}. Lips detectados: Top(${this.lipTopBones.length}), Bot(${this.lipBottomBones.length}), Corners(${this.cornerLeftBones.length + this.cornerRightBones.length})`);
             return { mode: 'bone', details: `Hueso: ${this.jawBone.name}` };
         } else {
             if (SHOW_VERBOSE_LOGS) console.log('👄 LipSync: Modelo sin soporte (sin morphs ni hueso de mandíbula)');
@@ -207,11 +246,15 @@ export class UniversalLipSync {
 
         // Analizar audio si está disponible
         if (this.analyser && this.dataArray) {
-            this.analyser.getByteFrequencyData(this.dataArray);
+            this.analyser.getByteFrequencyData(this.dataArray as any);
 
-            // Calcular intensidad
+            // Calcular intensidad (Promedio de frecuencias)
             const average = this.dataArray.reduce((a, b) => a + b, 0) / this.dataArray.length;
-            this.state.targetIntensity = Math.min(average / 180, 1); // Normalizar
+
+            // Umbral ajustado: Dividimos por un valor más bajo (90 en lugar de 180) para que voces suaves también muevan la boca.
+            // Usamos una curva no lineal (pow) para que responda mejor a cambios de volumen.
+            let normalized = Math.min(average / 90, 1.0);
+            this.state.targetIntensity = Math.pow(normalized, 1.2);
 
             // Detectar si hay habla
             if (this.state.targetIntensity > this.silenceThreshold) {
@@ -223,10 +266,20 @@ export class UniversalLipSync {
             }
         }
 
-        // Si se indica que está hablando, mantener estado
+        // Si se indica externamente que está hablando (ej: LLM generando texto)
         if (isSpeaking) {
             this.state.isSpeaking = true;
             this.state.lastSpeakTime = now;
+            
+            // Si el analizador de audio no está dando datos (estamos probando el botón "Hablar"),
+            // darle un pequeño empujón de intensidad fijo para que abra un poquito la boca si no hay audio,
+            // pero sin el ciclo procedimental loco.
+            if (this.state.targetIntensity < 0.1 && !this.analyser) {
+                this.state.targetIntensity = 0.5;
+                if (this.state.targetViseme === 'neutral') {
+                    this.state.targetViseme = 'A';
+                }
+            }
         }
 
         // Reset después de silencio
@@ -243,8 +296,27 @@ export class UniversalLipSync {
             this.smoothing
         );
 
-        // Aplicar al modelo
-        this.applyToModel();
+        // Actualizar visema actual
+        // Actualizar visema actual
+        this.state.currentViseme = this.state.targetViseme;
+
+        // 3. Aplicar al modelo
+        // Siempre aplicar morphs si existen
+        if (this.morphMeshes.length > 0 && this.availableMorphs.size > 0) {
+            this.applyMorphs(this.state.intensity);
+        }
+
+        // Siempre aplicar huesos si existen y no están deshabilitados
+        if (!this.disableBoneManipulation) {
+            // applyJawBone internamente aplica mandíbula, labios y comisuras
+            this.applyJawBone(this.state.intensity);
+        }
+    }
+
+    private speechFrameCount: number = 0;
+
+    public applyMorphTargets(intensity: number, viseme?: Viseme): void {
+        this.applyMorphs(intensity);
     }
 
     /**
@@ -269,11 +341,26 @@ export class UniversalLipSync {
         mid /= (midEnd - lowEnd);
         high /= (length - midEnd);
 
+        // Cadencia de habla (intercalar cierres bilabiales M/P de forma natural durante habla fluida)
+        this.speechFrameCount = (this.speechFrameCount || 0) + 1;
+
+        // Detectar cierre bilabial (M, P, B):
+        // 1. Murmullo nasal / baja energía en agudos y medios
+        // 2. Transición silábica cadenciada (cada ~16 a 22 frames de habla, cerrar labios brevemente)
+        const cadenceClosure = (this.speechFrameCount % 20) >= 16;
+        const isNasalResonance = (low > 0.18 && mid < 0.22 && high < 0.10);
+
+        if (isNasalResonance || cadenceClosure) {
+            return 'M'; // Cierre de labios bilabial (M, P, B)
+        }
+
         // Mapear a visemas basado en características de frecuencia
-        if (low > 0.4 && mid < 0.2) {
-            return 'O'; // Vocales graves, redondeadas
-        } else if (high > 0.3 && low < 0.2) {
+        if (high > 0.32 && low < 0.18) {
+            return 'F'; // Fricativa labiodental (F, V)
+        } else if (high > 0.28 && low < 0.2) {
             return 'I'; // Vocales agudas, estrechas
+        } else if (low > 0.4 && mid < 0.2) {
+            return 'O'; // Vocales graves, redondeadas
         } else if (mid > 0.35) {
             return 'A'; // Vocal abierta
         } else if (low > 0.25 && mid > 0.2) {
@@ -282,7 +369,7 @@ export class UniversalLipSync {
             return 'E'; // Vocal media
         }
 
-        return 'A'; // Default a boca abierta cuando hay sonido
+        return 'M'; // Fallback a labios juntos entre fonemas
     }
 
     /**
@@ -295,9 +382,12 @@ export class UniversalLipSync {
         if (this.availableMorphs.size > 0) {
             this.applyMorphs(intensity);
         }
-        // Método 2: Hueso de mandíbula (fallback)
-        else if (this.jawBone && this.jawOriginalRotation) {
-            this.applyJawBone(intensity);
+        
+        // Método 2: Hueso de mandíbula / labios
+        if (this.jawBone || this.lipTopBones.length > 0) {
+            if (!this.disableBoneManipulation) {
+                this.applyJawBone(intensity);
+            }
         }
     }
 
@@ -330,7 +420,7 @@ export class UniversalLipSync {
                 'M': ['viseme_PP'],
                 'TH': ['viseme_TH'],
                 'L': ['viseme_aa'],
-                'neutral': []
+                'neutral': ['viseme_PP']
             };
 
             const targets = mappings[viseme] || ['viseme_aa'];
@@ -344,41 +434,170 @@ export class UniversalLipSync {
     }
 
     /**
-     * Aplica lip sync via rotación de hueso de mandíbula
-     * Prueba diferentes ejes ya que cada modelo puede tener orientación diferente
+     * Aplica lip sync avanzado manipulando mandíbula, labios y comisuras
      */
     private applyJawBone(intensity: number): void {
-        if (!this.jawBone || !this.jawOriginalRotation) return;
-
-        // Amplificar intensidad para que sea más visible
+        const viseme = this.state.isSpeaking ? this.state.targetViseme : 'neutral';
         const adjustedIntensity = Math.min(intensity * 1.5, 1);
 
-        // Rotar mandíbula - probar múltiples ejes
-        // La mayoría de modelos usan X o Z para abrir la boca
-        const maxRotation = Math.PI / 6; // ~30 grados máximo
+        // Variables de target (relativas a las posiciones/rotaciones originales)
+        let jawRotX = 0;
+        let lipTopPosY = 0;
+        let lipTopPosZ = 0;
+        let lipBottomPosY = 0;
+        let lipBottomPosZ = 0;
+        let cornersPosX = 0; // Positivo = sonrisa/estirar
+        let cornersPosY = 0;
 
-        // Calcular target basado en eje X (rotación hacia abajo)
-        const targetX = this.jawOriginalRotation.x + (adjustedIntensity * maxRotation);
-        // También probar Z negativo (algunos modelos Blender)
-        const targetZ = this.jawOriginalRotation.z - (adjustedIntensity * maxRotation * 0.5);
-
-        // Aplicar suavizado
-        this.jawBone.rotation.x = THREE.MathUtils.lerp(
-            this.jawBone.rotation.x,
-            targetX,
-            this.smoothing * 1.5
-        );
-
-        this.jawBone.rotation.z = THREE.MathUtils.lerp(
-            this.jawBone.rotation.z,
-            targetZ,
-            this.smoothing * 1.5
-        );
-
-        // Debug para verificar que se está aplicando
-        if (SHOW_VERBOSE_LOGS && adjustedIntensity > 0.1 && Math.random() < 0.01) {
-            console.log(`👄 Jaw rotation: intensity=${adjustedIntensity.toFixed(2)}, x=${this.jawBone.rotation.x.toFixed(3)}`);
+        // Configuración de visemas basada en fonética
+        // ADVERTENCIA: La mandíbula en anime se mueve MUY POCO (Math.PI / 32 = 5.6 grados máx)
+        // Valores más altos rompen el mesh y esconden los dientes.
+        switch (viseme) {
+            case 'A':
+                jawRotX = Math.PI / 32; // Apertura original manual
+                lipTopPosY = 0;         // Quieto
+                lipBottomPosY = 0.001;  // (+) Baja casi nada (la mandíbula ya lo baja)
+                cornersPosX = -0.002;
+                break;
+            case 'O':
+                jawRotX = Math.PI / 32;
+                cornersPosX = -0.006;   // Fruncir suave
+                lipTopPosY = 0;
+                lipBottomPosY = 0.001;
+                lipTopPosZ = -0.005;    // (-) Empuja hacia adelante suavemente
+                lipBottomPosZ = -0.005;
+                break;
+            case 'E':
+                jawRotX = (Math.PI / 32) * 0.6; // 60% de A
+                lipTopPosY = 0;
+                lipBottomPosY = 0.001;
+                cornersPosX = 0.005;    // Sonrisa suave
+                cornersPosY = -0.002;   // Sube comisuras apenas
+                break;
+            case 'I':
+                jawRotX = (Math.PI / 32) * 0.3; // 30% de A
+                lipTopPosY = 0;
+                lipBottomPosY = 0.001;
+                cornersPosX = 0.008;    // Estirar un poco más que E
+                cornersPosY = -0.001;
+                break;
+            case 'U':
+                jawRotX = (Math.PI / 32) * 0.45; // 45% de A
+                cornersPosX = -0.008;   // Fruncir 
+                lipTopPosY = 0;
+                lipBottomPosY = 0.001;
+                lipTopPosZ = -0.006;    // Empujar hacia adelante
+                lipBottomPosZ = -0.006;
+                break;
+            case 'M':
+                // ¡CIERRE REAL DE LABIOS PARA M, P, B!
+                jawRotX = 0; // Mandíbula cerrada
+                lipTopPosY = -0.0018 * this.positionScale;   // Empujar labio superior abajo
+                lipBottomPosY = 0.0022 * this.positionScale; // Empujar labio inferior arriba a sellar
+                lipTopPosZ = 0.001 * this.positionScale;
+                lipBottomPosZ = 0.001 * this.positionScale;
+                cornersPosX = -0.003;
+                break;
+            case 'F':
+                jawRotX = (Math.PI / 32) * 0.12; // Mandíbula casi cerrada
+                lipTopPosY = -0.0005 * this.positionScale;
+                lipBottomPosY = 0.0020 * this.positionScale; // Labio inferior toca dientes superiores
+                break;
+            case 'TH':
+                jawRotX = (Math.PI / 32) * 0.2;
+                lipTopPosY = 0;
+                lipBottomPosY = 0;
+                break;
+            case 'neutral':
+            default:
+                jawRotX = 0;
+                lipTopPosY = 0;
+                lipBottomPosY = 0;
+                cornersPosX = 0;
+                cornersPosY = 0;
+                break;
         }
+
+        // Aplicar intensidad
+        jawRotX *= adjustedIntensity * this.jawMovementScale;
+        lipTopPosY *= adjustedIntensity;
+        lipTopPosZ *= adjustedIntensity;
+        lipBottomPosY *= adjustedIntensity;
+        lipBottomPosZ *= adjustedIntensity;
+        cornersPosX *= adjustedIntensity;
+        cornersPosY *= adjustedIntensity;
+
+        // 1. Aplicar Mandíbula
+        if (this.jawBone && this.jawOriginalRotation) {
+            const jawName = this.jawBone.name.toLowerCase();
+            const isDazModel = jawName.includes('lowerjaw') || jawName.includes('genesis');
+
+            if (isDazModel || (window as any).forceJawAxisZ) {
+                // DAZ/otros: rotación en Z (hacia abajo)
+                // Restamos jawRotX porque Z negativo suele abrir la mandíbula
+                const targetJawZ = this.jawOriginalRotation.z - jawRotX;
+                this.jawBone.rotation.z = THREE.MathUtils.lerp(
+                    this.jawBone.rotation.z,
+                    targetJawZ,
+                    this.smoothing * 1.5
+                );
+            } else {
+                // Blender/otros: rotación en X
+                const targetJawX = this.jawOriginalRotation.x + jawRotX;
+                this.jawBone.rotation.x = THREE.MathUtils.lerp(
+                    this.jawBone.rotation.x,
+                    targetJawX,
+                    this.smoothing * 1.5
+                );
+            }
+        }
+
+        // 2. Aplicar Labio Superior
+        this.lipTopBones.forEach(bone => {
+            const orig = this.originalTransforms.get(bone.uuid);
+            if (orig) {
+                const isRight = bone.name.toLowerCase().includes('.r') || bone.name.toLowerCase().includes('_r') || bone.name.toLowerCase().includes('right');
+                const isLeft = bone.name.toLowerCase().includes('.l') || bone.name.toLowerCase().includes('_l') || bone.name.toLowerCase().includes('left');
+                const cornerX = isRight ? -cornersPosX : (isLeft ? cornersPosX : 0); 
+                
+                bone.position.y = THREE.MathUtils.lerp(bone.position.y, orig.pos.y + this.restingTopLipOffsetY + lipTopPosY, this.smoothing * 1.5);
+                bone.position.z = THREE.MathUtils.lerp(bone.position.z, orig.pos.z + lipTopPosZ, this.smoothing * 1.5);
+                bone.position.x = THREE.MathUtils.lerp(bone.position.x, orig.pos.x + cornerX, this.smoothing * 1.5);
+            }
+        });
+
+        // 3. Aplicar Labio Inferior
+        this.lipBottomBones.forEach(bone => {
+            const orig = this.originalTransforms.get(bone.uuid);
+            if (orig) {
+                const isRight = bone.name.toLowerCase().includes('.r') || bone.name.toLowerCase().includes('_r') || bone.name.toLowerCase().includes('right');
+                const isLeft = bone.name.toLowerCase().includes('.l') || bone.name.toLowerCase().includes('_l') || bone.name.toLowerCase().includes('left');
+                const cornerX = isRight ? -cornersPosX * 0.7 : (isLeft ? cornersPosX * 0.7 : 0);
+                
+                bone.position.y = THREE.MathUtils.lerp(bone.position.y, orig.pos.y + lipBottomPosY, this.smoothing * 1.5);
+                bone.position.z = THREE.MathUtils.lerp(bone.position.z, orig.pos.z + lipBottomPosZ, this.smoothing * 1.5);
+                bone.position.x = THREE.MathUtils.lerp(bone.position.x, orig.pos.x + cornerX, this.smoothing * 1.5);
+            }
+        });
+
+        // 4. Aplicar Comisuras
+        this.cornerLeftBones.forEach(bone => {
+            const orig = this.originalTransforms.get(bone.uuid);
+            if (orig) {
+                // En Blender, Left corner +X va hacia la izquierda (afuera), depende de simetría
+                bone.position.x = THREE.MathUtils.lerp(bone.position.x, orig.pos.x + cornersPosX, this.smoothing * 1.5);
+                bone.position.y = THREE.MathUtils.lerp(bone.position.y, orig.pos.y + cornersPosY, this.smoothing * 1.5);
+            }
+        });
+
+        this.cornerRightBones.forEach(bone => {
+            const orig = this.originalTransforms.get(bone.uuid);
+            if (orig) {
+                // Right corner -X va hacia la derecha (afuera), asumimos simetría
+                bone.position.x = THREE.MathUtils.lerp(bone.position.x, orig.pos.x - cornersPosX, this.smoothing * 1.5);
+                bone.position.y = THREE.MathUtils.lerp(bone.position.y, orig.pos.y + cornersPosY, this.smoothing * 1.5);
+            }
+        });
     }
 
     /**
@@ -405,6 +624,22 @@ export class UniversalLipSync {
         if (this.jawBone && this.jawOriginalRotation) {
             this.jawBone.rotation.copy(this.jawOriginalRotation);
         }
+
+        // Reset advanced bones
+        const resetBones = (bones: THREE.Bone[]) => {
+            bones.forEach(bone => {
+                const orig = this.originalTransforms.get(bone.uuid);
+                if (orig) {
+                    bone.rotation.copy(orig.rot);
+                    bone.position.copy(orig.pos);
+                }
+            });
+        };
+
+        resetBones(this.lipTopBones);
+        resetBones(this.lipBottomBones);
+        resetBones(this.cornerLeftBones);
+        resetBones(this.cornerRightBones);
     }
 
     /**
@@ -438,6 +673,13 @@ export class UniversalLipSync {
      */
     getState(): LipSyncState {
         return this.state;
+    }
+
+    /**
+     * Obtiene el nombre del hueso de mandíbula detectado (para depuración)
+     */
+    getJawBoneName(): string {
+        return this.jawBone ? this.jawBone.name : 'NINGUNO_DETECTADO';
     }
 
     /**

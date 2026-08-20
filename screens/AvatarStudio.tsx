@@ -8,6 +8,7 @@ import AvatarViewer3D from '../components/AvatarViewer3D';
 import { animationStore, StoredAnimation } from '../utils/animationStore';
 import { AvatarSettings } from '../types';
 import { BoneMappingResult } from '../utils/mixamoRetargeter';
+import { AvatarLearningService, AvatarPreference } from '../services/AvatarLearningService';
 
 // --- Error Boundary local para evitar crasheos del motor 3D ---
 class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback: React.ReactNode}, {hasError: boolean}> {
@@ -67,7 +68,7 @@ const HAIR_COLORS = [
   { color: '#1a1a1a', name: 'Negro' },
 ];
 
-type Tab = 'model' | 'gestures' | 'animations' | 'clothing' | 'calibration';
+type Tab = 'model' | 'gestures' | 'animations' | 'clothing' | 'calibration' | 'learning';
 
 const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allowWebSearch, setAllowWebSearch }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -81,6 +82,13 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const [boneMapping, setBoneMapping] = useState<BoneMappingResult[]>([]);
   const [boneMappingRaw, setBoneMappingRaw] = useState<Record<string, string>>({});
   const [modelBones, setModelBones] = useState<string[]>([]);
+  const [prefResetTrigger, setPrefResetTrigger] = useState(0);
+
+  useEffect(() => {
+    const handleReset = () => setPrefResetTrigger(prev => prev + 1);
+    window.addEventListener('nova-avatar-prefs-reset', handleReset);
+    return () => window.removeEventListener('nova-avatar-prefs-reset', handleReset);
+  }, []);
   const [availableModels, setAvailableModels] = useState<{name: string, url: string, emoji?: string}[]>([]);
   const [jointValues, setJointValues] = useState<Record<string, number>>({
     rightArmX: -80,
@@ -212,15 +220,16 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     { id: 'gestures', label: 'Gestos', icon: 'waving_hand' },
     { id: 'animations', label: 'Anims', icon: 'animation' },
     { id: 'calibration', label: 'Calibrar', icon: 'tune' },
+    { id: 'learning', label: 'Aprendizaje', icon: 'psychology' },
   ];
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-col md:flex-row h-full overflow-hidden bg-[#0e0e18]">
       {/* LEFT PANEL - Controles */}
-      <div className="w-[360px] shrink-0 bg-[#0e0e18] border-r border-white/5 flex flex-col overflow-hidden">
-        <div className="px-5 pt-5 pb-3">
-          <h1 className="text-lg font-bold flex items-center gap-2">
-            <span className="material-symbols-outlined text-xl text-violet-400">theater_comedy</span>
+      <div className="w-full md:w-[340px] lg:w-[380px] shrink-0 bg-[#0e0e18] border-b md:border-b-0 md:border-r border-white/5 flex flex-col overflow-hidden max-h-[45vh] md:max-h-full">
+        <div className="px-4 sm:px-5 pt-3 sm:pt-5 pb-2 sm:pb-3">
+          <h1 className="text-base sm:text-lg font-bold flex items-center gap-2">
+            <span className="material-symbols-outlined text-lg sm:text-xl text-violet-400">theater_comedy</span>
             Avatar Studio
           </h1>
         </div>
@@ -661,6 +670,63 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               </details>
             )}
           </>)}
+
+          {/* ═══ TAB: APRENDIZAJE ═══ */}
+          {activeTab === 'learning' && (
+            <div className="space-y-4">
+              <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4 space-y-4">
+                <label className="text-[10px] font-black text-violet-400 uppercase tracking-widest block flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-xs">psychology</span>
+                  Preferencias de Avatar Aprendidas
+                </label>
+
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Nova aprende de forma autónoma qué avatar prefieres según el contexto de la conversación (temas, estados de ánimo o la hora del día).
+                </p>
+
+                {AvatarLearningService.getLocalPreferences().length === 0 ? (
+                  <div className="text-center py-6 border border-dashed border-white/5 rounded-xl">
+                    <span className="material-symbols-outlined text-xl text-slate-600 block mb-1">sentiment_neutral</span>
+                    <p className="text-[9px] text-slate-500">Aún no he aprendido ninguna preferencia. ¡Habla conmigo para empezar!</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {AvatarLearningService.getLocalPreferences()
+                      .sort((a, b) => b.confidence - a.confidence)
+                      .map((pref, idx) => (
+                        <div key={idx} className="bg-white/[0.01] border border-white/5 rounded-lg p-2.5 flex items-center justify-between text-[10px]">
+                          <div>
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="text-[9px] bg-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded font-mono uppercase">
+                                {pref.context_type === 'explicit' ? '💬 explícito' : pref.context_type === 'mood' ? '🎭 emoción' : pref.context_type === 'topic' ? '📚 tema' : '🕒 hora'}
+                              </span>
+                              <span className="text-slate-300 font-bold capitalize">{pref.context_value}</span>
+                            </div>
+                            <div className="text-slate-400">
+                              Avatar preferido: <span className="text-violet-300 font-bold">{pref.avatar_name}</span>
+                            </div>
+                          </div>
+                          <div className="text-right flex flex-col items-end">
+                            <span className="text-violet-400 font-bold font-mono">{(pref.confidence * 100).toFixed(0)}%</span>
+                            <span className="text-[8px] text-slate-500">{pref.hits}/{pref.total_uses} usos</span>
+                          </div>
+                        </div>
+                      ))}
+
+                    <button
+                      onClick={() => {
+                        AvatarLearningService.resetPreferences();
+                        window.dispatchEvent(new Event('nova-avatar-prefs-reset'));
+                      }}
+                      className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white border border-red-500/30 rounded-lg py-2 mt-2 transition-all font-bold uppercase tracking-wider text-[9px]"
+                    >
+                      Resetear Aprendizaje
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

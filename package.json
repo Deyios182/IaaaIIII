@@ -11,7 +11,9 @@
     "dev:web": "vite --config vite.config.web.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:build": "npm run build && electron-builder"
+    "electron:build": "npm run build && electron-builder",
+    "gym:server": "node --watch gym-server/gym-server.cjs",
+    "gym:install": "cd gym-server && npm install ws && cd .."
   },
   "build": {
     "appId": "com.nova.ia",
@@ -46,6 +48,7 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.2",
     "@react-three/postprocessing": "^3.0.4",
+    "@react-three/rapier": "^2.2.0",
     "@supabase/supabase-js": "^2.89.0",
     "@vladmandic/face-api": "^1.7.15",
     "face-api.js": "^0.22.2",
@@ -53,7 +56,8 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.11.0",
-    "three": "^0.182.0"
+    "three": "^0.182.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

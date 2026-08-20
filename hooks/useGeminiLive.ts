@@ -42,8 +42,8 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
     // 🆕 Safety timeout para evitar que isAiSpeaking se quede atascado
     const speakingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const speakingStartTimeRef = useRef<number>(0);
-    const MAX_SPEAKING_DURATION = 10000; // 10 segundos max continuo
-    const AUDIO_SILENCE_TIMEOUT = 2000; // 2 segundos de silencio para considerar que terminó
+    const MAX_SPEAKING_DURATION = 60000; // 60 segundos max continuo
+    const AUDIO_SILENCE_TIMEOUT = 3000; // 3 segundos de silencio para considerar que terminó
 
     const connect = useCallback(async () => {
         if (!config.apiKey) {
@@ -57,7 +57,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
             const ai = new GoogleGenAI({ apiKey: config.apiKey });
 
             const session = await ai.live.connect({
-                model: config.model || 'gemini-2.5-flash-native-audio-preview-09-2025',
+                model: config.model || 'gemini-2.5-flash-native-audio-preview-12-2025',
                 callbacks: {
                     onopen: () => {
                         console.log('✅ Gemini Live: Connected');
@@ -189,7 +189,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         if (!sessionRef.current) return;
         try {
             sessionRef.current.sendRealtimeInput({
-                media: {
+                audio: {
                     data: encodeBase64(new Uint8Array(pcmData.buffer)),
                     mimeType: 'audio/pcm;rate=16000'
                 }
@@ -212,7 +212,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         if (!sessionRef.current) return;
         try {
             sessionRef.current.sendRealtimeInput({
-                media: { data: base64Data, mimeType: 'image/jpeg' }
+                video: { data: base64Data, mimeType: 'image/jpeg' }
             });
         } catch (err) {
             console.error('Error sending image:', err);

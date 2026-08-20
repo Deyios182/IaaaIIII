@@ -299,3 +299,24 @@ $$;
 -- ============ VERIFICATION ============
 SELECT 'Schema updated successfully! Vector search enabled.' AS status;
 SELECT username, is_pro FROM nova_profiles WHERE id = '11111111-1111-1111-1111-111111111111';
+
+-- ============ NOVA_SKILLS (Habilidades aprendidas) ============
+CREATE TABLE IF NOT EXISTS nova_skills (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES nova_profiles(id) ON DELETE CASCADE,
+    trigger_phrase TEXT NOT NULL,
+    behavior TEXT NOT NULL,
+    learned_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nova_skills_user ON nova_skills(user_id);
+
+ALTER TABLE nova_skills ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "nova_skills_public_access" ON nova_skills;
+CREATE POLICY "nova_skills_public_access"
+    ON nova_skills
+    FOR ALL
+    USING (user_id = '11111111-1111-1111-1111-111111111111')
+    WITH CHECK (user_id = '11111111-1111-1111-1111-111111111111');
+

@@ -82,24 +82,24 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
   };
 
   return (
-    <div className="flex-1 px-8 py-8 overflow-y-auto custom-scrollbar">
-      <div className="max-w-4xl mx-auto flex flex-col gap-8">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-black tracking-tight">Voz y Tono de Intimidad</h1>
-          <p className="text-slate-400 text-lg">Define cómo vibra el audio de Nova en tus oídos.</p>
+    <div className="flex-1 px-4 sm:px-8 py-5 sm:py-8 overflow-y-auto custom-scrollbar">
+      <div className="max-w-4xl mx-auto flex flex-col gap-6 sm:gap-8">
+        <div className="flex flex-col gap-1.5 sm:gap-2">
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Voz y Tono de Intimidad</h1>
+          <p className="text-slate-400 text-sm sm:text-lg">Define cómo vibra el audio de Nova en tus oídos.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-          <div className="md:col-span-8 space-y-8">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 sm:gap-8">
+          <div className="md:col-span-8 space-y-6 sm:space-y-8">
             {/* Presets Quick Actions */}
-            <div className="rounded-2xl border border-white/10 bg-surface-dark p-6">
-              <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-4">Ajustes Rápidos de Personalidad</h2>
-              <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-white/10 bg-surface-dark p-4 sm:p-6">
+              <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest text-slate-500 mb-3 sm:mb-4">Ajustes Rápidos de Personalidad</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
                 {presets.map(p => (
                   <button
                     key={p.label}
                     onClick={() => updateAvatar({ voiceTone: p.tone })}
-                    className="p-3 bg-white/5 rounded-xl border border-white/10 text-[10px] font-bold hover:bg-white/10 transition-all text-left"
+                    className="p-3 bg-white/5 rounded-xl border border-white/10 text-[11px] font-bold hover:bg-white/10 transition-all text-left"
                   >
                     {p.label}
                   </button>

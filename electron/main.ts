@@ -4,6 +4,48 @@ import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import fs from 'fs';
 
+// ============================================================
+// HELPER: Verifica si un proceso está corriendo (Windows)
+// Devuelve true si se encuentra el proceso en tasklist
+// ============================================================
+function checkIfProcessRunning(processName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        // tasklist /FI filtra por nombre de imagen, /NH sin cabecera, /FO CSV formato
+        exec(`tasklist /FI "IMAGENAME eq ${processName}*" /NH /FO CSV`, (error, stdout) => {
+            if (error) {
+                resolve(false);
+                return;
+            }
+            // Si el output contiene el nombre del proceso, está corriendo
+            const isRunning = stdout.toLowerCase().includes(processName.toLowerCase());
+            resolve(isRunning);
+        });
+    });
+}
+
+// Mapeo de nombre amigable → nombre de proceso en Windows
+const PROCESS_NAMES: Record<string, string> = {
+    'chrome': 'chrome.exe',
+    'firefox': 'firefox.exe',
+    'edge': 'msedge.exe',
+    'msedge': 'msedge.exe',
+    'brave': 'brave.exe',
+    'discord': 'discord.exe',
+    'spotify': 'spotify.exe',
+    'steam': 'steam.exe',
+    'code': 'code.exe',
+    'vscode': 'code.exe',
+    'notepad': 'notepad.exe',
+    'calc': 'calculator.exe',
+    'wt': 'wt.exe',
+    'cmd': 'cmd.exe',
+    'powershell': 'powershell.exe',
+    'explorer': 'explorer.exe',
+    'zoom': 'zoom.exe',
+    'slack': 'slack.exe',
+    'teams': 'teams.exe',
+};
+
 // ES Module compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,7 +76,7 @@ interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = {
     autoStart: false,
-    startMode: 'tray'
+    startMode: 'normal'
 };
 
 let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
@@ -78,12 +120,16 @@ function saveSettings(settings: AppSettings) {
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
 
 function createWindow() {
+    const iconPath = path.join(process.env.VITE_PUBLIC || '', 'nova-icon.png');
+    const hasIcon = fs.existsSync(iconPath);
+
     win = new BrowserWindow({
+        title: 'Nova IA',
         width: 1400,
         height: 900,
         minWidth: 1000,
         minHeight: 700,
-        icon: path.join(process.env.VITE_PUBLIC!, 'nova-icon.png'),
+        ...(hasIcon ? { icon: iconPath } : {}),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -92,17 +138,47 @@ function createWindow() {
         frame: false, // Sin barra de título nativa
         transparent: false, // Fondo opaco
         backgroundColor: '#08080c',
-        show: false, // No mostrar hasta que esté listo
+        show: true, // Mostrar de inmediato
     });
+
+    win.center();
+    win.show();
+    win.focus();
+    win.setAlwaysOnTop(true);
+    win.setAlwaysOnTop(false);
 
     // Mostrar ventana cuando esté lista
     win.once('ready-to-show', () => {
         win?.show();
+        win?.focus();
+        win?.setAlwaysOnTop(true);
+        win?.setAlwaysOnTop(false);
     });
 
     // Cargar la app
-    if (VITE_DEV_SERVER_URL) {
-        win.loadURL(VITE_DEV_SERVER_URL);
+    const targetUrl = VITE_DEV_SERVER_URL || 'http://localhost:3001';
+    if (VITE_DEV_SERVER_URL || !app.isPackaged) {
+        let isLoaded = false;
+        const loadDevUrl = () => {
+            if (isLoaded || !win) return;
+            win.loadURL(targetUrl).catch(() => {
+                setTimeout(loadDevUrl, 500);
+            });
+        };
+
+        win.webContents.on('did-finish-load', () => {
+            isLoaded = true;
+            win?.show();
+            win?.focus();
+        });
+
+        win.webContents.on('did-fail-load', (_event, errorCode) => {
+            if (!isLoaded && (errorCode === -102 || errorCode === -105 || errorCode === -100)) {
+                setTimeout(loadDevUrl, 500);
+            }
+        });
+
+        loadDevUrl();
         win.webContents.openDevTools(); // Abrir DevTools en desarrollo
     } else {
         win.loadFile(path.join(process.env.DIST!, 'index.html'));
@@ -114,20 +190,33 @@ function createWindow() {
             event.preventDefault();
             win?.hide();
             // Notificar al usuario que está en tray
-            if (tray) {
-                tray.displayBalloon({
-                    title: 'Nova IA',
-                    content: 'Nova está ejecutándose en segundo plano. Usa Alt+N para mostrarla.',
-                    icon: path.join(process.env.VITE_PUBLIC!, 'nova-icon.png')
-                });
+            if (tray && typeof tray.displayBalloon === 'function' && hasIcon) {
+                try {
+                    tray.displayBalloon({
+                        title: 'Nova IA',
+                        content: 'Nova está ejecutándose en segundo plano. Usa Alt+N para mostrarla.',
+                        icon: iconPath
+                    });
+                } catch (_) {}
             }
         }
     });
 }
 
 function createTray() {
-    // Crear icono para tray (usa un icono genérico por ahora)
-    const icon = nativeImage.createEmpty();
+    const iconPath = path.join(process.env.VITE_PUBLIC || '', 'nova-icon.png');
+    const icon = fs.existsSync(iconPath)
+        ? nativeImage.createFromPath(iconPath)
+        : nativeImage.createFromBuffer(Buffer.from([
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0xf3, 0xff, 0x61, 0x00, 0x00, 0x00,
+            0x19, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x60, 0x60, 0xf8,
+            0xcf, 0xc0, 0x80, 0xe1, 0xc4, 0x8c, 0x1c, 0x00, 0x24, 0x5d, 0x01, 0x10,
+            0x00, 0x00, 0xff, 0xff, 0x03, 0x00, 0x00, 0x01, 0x00, 0x01, 0x7e, 0x40,
+            0x4c, 0x4a, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
+            0x60, 0x82
+        ]));
     tray = new Tray(icon);
 
     const contextMenu = Menu.buildFromTemplate([
@@ -334,14 +423,16 @@ app.whenReady().then(() => {
         'epicgames': 'com.epicgames.launcher://',
     };
 
-    // Abrir aplicación
+    // Abrir aplicación — con detección de proceso ya corriendo
+    // Abrir aplicación — con apertura forzada de ventana/pestaña
     ipcMain.handle('system:open-app', async (_event: any, appName: string) => {
         try {
             const normalizedName = appName.toLowerCase().trim();
 
-            // 1. Intentar alias directos
+            // 1. Resolver el comando/URI de la app
             let command = APP_COMMANDS[normalizedName];
 
+            // 2. Si hay comando o alias conocido, abrir directamente (crea ventana/pestaña nueva)
             if (command) {
                 console.log('🚀 Abriendo app (Alias):', normalizedName, '→', command);
                 if (command.includes('://')) {
@@ -349,14 +440,10 @@ app.whenReady().then(() => {
                 } else {
                     exec(`start "" "${command}"`);
                 }
-                return { success: true };
+                return { success: true, alreadyOpen: false, appName };
             }
 
-            // 2. Intentar ejecución directa (por si está en PATH)
-            // Esto cubre "notepad", "calc", etc. si no estuvieran en el mapa
-            // Pero "start name" a veces falla si no es exacto.
-
-            // 3. Búsqueda inteligente via PowerShell (Start Menu)
+            // 3. Detección de proceso + Búsqueda inteligente via PowerShell (Start Menu)
             console.log('🔍 Buscando app en sistema:', appName);
             const psCommand = `Get-StartApps | Where-Object { $_.Name -like "*${appName}*" } | Select-Object -First 1`;
 
@@ -367,28 +454,24 @@ app.whenReady().then(() => {
                             const appInfo = JSON.parse(stdout);
                             const appId = appInfo.AppID;
                             console.log('🚀 App encontrada:', appInfo.Name, 'ID:', appId);
-
-                            // Abrir usando shell:AppsFolder
                             exec(`explorer "shell:AppsFolder\\${appId}"`, (err) => {
                                 if (err) console.error('Error lanzando AppID:', err);
                             });
-                            resolve({ success: true, message: `Abriendo ${appInfo.Name}` });
+                            resolve({ success: true, alreadyOpen: false, appName: appInfo.Name });
                         } catch (e) {
-                            // Fallback a intento directo
                             exec(`start "" "${appName}"`, (err) => {
-                                if (err) resolve({ success: false, error: 'No encontrada' });
-                                else resolve({ success: true });
+                                if (err) resolve({ success: false, notFound: true, appName });
+                                else resolve({ success: true, alreadyOpen: false, appName });
                             });
                         }
                     } else {
-                        // Fallback final: Intentar lanzar el comando directo
                         console.log('⚠️ No encontrada en Start Apps, intentando ejecución directa:', appName);
                         exec(`start "" "${appName}"`, (err) => {
                             if (err) {
                                 console.error('Error final:', err);
-                                resolve({ success: false, error: 'Aplicación no encontrada' });
+                                resolve({ success: false, notFound: true, appName });
                             } else {
-                                resolve({ success: true });
+                                resolve({ success: true, alreadyOpen: false, appName });
                             }
                         });
                     }
@@ -401,14 +484,60 @@ app.whenReady().then(() => {
         }
     });
 
-    // Abrir URL
-    ipcMain.handle('system:open-url', async (_event: any, url: string) => {
+    // Obtener lista de procesos corriendo (para self-awareness de Nova)
+    ipcMain.handle('system:get-running-apps', async () => {
+        return new Promise((resolve) => {
+            exec('tasklist /NH /FO CSV', (error, stdout) => {
+                if (error) {
+                    resolve([]);
+                    return;
+                }
+                // Parsear CSV: "nombre.exe",PID,"session",num,"memoria"
+                const apps = stdout
+                    .split('\n')
+                    .filter(line => line.trim())
+                    .map(line => {
+                        const parts = line.split(',');
+                        return parts[0]?.replace(/"/g, '').replace('.exe', '').toLowerCase();
+                    })
+                    .filter(Boolean);
+                // Deduplicar y retornar lista limpia
+                resolve([...new Set(apps)]);
+            });
+        });
+    });
+
+    // Abrir URL con codificación segura (espacios, acentos) y fallback a Windows start
+    // Abrir URL con codificación segura de espacios/acentos y ejecución infalible en Windows
+    ipcMain.handle('system:open-url', async (_event: any, rawUrl: string) => {
         try {
-            await shell.openExternal(url);
-            console.log('🌐 Abriendo URL:', url);
+            let formattedUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+            try {
+                // Encode URI y reemplazar espacios no codificados por %20
+                formattedUrl = encodeURI(formattedUrl).replace(/ /g, '%20');
+            } catch (encErr) {
+                formattedUrl = formattedUrl.replace(/ /g, '%20');
+            }
+
+            console.log('🌐 [Electron Main] Abriendo URL:', formattedUrl);
+            
+            // Intentar shell.openExternal
+            try {
+                await shell.openExternal(formattedUrl);
+            } catch (shellErr) {
+                console.warn('⚠️ shell.openExternal falló:', shellErr);
+            }
+
+            // Ejecutar cmd start en Windows para garantizar apertura física en el navegador predeterminado
+            if (process.platform === 'win32') {
+                exec(`cmd /c start "" "${formattedUrl}"`, (err) => {
+                    if (err) console.error('❌ Error en cmd start fallback:', err);
+                });
+            }
+
             return { success: true };
         } catch (e) {
-            console.error('Error abriendo URL:', e);
+            console.error('❌ Error abriendo URL:', e);
             return { success: false, error: String(e) };
         }
     });
@@ -478,18 +607,173 @@ app.whenReady().then(() => {
         }
     });
 
-    // Buscar archivos (abre explorador con búsqueda)
+    // Buscar archivos o abrir ruta (con validación previa)
     ipcMain.handle('system:search-files', async (_event: any, query: string) => {
         try {
             if (process.platform === 'win32') {
-                exec(`explorer "search-ms:query=${query}"`, (error: any) => {
-                    if (error) console.error('Error buscando:', error);
+                // Si el query parece una ruta de archivo/carpeta, validar que exista
+                const looksLikePath = query.includes('\\') || query.includes('/') || /^[A-Za-z]:\//.test(query);
+                if (looksLikePath) {
+                    if (!fs.existsSync(query)) {
+                        console.warn('⚠️ [Nova] Ruta no encontrada:', query);
+                        return { success: false, notFound: true, query };
+                    }
+                    // Ruta existe: abrir directamente con explorer
+                    exec(`explorer "${query}"`);
+                    console.log('📂 Abriendo ruta:', query);
+                    return { success: true };
+                }
+                // Query de texto: abrir búsqueda de Windows Explorer
+                const encoded = encodeURIComponent(query);
+                exec(`explorer "search-ms:query=${encoded}&crumb=location:C%3A%5C"`, (error: any) => {
+                    if (error) console.error('Error buscando archivos:', error);
                 });
             }
             console.log('🔍 Buscando archivos:', query);
             return { success: true };
         } catch (e) {
             console.error('Error buscando archivos:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // KEYBOARD AND MOUSE AUTOMATION (WINDOWS NATIVE)
+
+    // Clic de mouse (izquierdo, derecho, doble) y movimiento opcional
+    ipcMain.handle('system:mouse-click', async (_event: any, options: { x?: number; y?: number; button?: 'left' | 'right' | 'middle'; double?: boolean }) => {
+        try {
+            const { x, y, button = 'left', double = false } = options || {};
+            const isRight = button === 'right';
+            const isMiddle = button === 'middle';
+
+            const downFlag = isRight ? 0x0008 : isMiddle ? 0x0020 : 0x0002;
+            const upFlag = isRight ? 0x0010 : isMiddle ? 0x0040 : 0x0004;
+
+            let psCmd = `if (-not ([System.Management.Automation.PSTypeName]'WinMouse').Type) { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMouse { [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo); }'; } `;
+            
+            if (typeof x === 'number' && typeof y === 'number') {
+                psCmd += `[WinMouse]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}); Start-Sleep -Milliseconds 50; `;
+            }
+
+            psCmd += `[WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0); [WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0);`;
+
+            if (double) {
+                psCmd += ` Start-Sleep -Milliseconds 100; [WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0); [WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0);`;
+            }
+
+            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            console.log('🖱️ Mouse click:', button, { x, y, double });
+            return { success: true };
+        } catch (e) {
+            console.error('Error en mouse-click:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Mover mouse
+    ipcMain.handle('system:mouse-move', async (_event: any, options: { x: number; y: number }) => {
+        try {
+            const { x, y } = options;
+            const psCmd = `if (-not ([System.Management.Automation.PSTypeName]'WinMouseMove').Type) { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMouseMove { [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); }'; } [WinMouseMove]::SetCursorPos(${Math.round(x)}, ${Math.round(y)});`;
+            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            console.log('🖱️ Mouse move:', x, y);
+            return { success: true };
+        } catch (e) {
+            console.error('Error en mouse-move:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Escribir texto
+    ipcMain.handle('system:type-text', async (_event: any, text: string) => {
+        try {
+            if (!text) return { success: false, error: 'Texto vacío' };
+            const escaped = text.replace(/'/g, "''").replace(/[\+\^\%~\(\)\{\}\[\]]/g, '{$&}');
+            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')`;
+            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            console.log('⌨️ Escribiendo texto:', text);
+            return { success: true };
+        } catch (e) {
+            console.error('Error en type-text:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Presionar tecla o combinación
+    ipcMain.handle('system:press-key', async (_event: any, keyString: string) => {
+        try {
+            const lower = keyString.toLowerCase().trim();
+
+            if (lower === 'win+d' || lower === 'desktop') {
+                exec(`powershell -NoProfile -Command "(New-Object -ComObject Shell.Application).ToggleDesktop()"`);
+                return { success: true };
+            }
+
+            const KEY_MAP: Record<string, string> = {
+                'enter': '{ENTER}',
+                'intro': '{ENTER}',
+                'tab': '{TAB}',
+                'esc': '{ESC}',
+                'escape': '{ESC}',
+                'backspace': '{BACKSPACE}',
+                'delete': '{DELETE}',
+                'up': '{UP}',
+                'down': '{DOWN}',
+                'left': '{LEFT}',
+                'right': '{RIGHT}',
+                'space': ' ',
+                'ctrl+c': '^c',
+                'ctrl+v': '^v',
+                'ctrl+a': '^a',
+                'ctrl+z': '^z',
+                'ctrl+s': '^s',
+                'alt+tab': '%{TAB}',
+                'alt+f4': '%{F4}',
+            };
+
+            const sendKeysValue = KEY_MAP[lower] || (lower.length === 1 ? lower : `{${lower.toUpperCase()}}`);
+            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${sendKeysValue}')`;
+            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            console.log('⌨️ Tecla presionada:', keyString, '→', sendKeysValue);
+            return { success: true };
+        } catch (e) {
+            console.error('Error en press-key:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Control de ventanas del sistema (Minimizar, Maximizar, Restaurar)
+    ipcMain.handle('system:window-control', async (_event: any, options: { action: 'minimize' | 'maximize' | 'restore' | 'minimize_all'; target?: string }) => {
+        try {
+            const { action, target } = options || {};
+
+            if (action === 'minimize_all') {
+                exec(`powershell -NoProfile -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"`);
+                console.log('🪟 Ventanas: Minimizar todo');
+                return { success: true };
+            }
+
+            const showCmdMap: Record<string, number> = {
+                'minimize': 6, // SW_MINIMIZE
+                'maximize': 3, // SW_MAXIMIZE
+                'restore': 9   // SW_RESTORE
+            };
+            const cmdCode = showCmdMap[action] || 3;
+
+            let psCmd = `if (-not ([System.Management.Automation.PSTypeName]'WinControl').Type) { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinControl { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); }'; } `;
+
+            if (target && target.trim() && target.toLowerCase() !== 'current' && target.toLowerCase() !== 'active') {
+                const cleanTarget = target.trim().replace(/['"]/g, '');
+                psCmd += `Get-Process | Where-Object { ($_.MainWindowTitle -like '*${cleanTarget}*' -or $_.ProcessName -like '*${cleanTarget}*') -and $_.MainWindowHandle -ne [IntPtr]::Zero } | ForEach-Object { [WinControl]::ShowWindow($_.MainWindowHandle, ${cmdCode}); [WinControl]::SetForegroundWindow($_.MainWindowHandle) }`;
+            } else {
+                psCmd += `$hwnd = [WinControl]::GetForegroundWindow(); if ($hwnd -ne [IntPtr]::Zero) { [WinControl]::ShowWindow($hwnd, ${cmdCode}) }`;
+            }
+
+            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            console.log('🪟 Control de Ventana:', action, target || 'activa');
+            return { success: true };
+        } catch (e) {
+            console.error('Error en window-control:', e);
             return { success: false, error: String(e) };
         }
     });

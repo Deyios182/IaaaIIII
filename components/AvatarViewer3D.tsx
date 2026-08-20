@@ -2,7 +2,6 @@ import React, { useRef, useEffect, Suspense, useState } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei';
 import { EffectComposer, Bloom, ToneMapping, Vignette } from '@react-three/postprocessing';
-import { ToneMappingMode } from 'postprocessing';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import * as THREE from 'three';
@@ -19,6 +18,10 @@ import { MaterialManager } from '../utils/materialManager';
 import { ProceduralAnimator } from '../utils/proceduralAnimations';
 import { isMixamoAnimation, retargetMixamoClip, getModelBoneNames } from '../utils/mixamoRetargeter';
 import { SimplexNoise } from '../utils/perlin';
+import { AvatarInteractionLayer, type InteractionLayerRef } from './AvatarInteractionLayer';
+import { InteractionToolbar, type InteractionTool } from './InteractionToolbar';
+import { HandTrackingOverlay } from './HandTrackingOverlay';
+import { UserAvatar3D } from './UserAvatar3D';
 
 interface AvatarViewer3DProps {
     avatar?: any; // El estado del avatar desde App.tsx
@@ -37,7 +40,7 @@ interface AvatarViewer3DProps {
 
 // Simulación de Ruido Perlin simple (Legacy removed - using SimplexNoise class)
 
-function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, isHotMode = false, hairColor, audioAnalyser }: {
+function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, isHotMode = false, hairColor, audioAnalyser, currentTool, showDebugZones, physicsSensitivity, physicsMaxAngle, resetPhysicsTrigger }: {
     modelUrl: string;
     emotion: Emotion;
     action?: string | null;
@@ -46,6 +49,11 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     isHotMode?: boolean;
     hairColor?: string;
     audioAnalyser: AnalyserNode | null;
+    currentTool: InteractionTool;
+    showDebugZones: boolean;
+    physicsSensitivity: number;
+    physicsMaxAngle: number;
+    resetPhysicsTrigger: number;
 }) {
     // Si no hay URL, usamos Grokani como base por ser el más estable
     const safeModelUrl = modelUrl || '/models/grokani_lipsync.glb';
@@ -55,9 +63,12 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const modelRef = useRef<THREE.Group>(null);
     const mixerRef = useRef<THREE.AnimationMixer | null>(null);
     const lipSyncRef = useRef<LipSyncAnalyzer | null>(null);
+    const jigglePhysicsRef = useRef<JigglePhysicsSystem | null>(null);
 
     // Generador de Ruido Orgánico (Perlin)
     const simplex = React.useMemo(() => new SimplexNoise(), []);
+
+    const interactionLayerRef = useRef<InteractionLayerRef>(null);
 
     // Refs específicos para GrokAni / Anime
     const tongueRef = useRef<number | null>(null);
@@ -69,6 +80,16 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const leftArmRef = useRef<THREE.Bone | null>(null);
     const rightArmOriginalRot = useRef<THREE.Euler | null>(null); // Rotación original
     const leftArmOriginalRot = useRef<THREE.Euler | null>(null);
+    const headOriginalQuat = useRef(new THREE.Quaternion());
+    const headOriginalPos = useRef(new THREE.Vector3());
+    const headOrphansRef = useRef<{
+        bone: THREE.Bone;
+        offsetPos: THREE.Vector3;   // Posición relativa al headBone en espacio local del head
+        offsetQuat: THREE.Quaternion; // Rotación relativa al headBone
+        originalPos: THREE.Vector3;
+        originalQuat: THREE.Quaternion;
+        offsetMatrix?: THREE.Matrix4;
+    }[]>([]);
     const rightForeArmRef = useRef<THREE.Bone | null>(null);
     const leftForeArmRef = useRef<THREE.Bone | null>(null);
     const leftLegRef = useRef<THREE.Bone | null>(null);
@@ -78,6 +99,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const spineRef = useRef<THREE.Object3D | null>(null); // Para respiración mejorada
     const lastSpineRot = useRef<THREE.Euler>(new THREE.Euler()); // Para inercia
     const musicEnergyRef = useRef(0); // Audio Reactivity Energy
+    const danceTimeRef = useRef(0); // Procedural dance phase
 
     // --- FINGER BONE REFS ---
     const fingerBonesRef = useRef<{
@@ -97,10 +119,33 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const rightShineOriginalRot = useRef<THREE.Euler | null>(null);
 
     // --- JIGGLE PHYSICS REFS ---
+    const legResetTargetRef = useRef<THREE.Euler | null>(null);
+
+    // Sistema de Pose Base (stand, sit, lie)
+    const currentBasePoseRef = useRef<'stand' | 'sit' | 'lie'>('stand');
+    const poseWeightsRef = useRef({ sit: 0, lie: 0 });
     const leftBreastRef = useRef<THREE.Bone | null>(null);
     const rightBreastRef = useRef<THREE.Bone | null>(null);
     const leftButtRef = useRef<THREE.Bone | null>(null);
     const rightButtRef = useRef<THREE.Bone | null>(null);
+    const vaginaRef = useRef<THREE.Bone | null>(null);
+    const anusRef = useRef<THREE.Bone | null>(null);
+    const lipsRef = useRef<THREE.Bone | null>(null);
+
+    // Zonas extra sensoriales
+    const bellyRef = useRef<THREE.Bone | null>(null);
+    const hairRef = useRef<THREE.Bone | null>(null);
+
+    const [interactionBoneTarget, setInteractionBoneTarget] = useState<string | null>(null);
+
+    // Manos y Pies explícitos para InteractionLayer
+    const leftHandRef = useRef<THREE.Bone | null>(null);
+    const rightHandRef = useRef<THREE.Bone | null>(null);
+    const leftFootRef = useRef<THREE.Bone | null>(null);
+    const rightFootRef = useRef<THREE.Bone | null>(null);
+    const bootsMeshRef = useRef<THREE.Mesh | null>(null);
+    const armatureSyncMapRef = useRef<{ secondary: THREE.Bone, primary: THREE.Bone, offsetPos: THREE.Vector3, offsetQuat: THREE.Quaternion }[]>([]);
+
     const debugDumpCount = useRef(0); // Counter for hierarchy dump
 
     // Physics State: { velocity, position } for each part
@@ -123,10 +168,38 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const speakerPoseIndex = useRef(0);
     const wasSpeakingRef = useRef(false);
 
+    // --- CUSTOM ANIM & 3D NAVIGATION SYSTEM REFS ---
+    const activeCustomPoseRef = useRef<Record<string, number> | null>(null);
+    const target3DPos = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
+    const isNavigating3D = useRef<boolean>(false);
+
+    useEffect(() => {
+        // Limpiar animaciones guardadas viejas/descalibradas
+        try {
+            localStorage.removeItem('nova_custom_anims');
+        } catch (err) {}
+
+        const handleCustomAnim = (e: any) => {
+            if (e.detail) {
+                if (e.detail.name === 'reset') {
+                    activeCustomPoseRef.current = null;
+                    console.log("Reset pose custom");
+                } else if (e.detail.pose) {
+                    activeCustomPoseRef.current = { ...(activeCustomPoseRef.current || {}), ...e.detail.pose };
+                    console.log("Aplicando pose customizada (Merged): ", e.detail.name, activeCustomPoseRef.current);
+                }
+            }
+        };
+        window.addEventListener('nova-custom-anim', handleCustomAnim);
+        return () => window.removeEventListener('nova-custom-anim', handleCustomAnim);
+    }, []);
+
     // --- DANCE & SWAY REFS ---
     const isDancing = useRef(false);
+    const ikRecalibrateFrames = useRef(30); // 30 frames para que Idle se estabilice antes de capturar bind pose del cuello/cabeza
     const hairBonesRef = useRef<THREE.Object3D[]>([]);
     const skirtBonesRef = useRef<THREE.Object3D[]>([]);
+    const morphMeshesRef = useRef<THREE.Mesh[]>([]); // Para acceso global a meshes con morphs
 
     // Sway State (Rotation Physics)
     // Structure: { [uuid]: { velocity: 0, rotation: 0, baseRot: THREE.Euler } }
@@ -147,6 +220,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         };
         window.addEventListener('mousemove', handleDragMove);
         window.addEventListener('mouseup', handleDragUp);
+
         return () => {
             window.removeEventListener('mousemove', handleDragMove);
             window.removeEventListener('mouseup', handleDragUp);
@@ -166,47 +240,48 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
 
             // Mapeo básico de emociones a morphs comunes
-            // NOTA: Añadimos morphs de VRoid/VRM comunes ('Joy', 'Fun', 'Fcl_ALL_Joy', etc)
-            // porque si se quedan atascados en 1.0, bloquean completamente el movimiento de los labios.
-            const morphsToReset = ['BrowsDown', 'BrowsUp', 'Smile', 'Frown', 'MouthOpen', 'Joy', 'Fun', 'Angry', 'Sorrow', 'Fcl_ALL_Joy', 'Fcl_ALL_Fun', 'Fcl_ALL_Angry', 'Fcl_ALL_Sorrow', 'Fcl_MTH_Joy', 'Fcl_MTH_Fun'];
+            // Añadimos morphs de cierre ('sil', 'mouthclose') a la lista de reseteo
+            // porque forzarlos a 1.0 en reposo estaba causando una sonrisa forzada/mueca.
+            const morphsToReset = ['BrowsDown', 'BrowsUp', 'Smile', 'Frown', 'MouthOpen', 'Joy', 'Fun', 'Angry', 'Sorrow', 'Fcl_ALL_Joy', 'Fcl_ALL_Fun', 'Fcl_ALL_Angry', 'Fcl_ALL_Sorrow', 'Fcl_MTH_Joy', 'Fcl_MTH_Fun', 'Grin', 'Laugh', 'Ahegao', 'Teeth', 'Happy', 'sil', 'vrc.v_sil', 'mouthclose', 'fcl_mth_close'];
             morphsToReset.forEach(m => {
-                // Busqueda case insensitive
-                const key = Object.keys(mesh.morphTargetDictionary).find(k => k.toLowerCase() === m.toLowerCase());
-                if (key !== undefined) {
+                // Búsqueda case insensitive con INCLUDES y FILTER para resetear TODOS los morphs que coincidan
+                const lowerM = m.toLowerCase();
+                const keys = Object.keys(mesh.morphTargetDictionary).filter(k => k.toLowerCase().includes(lowerM));
+                keys.forEach(key => {
                     const idx = mesh.morphTargetDictionary[key];
-                    if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0, 0.1);
-                }
+                    if (idx !== undefined) {
+                        mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0, 0.1);
+                    }
+                });
             });
 
-            const morphKeys = Object.keys(mesh.morphTargetDictionary);
-            const closeMorphs = morphKeys.filter(k => {
-                const lower = k.toLowerCase();
-                return lower.includes('sil') || lower === 'vrc.v_sil' || lower.includes('mouthclose') || lower === 'fcl_mth_close';
-            });
-            
-            closeMorphs.forEach(m => {
-                const idx = mesh.morphTargetDictionary[m];
-                const targetVal = isSpeaking ? 0.0 : 1.0;
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], targetVal, 0.2);
-            });
+            // Función auxiliar para aplicar morph difuso (a TODOS los que coincidan)
+            const applyMorph = (morphName: string, value: number, speed: number = 0.1) => {
+                const lowerName = morphName.toLowerCase();
+                const keys = Object.keys(mesh.morphTargetDictionary!).filter(k => k.toLowerCase().includes(lowerName));
+                keys.forEach(key => {
+                    const idx = mesh.morphTargetDictionary![key];
+                    if (idx !== undefined) {
+                        mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], value, speed);
+                    }
+                });
+            };
 
             // Aplicar nuevos según emoción
             if (currentEmotion === 'angry') {
-                const idx = mesh.morphTargetDictionary['BrowsDown'];
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 1.0, 0.1);
+                applyMorph('BrowsDown', 1.0);
+                applyMorph('Angry', 0.8);
             } else if (currentEmotion === 'happy' || currentEmotion === 'excited') {
-                const idx = mesh.morphTargetDictionary['Smile'];
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0.7, 0.1);
+                applyMorph('Smile', 0.7);
+                applyMorph('Joy', 0.7);
             } else if (currentEmotion === 'sad') {
-                const idx = mesh.morphTargetDictionary['Frown'];
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 0.8, 0.1);
-                const idxBrows = mesh.morphTargetDictionary['BrowsUp'];
-                if (idxBrows !== undefined) mesh.morphTargetInfluences![idxBrows] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idxBrows], 0.5, 0.1);
+                applyMorph('Frown', 0.8);
+                applyMorph('BrowsUp', 0.5);
+                applyMorph('Sorrow', 0.7);
             } else if (currentEmotion === 'surprised') {
-                const idx = mesh.morphTargetDictionary['BrowsUp'];
-                if (idx !== undefined) mesh.morphTargetInfluences![idx] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idx], 1.0, 0.1);
-                const idxMouth = mesh.morphTargetDictionary['MouthOpen'];
-                if (idxMouth !== undefined) mesh.morphTargetInfluences![idxMouth] = THREE.MathUtils.lerp(mesh.morphTargetInfluences![idxMouth], 0.4, 0.1);
+                applyMorph('BrowsUp', 1.0);
+                applyMorph('MouthOpen', 0.4);
+                applyMorph('Surprised', 0.8);
             }
         });
     };
@@ -252,6 +327,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     const proceduralAnimatorRef = useRef<ProceduralAnimator | null>(null);
     const externalAnimPlayingRef = useRef(false);
     const isGrokAniRef = useRef(false);
+
+    // Ref para gestos faciales/ojos/lengua voluntarios
+    const activeFacialActionRef = useRef<{ action: string; timer: number; duration: number } | null>(null);
 
     // Initializion logic for Clothing Manager
     useEffect(() => {
@@ -370,6 +448,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         if (modelRef.current) {
             const SHOW_VERBOSE_LOGS = false;
             const meshes: THREE.Mesh[] = [];
+            morphMeshesRef.current = []; // Limpiar antes de llenar
             const newVisemeMap: Record<string, number> = {};
 
             // Pre-detectar si el modelo es GrokAni por la presencia de sus huesos clave en la jerarquía
@@ -403,7 +482,9 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             const isDecal = (
                                 meshName.includes('sticker') ||
                                 meshName.includes('lashes') ||
-                                meshName.includes('blush')
+                                meshName.includes('blush') ||
+                                meshName.includes('shadow') ||
+                                meshName.includes('sombra')
                             );
 
                             // IMPORTANTE: Detectar si es parte del cuerpo base
@@ -450,7 +531,8 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                 if (SHOW_VERBOSE_LOGS) console.log('👁️ Configurado como OJO:', child.name);
                             } else if (isSkin) {
                                 // PIEL/CUERPO: Material mate suave (Anime)
-                                mat.side = THREE.DoubleSide;
+                                // CRÍTICO: FrontSide para evitar Z-fighting de las caras internas (cuello negro)
+                                mat.side = THREE.FrontSide;
                                 mat.transparent = false;
                                 mat.depthWrite = true;
                                 mat.polygonOffset = false;
@@ -476,8 +558,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             } else {
                                 // Ropa, pelo, accesorios, etc. (Anime)
                                 mat.side = THREE.DoubleSide;
-                                mat.transparent = false;
-                                mat.depthWrite = true;
+                                // Preservar transparencia original para encajes y ropa interior
+                                if (mat.transparent) {
+                                    mat.depthWrite = false;
+                                    mat.alphaTest = 0.3; // Cortar píxeles casi transparentes
+                                } else {
+                                    mat.depthWrite = true;
+                                }
                                 mat.polygonOffset = false;
 
                                 if (mat instanceof THREE.MeshStandardMaterial) {
@@ -500,6 +587,16 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 const debugData: any[] = [];
                 modelRef.current.traverse((child: any) => {
                     if (child.isMesh) {
+                        // DIAGNÓSTICO DE HUESOS
+                        if (child.isSkinnedMesh && child.skeleton) {
+                            const skeletonBoneNames = child.skeleton.bones.map((b: any) => b.name);
+                            const gluteBonesInSkin = skeletonBoneNames.filter((b: string) => {
+                                const lower = b.toLowerCase();
+                                return (lower.includes('ass') || lower.includes('glute') || lower.includes('butt')) && !lower.includes('glass') && !lower.includes('class');
+                            });
+                            console.log('🔍 HUESOS DE GLÚTEOS CONECTADOS A LA PIEL:', gluteBonesInSkin.length > 0 ? gluteBonesInSkin.join(', ') : '¡NINGUNO!');
+                        }
+
                         const matList = Array.isArray(child.material) ? child.material : [child.material];
                         matList.forEach((mat: any) => {
                             if (mat) {
@@ -526,14 +623,29 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 console.error("Error en debug logging:", err);
             }
 
+            // ACTUALIZAR MATRICES GLOBALES ANTES DE LA CIRUGÍA ESPACIAL
+            modelRef.current.updateMatrixWorld(true);
+
+            // Collect all bones used by SkinnedMeshes to filter out dummy transform bones
+            const validSkinBones = new Set<THREE.Bone>();
+            modelRef.current.traverse((child) => {
+                if ((child as any).isSkinnedMesh) {
+                    const sm = child as THREE.SkinnedMesh;
+                    if (sm.skeleton && sm.skeleton.bones) {
+                        sm.skeleton.bones.forEach(b => validSkinBones.add(b));
+                        // Removed spatial surgery block because spine.004 and spine.005 actually control the hair
+                    }
+                }
+            });
+
             modelRef.current.traverse((child) => {
                 if (child instanceof THREE.Mesh) {
                     const name = child.name.toLowerCase();
 
                     // DETECCIÓN DE PARTES ESPECIALES
-                    // CRÍTICO: Ocultar el blush por defecto - cubre toda la cara
-                    if (name.includes('blush')) {
-                        if (SHOW_VERBOSE_LOGS) console.log('😊 Ocultando mesh de blush:', child.name);
+                    // CRÍTICO: Ocultar el blush o sombras por defecto - cubre toda la cara o ensucia el cuello
+                    if (name.includes('blush') || name.includes('shadow') || name.includes('sombra')) {
+                        if (SHOW_VERBOSE_LOGS) console.log('😊 Ocultando mesh especial (blush/shadow):', child.name);
                         child.visible = false;
                     } else if (name.includes('sticker001 1') || name.includes('sticker001_1')) {
                         stickerVeinRef.current = child; // Anger
@@ -551,6 +663,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         // Es un mesh del cuerpo/cara
                         if (child.morphTargetDictionary) {
                             meshes.push(child);
+                            morphMeshesRef.current.push(child);
 
                             // DEBUG: Mostrar morphs encontrados en este mesh
                             const morphNames = Object.keys(child.morphTargetDictionary);
@@ -566,6 +679,20 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                 const keys = Object.keys(child.morphTargetDictionary);
                                 const tongueKey = keys.find(k => k.toLowerCase().includes('tongue'));
                                 const ahegaoKey = keys.find(k => k.toLowerCase().includes('ahegao') || k.toLowerCase().includes('roll'));
+
+                                // DUMP ALL RELEVANT BONES
+                                if (SHOW_VERBOSE_LOGS) {
+                                    const allBones: string[] = [];
+                                    child.parent?.parent?.traverse((node: any) => {
+                                        if (node.isBone) {
+                                            const n = node.name.toLowerCase();
+                                            if (n.includes('spine') || n.includes('head') || n.includes('neck') || n.includes('hair')) {
+                                                allBones.push(node.name);
+                                            }
+                                        }
+                                    });
+                                    console.log("💀 BONES DUMP:", allBones.join(', '));
+                                }
 
                                 if (tongueKey && SHOW_VERBOSE_LOGS) console.log(`👅 Clave de lengua detectada: "${tongueKey}"`);
                                 if (ahegaoKey && SHOW_VERBOSE_LOGS) console.log(`🥵 Clave Ahegao detectada: "${ahegaoKey}"`);
@@ -619,6 +746,22 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                     if (SHOW_VERBOSE_LOGS) console.log(`👄 Morph de vocal U encontrado: ${key} → viseme_U`);
                                 }
 
+                                // Morphs de consonantes y cierre bilabial (M, P, B, F, TH)
+                                if (
+                                    k === 'm' || k === 'b' || k === 'p' || k === 'pp' ||
+                                    k === 'viseme_pp' || k === 'viseme_p' || k === 'mouthclose' || k === 'mouth_close' ||
+                                    k === 'fcl_mth_close' || k.includes('viseme_pp') || k.includes('ctrlvpp') || k.includes('ectrlvpp')
+                                ) {
+                                    newVisemeMap['viseme_PP'] = dict[key];
+                                    if (SHOW_VERBOSE_LOGS) console.log(`👄 Morph de cierre bilabial (M/P/B) encontrado: ${key} → viseme_PP`);
+                                }
+                                if (k === 'f' || k === 'ff' || k === 'viseme_ff' || k.includes('viseme_ff') || k.includes('ctrlvff')) {
+                                    newVisemeMap['viseme_FF'] = dict[key];
+                                }
+                                if (k === 'th' || k === 'viseme_th' || k.includes('viseme_th')) {
+                                    newVisemeMap['viseme_TH'] = dict[key];
+                                }
+
                                 // DAZ JCM - Morphs que se activan con rotación de mandíbula
                                 // Buscar: pJCMJaw*, eCTRLMouth*, *jawdown*, *jawopen*, *mouthopen*
                                 if (
@@ -648,7 +791,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
                 // 2. BÚSQUEDA DE HUESOS (Más tolerante: Acepta Object3D si tiene nombre clave)
                 const lowerName = child.name.toLowerCase();
-                const isJigglePart = /breast|ass_|ass-|pectoral|glute|butt/.test(lowerName);
+                const isJigglePart = /breast|ass|pectoral|glute|butt/.test(lowerName) && !lowerName.includes('glass') && !lowerName.includes('class');
 
                 if (child instanceof THREE.Bone || isJigglePart) {
                     const name = lowerName; // Ya lo tenemos calculado
@@ -664,11 +807,47 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
                     */
 
-                    if (name.includes('head')) headBoneRef.current = child as any;
-                    if (name.includes('spine') || name.includes('body')) spineRef.current = child as any;
-                    if (name.includes('hips') || name.includes('pelvis') || name.includes('grokani_hips')) {
-                        if (SHOW_VERBOSE_LOGS) console.log('💃 Hips/Pelvis found:', name);
-                        hipsRef.current = child as any;
+                    // Match the actual head bone, avoiding hair nodes or end tips
+                    // PRIORIDAD ABSOLUTA a huesos de deformación reales (VRM/Mixamo)
+                    const isDeformHead = name === 'j_bip_c_head' || name === 'mixamorighead' || name === 'def-head' || name === 'bip01_head';
+                    const isExactHead = isDeformHead || name === 'head';
+                    const isFuzzyHead = name.includes('head') && !name.includes('top') && !name.includes('end') && !name.includes('hair') && !name.includes('accessory');
+
+                    if (isExactHead || isFuzzyHead) {
+                        const isDeforming = validSkinBones.has(child as THREE.Bone);
+                        if (isDeforming || isDeformHead) {
+                            if (isDeformHead || !headBoneRef.current || (isExactHead && !headBoneRef.current.name.toLowerCase().includes('j_bip'))) {
+                                headBoneRef.current = child as any;
+                            }
+                        }
+                    }
+
+                    // PRIORIDAD a espina base / abdomen (Excluyendo cuello def-spine.004, 005, 006 y cabeza)
+                    const isNeckBone = name.includes('spine.004') || name.includes('spine.005') || name.includes('spine.006') || name.includes('neck') || name.includes('head');
+                    const isDeformSpine = !isNeckBone && (name === 'j_bip_c_spine' || name === 'mixamorigspine' || name === 'def-spine' || name === 'def-spine.001' || name === 'spine' || name === 'spine.001');
+                    const isFuzzySpine = !isNeckBone && (name.includes('spine') || name.includes('chest'));
+                    if (isDeformSpine || (!spineRef.current && isFuzzySpine)) {
+                        if (validSkinBones.has(child as THREE.Bone) || isDeformSpine) {
+                            if (isDeformSpine || !spineRef.current) {
+                                spineRef.current = child as any;
+                                if (!spineRef.current.userData.basePos) spineRef.current.userData.basePos = spineRef.current.position.clone();
+                            }
+                        }
+                    }
+
+                    // PRIORIDAD a caderas / pelvis central (EXCLUYENDO huesos unilaterales como DEF-pelvis.L/R que desgarran la columna)
+                    const isSingleSide = name.includes('.l') || name.includes('.r') || name.includes('_l') || name.includes('_r') || name.endsWith('.l') || name.endsWith('.r') || name.endsWith('l') || name.endsWith('r');
+                    const isDeformHips = !isSingleSide && (name === 'j_bip_c_hips' || name === 'mixamorighips' || name === 'bip01_pelvis');
+                    const isExactHips = isDeformHips || (!isSingleSide && (name === 'hips' || name === 'def-hips' || name === 'pelvis'));
+                    const isFuzzyHips = !isSingleSide && (name.includes('hips') || name === 'pelvis' || name === 'torso' || name.includes('grokani_hips'));
+
+                    if (isExactHips || isFuzzyHips) {
+                        if (validSkinBones.has(child as THREE.Bone) || isDeformHips) {
+                            if (isDeformHips || !hipsRef.current || (isExactHips && !hipsRef.current.name.toLowerCase().includes('j_bip'))) {
+                                hipsRef.current = child as any;
+                                if (!hipsRef.current.userData.basePos) hipsRef.current.userData.basePos = hipsRef.current.position.clone();
+                            }
+                        }
                     }
 
                     // --- DANCE: Detección de Pelo y Ropa ---
@@ -699,25 +878,59 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
 
                     // 0. HARDCODED USER REQUEST (Máxima prioridad)
-                    // Nombres reales encontrados en el dump: wgt-grokani_breast_masterl, etc.
+                    // Nombres reales encontrados: DEF-breast.L, DEF-breast.R, etc.
                     const exactName = child.name;
-                    // Normalizar: quitar prefijos molestos si queremos, pero mejor check directo
 
-                    if (exactName === 'breast_master.L' || name === 'wgt-grokani_breast_masterl' || name === 'wgt-grokani_breastl') {
-                        if (SHOW_VERBOSE_LOGS) console.log('🎯 HARDCODED HIT: Left Breast');
+                    if (name === 'def-breast.l' || name === 'def-breast.001.l' || exactName === 'breast_master.L') {
                         leftBreastRef.current = child as any;
                     }
-                    if (exactName === 'breast_master.R' || name === 'wgt-grokani_breast_masterr' || name === 'wgt-grokani_breastr') {
-                        if (SHOW_VERBOSE_LOGS) console.log('🎯 HARDCODED HIT: Right Breast');
+                    if (name === 'def-breast.r' || name === 'def-breast.001.r' || exactName === 'breast_master.R') {
                         rightBreastRef.current = child as any;
                     }
-                    if (exactName === 'ass_master.L' || name === 'wgt-grokani_ass_masterl') {
-                        if (SHOW_VERBOSE_LOGS) console.log('🎯 HARDCODED HIT: Left Butt');
-                        leftButtRef.current = child as any;
+                    // Búsqueda de huesos deformadores para glúteos
+                    if (name.includes('glute') || name.includes('butt') || name.includes('ass')) {
+                        if (!name.includes('hole') && !name.includes('collision')) { // Evitar colliders y otros
+                            const isL = isLeft || name.includes('.l') || name.includes('_l');
+                            const isR = isRight || name.includes('.r') || name.includes('_r');
+                            const isDef = name.includes('def-');
+
+                            if (isL) {
+                                // Priorizar huesos "DEF-", sino el primero encontrado
+                                const currentName = leftButtRef.current ? leftButtRef.current.name.toLowerCase() : '';
+                                const currentIsDef = currentName.includes('def-');
+
+                                if (!leftButtRef.current ||
+                                    currentName.includes('pelvis') ||
+                                    (isDef && !currentIsDef)) {
+                                    leftButtRef.current = child as any;
+                                    console.log('🍑 ASIGNADO GLÚTEO IZQUIERDO:', child.name);
+                                }
+                            }
+                            if (isR) {
+                                const currentName = rightButtRef.current ? rightButtRef.current.name.toLowerCase() : '';
+                                const currentIsDef = currentName.includes('def-');
+
+                                if (!rightButtRef.current ||
+                                    currentName.includes('pelvis') ||
+                                    (isDef && !currentIsDef)) {
+                                    rightButtRef.current = child as any;
+                                    console.log('🍑 ASIGNADO GLÚTEO DERECHO:', child.name);
+                                }
+                            }
+                        }
                     }
-                    if (exactName === 'ass_master.R' || name === 'wgt-grokani_ass_masterr') {
-                        if (SHOW_VERBOSE_LOGS) console.log('🎯 HARDCODED HIT: Right Butt');
-                        rightButtRef.current = child as any;
+                    if (name === 'def-pelvis.l' && !leftButtRef.current) { leftButtRef.current = child as any; console.log('🍑 ASIGNADO GLÚTEO IZQ (PELVIS FALLBACK):', child.name); }
+                    if (name === 'def-pelvis.r' && !rightButtRef.current) { rightButtRef.current = child as any; console.log('🍑 ASIGNADO GLÚTEO DER (PELVIS FALLBACK):', child.name); }
+
+                    // Zonas íntimas y boca (pussy, vagina, asshole, lips)
+                    if (name.includes('pussy') || name.includes('vagina') || name.includes('lip_down') || name.includes('labia')) {
+                        if (!vaginaRef.current) vaginaRef.current = child as any;
+                    }
+                    if (name.includes('asshole') || name.includes('anus')) {
+                        if (!anusRef.current) anusRef.current = child as any;
+                    }
+                    if (name.includes('lips') || name.includes('mouth')) {
+                        if (!lipsRef.current) lipsRef.current = child as any;
                     }
 
                     // JIGGLE BONES DETECTION (Fuzzy Fallback)
@@ -740,8 +953,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             if (isMaster || !rightBreastRef.current) rightBreastRef.current = child as any;
                         }
                     }
+
+                    // Extra sensory zones (Belly, Hair)
+                    if (fuzzyCheck && (name.includes('belly') || name.includes('stomach') || name.includes('abdomen'))) {
+                        if (!bellyRef.current) bellyRef.current = child as any;
+                    }
+                    if (fuzzyCheck && (name.includes('hair') || name.includes('ponytail') || name.includes('bangs'))) {
+                        // Preferir huesos frontales o colas principales
+                        if (!hairRef.current || name.includes('front') || name.includes('tail')) hairRef.current = child as any;
+                    }
+
                     // Agregado 'ass' para modelos Rigify/Blender
-                    if (name.includes('glute') || name.includes('butt') || name.includes('pelvis') || name.includes('ass_') || name.includes('ass-')) {
+                    if (name.includes('glute') || name.includes('butt') || name.includes('ass_') || name.includes('ass-')) {
                         if (SHOW_VERBOSE_LOGS) console.log('✅ Found Butt Bone candidate:', name);
                         const isL = isLeft || name.startsWith('lglute') || name.startsWith('l_') || name.includes('.l');
                         const isR = isRight || name.startsWith('rglute') || name.startsWith('r_') || name.includes('.r');
@@ -771,42 +994,80 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         }
                     }
 
-                    // Huesos de labios
-                    if (name.includes('lip')) {
-                        if (SHOW_VERBOSE_LOGS) console.log('🔍 Hueso con "lip":', child.name);
+                    // --- PIERNAS Y BOTAS (FIX FLOTANTES Y MOVIMIENTO) ---
+                    if ((child as any).isBone) {
+                        const isRightSide = name.includes('.r') || name.includes('_r') || name.includes('right');
+                        const isLeftSide = name.includes('.l') || name.includes('_l') || name.includes('left');
+                        const isThigh = name.includes('thigh') || name.includes('upleg') || name.includes('upper_leg') || name.includes('upperleg');
+                        
+                        if (isThigh) {
+                            const isDef = name.startsWith('def-');
+                            if (isRightSide && (isDef || !rightLegRef.current)) rightLegRef.current = child as any;
+                            if (isLeftSide && (isDef || !leftLegRef.current)) leftLegRef.current = child as any;
+                        }
+
+                        if (name === 'mixamorigrightleg' || name === 'mixamorigrightfoot' || name === 'def-foot.r' || name === 'j_bip_r_foot' || name === 'r_foot') {
+                            if (!rightFootRef.current) rightFootRef.current = child as any;
+                        }
                     }
-                    if (name === 'def-lip.t.l' && !lipTopBoneRef.current) {
-                        lipTopBoneRef.current = child as any;
-                        lipTopOriginalPos.current = child.position.clone();
+                    if ((child as any).isMesh && (name.toLowerCase().includes('bots2') || name.toLowerCase().includes('boots2') || name === 'bots2 2')) {
+                        if (!bootsMeshRef.current) bootsMeshRef.current = child as any;
                     }
-                    if (name === 'def-lip.t.r' && !lipTopRightRef.current) {
-                        lipTopRightRef.current = child as any;
-                        lipTopRightOriginalPos.current = child.position.clone();
-                    }
-                    if (name === 'def-lip.b.l' && !lipBottomBoneRef.current) {
-                        lipBottomBoneRef.current = child as any;
-                        lipBottomOriginalPos.current = child.position.clone();
-                    }
-                    if (name === 'def-lip.b.r' && !lipBottomRightRef.current) {
-                        lipBottomRightRef.current = child as any;
-                        lipBottomRightOriginalPos.current = child.position.clone();
-                    }
-                    // Huesos externos (.001)
-                    if (name === 'def-lip.t.l.001' && !lipTopOuterRef.current) {
-                        lipTopOuterRef.current = child as any;
-                        lipTopOuterOriginalPos.current = child.position.clone();
-                    }
-                    if (name === 'def-lip.t.r.001' && !lipTopRightOuterRef.current) {
-                        lipTopRightOuterRef.current = child as any;
-                        lipTopRightOuterOriginalPos.current = child.position.clone();
-                    }
-                    if (name === 'def-lip.b.l.001' && !lipBottomOuterRef.current) {
-                        lipBottomOuterRef.current = child as any;
-                        lipBottomOuterOriginalPos.current = child.position.clone();
-                    }
-                    if (name === 'def-lip.b.r.001' && !lipBottomRightOuterRef.current) {
-                        lipBottomRightOuterRef.current = child as any;
-                        lipBottomRightOuterOriginalPos.current = child.position.clone();
+
+                    // Huesos de labios (Mejorado para soportar Rigify con y sin prefijo 'def-')
+                    // CRÍTICO: Excluir MCH y ORG porque en glTF no deforman la malla, solo los DEF lo hacen
+                    if (name.includes('lip') && !name.includes('mch-') && !name.includes('mch_') && !name.includes('org-') && !name.includes('org_')) {
+                        const isTop = name.includes('lip.t') || name.includes('lipt') || name.includes('upperlip') || name.includes('upper_lip');
+                        const isBottom = name.includes('lip.b') || name.includes('lipb') || name.includes('lowerlip') || name.includes('lower_lip');
+                        const isLeft = name.includes('.l') || name.includes('_l');
+                        const isRight = name.includes('.r') || name.includes('_r');
+                        const isOuter = name.includes('001') || name.includes('01') || name.includes('corner');
+
+                        if (isTop && !isOuter) {
+                            if (isLeft || (!isLeft && !isRight)) {
+                                if (!lipTopBoneRef.current) {
+                                    lipTopBoneRef.current = child as any;
+                                    lipTopOriginalPos.current = child.position.clone();
+                                }
+                            }
+                            if (isRight || (!isLeft && !isRight)) {
+                                if (!lipTopRightRef.current) {
+                                    lipTopRightRef.current = child as any;
+                                    lipTopRightOriginalPos.current = child.position.clone();
+                                }
+                            }
+                        }
+                        if (isBottom && !isOuter) {
+                            if (isLeft || (!isLeft && !isRight)) {
+                                if (!lipBottomBoneRef.current) {
+                                    lipBottomBoneRef.current = child as any;
+                                    lipBottomOriginalPos.current = child.position.clone();
+                                }
+                            }
+                            if (isRight || (!isLeft && !isRight)) {
+                                if (!lipBottomRightRef.current) {
+                                    lipBottomRightRef.current = child as any;
+                                    lipBottomRightOriginalPos.current = child.position.clone();
+                                }
+                            }
+                        }
+                        // Huesos externos (comisuras de los labios)
+                        else if (isTop && isLeft && isOuter && !lipTopOuterRef.current) {
+                            lipTopOuterRef.current = child as any;
+                            lipTopOuterOriginalPos.current = child.position.clone();
+                        }
+                        else if (isTop && isRight && isOuter && !lipTopRightOuterRef.current) {
+                            lipTopRightOuterRef.current = child as any;
+                            lipTopRightOuterOriginalPos.current = child.position.clone();
+                        }
+                        else if (isBottom && isLeft && isOuter && !lipBottomOuterRef.current) {
+                            lipBottomOuterRef.current = child as any;
+                            lipBottomOuterOriginalPos.current = child.position.clone();
+                        }
+                        else if (isBottom && isRight && isOuter && !lipBottomRightOuterRef.current) {
+                            lipBottomRightOuterRef.current = child as any;
+                            lipBottomRightOuterOriginalPos.current = child.position.clone();
+                        }
                     }
 
                     // Brazos (Upper Arm)
@@ -833,18 +1094,16 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const isForeArm = name.includes('forearm') || name.includes('fore_arm') || name.includes('lowerarm') || name.includes('lower_arm') || name.includes('elbow');
                     if (isForeArm) {
                         const isDef = name.startsWith('def-');
-                        if (isRight) {
-                            if (isDef || !rightForeArmRef.current) {
-                                rightForeArmRef.current = child as any;
-                                if (SHOW_VERBOSE_LOGS) console.log('💪 Antebrazo DERECHO asignado:', child.name);
-                            }
-                        }
-                        if (isLeft) {
-                            if (isDef || !leftForeArmRef.current) {
-                                leftForeArmRef.current = child as any;
-                                if (SHOW_VERBOSE_LOGS) console.log('💪 Antebrazo IZQUIERDO asignado:', child.name);
-                            }
-                        }
+                        if (isRight && (isDef || !rightForeArmRef.current)) rightForeArmRef.current = child as any;
+                        if (isLeft && (isDef || !leftForeArmRef.current)) leftForeArmRef.current = child as any;
+                    }
+
+                    // Manos
+                    const isHand = name.includes('hand') || name.includes('wrist') || name.includes('muñeca');
+                    if (isHand && !name.includes('finger') && !name.includes('thumb')) {
+                        const isDef = name.startsWith('def-');
+                        if (isRight && (isDef || !rightHandRef.current)) rightHandRef.current = child as any;
+                        if (isLeft && (isDef || !leftHandRef.current)) leftHandRef.current = child as any;
                     }
 
                     // --- FINGERS: Capturar TODOS los segmentos (proximal, medio, distal) ---
@@ -884,12 +1143,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         }
                     }
 
-                    // Piernas (thigh/upleg)
-                    const isLeg = name.includes('thigh') || name.includes('upleg') || name.includes('upper_leg') || name.includes('upperleg');
+                    // Piernas (thigh/upleg) - Excluir twist, .001, ik, mch, org, toe, pole
+                    const isLegHelper = name.includes('.0') || name.includes('twist') || name.includes('ik') || name.includes('mch') || name.includes('org') || name.includes('toe') || name.includes('pole');
+                    const isLeg = !isLegHelper && (name.includes('thigh') || name.includes('upleg') || name.includes('upper_leg') || name.includes('upperleg'));
                     if (isLeg) {
                         const isDef = name.startsWith('def-');
                         if (isRight) {
-                            if (isDef || !rightLegRef.current) {
+                            if ((isDef && !rightLegRef.current?.name.toLowerCase().startsWith('def-')) || !rightLegRef.current) {
                                 rightLegRef.current = child as any;
                                 rightLegOriginalRot.current = child.rotation.clone();
                                 rightLegOriginalPos.current = child.position.clone();
@@ -897,7 +1157,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                             }
                         }
                         if (isLeft) {
-                            if (isDef || !leftLegRef.current) {
+                            if ((isDef && !leftLegRef.current?.name.toLowerCase().startsWith('def-')) || !leftLegRef.current) {
                                 leftLegRef.current = child as any;
                                 leftLegOriginalRot.current = child.rotation.clone();
                                 leftLegOriginalPos.current = child.position.clone();
@@ -907,18 +1167,34 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
 
                     // Espinilla/Tibia (shin/calf) — para flexión de rodilla
-                    const isShinBone = name.includes('shin') || name.includes('calf') || name.includes('lower_leg') || name.includes('lowerleg') || name.includes('knee');
+                    const isShinHelper = name.includes('.0') || name.includes('twist') || name.includes('ik') || name.includes('mch') || name.includes('org') || name.includes('toe') || name.includes('pole');
+                    const isShinBone = !isShinHelper && (name.includes('shin') || name.includes('calf') || name.includes('lower_leg') || name.includes('lowerleg') || name.includes('knee'));
                     if (isShinBone) {
                         const isDef = name.startsWith('def-');
-                        if (isRight && (isDef || !rightShineRef.current)) {
-                            rightShineRef.current = child as any;
-                            rightShineOriginalRot.current = child.rotation.clone();
-                            if (SHOW_VERBOSE_LOGS) console.log('🦵 Espinilla DERECHA asignada:', child.name);
+                        if (isRight) {
+                            if ((isDef && !rightShineRef.current?.name.toLowerCase().startsWith('def-')) || !rightShineRef.current) {
+                                rightShineRef.current = child as any;
+                                rightShineOriginalRot.current = child.rotation.clone();
+                            }
                         }
-                        if (isLeft && (isDef || !leftShineRef.current)) {
-                            leftShineRef.current = child as any;
-                            leftShineOriginalRot.current = child.rotation.clone();
-                            if (SHOW_VERBOSE_LOGS) console.log('🦵 Espinilla IZQUIERDA asignada:', child.name);
+                        if (isLeft) {
+                            if ((isDef && !leftShineRef.current?.name.toLowerCase().startsWith('def-')) || !leftShineRef.current) {
+                                leftShineRef.current = child as any;
+                                leftShineOriginalRot.current = child.rotation.clone();
+                            }
+                        }
+                    }
+
+                    // Pies (foot/ankle) — Excluir toe, twist, .001, ik, mch, org
+                    const isFootHelper = name.includes('.0') || name.includes('twist') || name.includes('ik') || name.includes('mch') || name.includes('org') || name.includes('toe') || name.includes('pole');
+                    const isFoot = !isFootHelper && (name.includes('foot') || name.includes('ankle') || name.includes('pie'));
+                    if (isFoot) {
+                        const isDef = name.startsWith('def-');
+                        if (isRight && ((isDef && !rightFootRef.current?.name.toLowerCase().startsWith('def-')) || !rightFootRef.current)) {
+                            rightFootRef.current = child as any;
+                        }
+                        if (isLeft && ((isDef && !leftFootRef.current?.name.toLowerCase().startsWith('def-')) || !leftFootRef.current)) {
+                            leftFootRef.current = child as any;
                         }
                     }
                 }
@@ -926,10 +1202,6 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             setMorphTargetMeshes(meshes);
             setVisemeMap(newVisemeMap);
-
-            // Inicializar LipSync
-            if (!lipSyncRef.current) lipSyncRef.current = new LipSyncAnalyzer();
-            lipSyncRef.current.initialize(modelRef.current);
 
             // DEBUG: Resumen de detección para este modelo
             const allBones: string[] = [];
@@ -947,7 +1219,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     ln.includes('org-breast') ||
                     ln.includes('def-breast');
             });
-            isGrokAniRef.current = isGrokAni;
+            // Inicializar LipSync (DESPUÉS de isGrokAni para pasar opciones específicas)
+            if (!lipSyncRef.current) lipSyncRef.current = new LipSyncAnalyzer();
+            lipSyncRef.current.initialize(modelRef.current, {
+                disableBones: false, // ¡DEJAMOS QUE UNIVERSAL LIP SYNC TOME EL CONTROL TOTAL!
+                restingTopLipOffsetY: isGrokAni ? -0.0012 : 0, // Corregir mueca nativa
+                jawMovementScale: isGrokAni ? 0.8 : 1.0      // Multiplicador original (2.5 -> 1.2) para que la mandíbula se note
+            });
 
             if (gltf.animations.length > 0) {
                 // FILTRAR tracks de brazos/manos de las animaciones para que el sistema procedural los controle
@@ -955,33 +1233,415 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     const filtered = clip.clone();
                     filtered.tracks = clip.tracks.filter(track => {
                         const tn = track.name.toLowerCase();
+
+                        // CRÍTICO: Filtrar tracks que animen root, armature o torso
+                        // Estos tracks contienen la rotación de -90° X de Blender y tumban al avatar de espaldas
+                        if (tn.startsWith('root.') || tn.startsWith('armature.') || tn.startsWith('torso.') ||
+                            tn.includes('root.quaternion') || tn.includes('armature.quaternion') || tn.includes('torso.quaternion') ||
+                            tn.includes('root.position') || tn.includes('armature.position') || tn.includes('torso.position')) {
+                            return false;
+                        }
+
                         if (isGrokAni) {
-                            // Excluir tracks de brazos, manos, dedos Y PIERNAS para control procedural total
-                            const isControlledByProc = (
-                                /upper_?arm|fore_?arm|lower_?arm|hand|shoulder|clavicle|elbow|wrist|finger|f_index|f_middle|f_ring|f_pinky|thumb|palm/i.test(tn) ||
-                                /thigh|upleg|upper_?leg|shin|calf|lower_?leg/i.test(tn)
-                            );
-                            return !isControlledByProc;
+                            return true;
                         } else {
                             // Para otros modelos, no removemos piernas ni caderas, solo los tracks de brazos
                             const isArmTrack = (
-                                /upper_?arm|fore_?arm|lower_?arm|hand|shoulder|elbow|wrist/i.test(tn)
+                                tn.includes('arm') || tn.includes('hand') || tn.includes('shoulder') ||
+                                tn.includes('wrist') || tn.includes('finger') || tn.includes('thumb') ||
+                                tn.includes('clavicle')
                             );
                             return !isArmTrack;
                         }
                     });
-                    console.log(`🎬 Clip "${clip.name}": ${clip.tracks.length} tracks → ${filtered.tracks.length} (${clip.tracks.length - filtered.tracks.length} arm tracks removidos)`);
                     return filtered;
                 });
-                animationManagerRef.current = new AnimationManager(modelRef.current, filteredAnims);
-                console.log('✅ AnimationManager inicializado con', filteredAnims.length, 'clips (brazos libres)');
+
+                const animManager = new AnimationManager(modelRef.current, filteredAnims);
+                animationManagerRef.current = animManager;
+
+                // Play Idle immediately with NO blend duration so it snaps instantly
+                // This ensures baseQuat captures the 100% standing pose on frame 5!
+                animManager.play('Idle', { blendDuration: 0 });
+                console.log(`🎬 AnimationManager: ${filteredAnims.length} clips cargados y jugando Idle`);
             } else {
                 console.warn('⚠️ No hay animaciones en el modelo - AnimationManager no inicializado');
+            }
+
+            // EXTREME FALLBACK: La mandíbula (jaw) SIEMPRE es hija directa de la cabeza real.
+            // Si encontramos la mandíbula, su padre es indiscutiblemente el hueso real de la cabeza (cráneo).
+            if (jawBoneRef.current && jawBoneRef.current.parent) {
+                const trueHead = jawBoneRef.current.parent;
+                headBoneRef.current = trueHead as any;
+                if (SHOW_VERBOSE_LOGS) console.log('🎯 Hueso de cabeza deducido desde el padre de la mandíbula:', trueHead.name);
+            } else if (morphMeshesRef.current.length > 0 && !headBoneRef.current) {
+                // Si no hay mandíbula ni cabeza detectada, buscar en la malla de lipsync
+                const faceSm = morphMeshesRef.current[0] as THREE.SkinnedMesh;
+                if (faceSm.skeleton && faceSm.skeleton.bones) {
+                    const faceBones = faceSm.skeleton.bones;
+                    // Buscar estrictamente "head", ignorar "face" para no agarrar huesos faciales parciales que derriten la cara
+                    const realHeadBone = faceBones.find(b => {
+                        const bn = b.name.toLowerCase();
+                        return bn.includes('head') && !bn.includes('hair') && !bn.includes('top');
+                    });
+
+                    if (realHeadBone) {
+                        headBoneRef.current = realHeadBone as any;
+                        if (SHOW_VERBOSE_LOGS) console.log('🎯 Hueso de cabeza extraído directamente de la malla de lipsync:', realHeadBone.name);
+                    }
+                }
             }
 
             // 2. IK Controller - Head & Eye tracking + Arm IK (Sistema Nervioso)
             ikControllerRef.current = new IKController();
             ikControllerRef.current.initialize(modelRef.current);
+            // PASO CRÍTICO: Sobrescribir el hueso de la cabeza que encontró el IKController con el que nosotros validamos usando validSkinBones
+            // Esto asegura que la cara (malla) y el cabello (física) se muevan simultáneamente si están separados.
+            if (headBoneRef.current) {
+                ikControllerRef.current.setExplicitHeadBone(headBoneRef.current);
+            }
+
+            // --- RIGIFY SPLIT HIERARCHY FIX ---
+            // 1. Sincronizar huesos de control principales (cráneo, controladores paralelos)
+            const rigifyHeadBones = modelRef.current.getObjectsByProperty('isBone', true).filter(b => {
+                const n = b.name.toLowerCase();
+                const isExactHead = n === 'head' || n === 'def-head' || n === 'org-head' || n === 'j_bip_c_head' || n === 'mixamorighead';
+                return isExactHead;
+            }) as THREE.Bone[];
+
+            if (headBoneRef.current) {
+                headOriginalQuat.current.copy(headBoneRef.current.quaternion);
+                headOriginalPos.current.copy(headBoneRef.current.position);
+            }
+
+            if (rigifyHeadBones.length > 0) {
+                ikControllerRef.current.setSyncHeadBones(rigifyHeadBones);
+                if (SHOW_VERBOSE_LOGS) console.log(`🔗 Huesos de cabeza sincronizados (IK):`, rigifyHeadBones.map(b => b.name).join(', '));
+            }
+
+            // 2. Cirugía ortopédica para reconectar la cara y el pelo al cráneo (Arreglo para jerarquías aplastadas por glTF)
+            if (headBoneRef.current) {
+                const headBone = headBoneRef.current;
+
+                const isDescendant = (child: THREE.Bone, parent: THREE.Bone) => {
+                    let current = child.parent;
+                    while (current) {
+                        if (current === parent) return true;
+                        current = current.parent;
+                    }
+                    return false;
+                };
+
+                const isAncestor = (bone: THREE.Bone, descendant: THREE.Bone) => {
+                    let current = descendant.parent;
+                    while (current) {
+                        if (current === bone) return true;
+                        current = current.parent;
+                    }
+                    return false;
+                };
+
+                headBone.updateWorldMatrix(true, false);
+                const headWPosBase = new THREE.Vector3();
+                headBone.getWorldPosition(headWPosBase);
+
+                const safeOrphans = modelRef.current.getObjectsByProperty('isBone', true).filter(b => {
+                    if (b === headBone) return false;
+                    if (isDescendant(b as THREE.Bone, headBone)) return false;
+                    if (isAncestor(b as THREE.Bone, headBone)) return false;
+
+                    b.updateWorldMatrix(true, false);
+                    const bWPos = new THREE.Vector3();
+                    b.getWorldPosition(bWPos);
+
+                    const distance = bWPos.distanceTo(headWPosBase);
+
+                    const n = b.name.toLowerCase();
+
+                    // CRÍTICO: Excluir todo lo que esté a más de 0.7 metros de la cabeza.
+                    // Esto filtra automáticamente la Vagina/Pelvis (spine.006) que está abajo,
+                    // pero incluye los huesos spine/neck secundarios de la malla del pelo que están arriba!
+                    if (distance > 0.7) return false;
+
+                    // EXCLUSIÓN ESPECÍFICA: No anclar a la cabeza accesorios del cuello/pecho (collar, choker, necklace, cuello, cape, etc)
+                    if (n.includes('spine.006') || n.includes('garter') || n.includes('thigh') || n.includes('leg') || n.includes('panties') ||
+                        n.includes('collar') || n.includes('choker') || n.includes('necklace') || n.includes('cuello') || n.includes('tie') || n.includes('cape')) {
+                        return false;
+                    }
+
+                    // Excluir hombros, brazos y pechos explícitamente por si caen dentro del radio
+                    if (n.includes('shoulder') || n.includes('arm') || n.includes('hand') ||
+                        n.includes('finger') || n.includes('breast') || n.includes('chest') ||
+                        n.includes('clavicle')) {
+                        return false;
+                    }
+
+                    // Cualquier otro hueso huérfano cerca de la cabeza (pelo, ojos, cuello secundario) es bienvenido!
+                    return true;
+                }) as THREE.Bone[];
+
+                if (safeOrphans.length > 0) {
+                    // CRÍTICO: Solo anclar los huesos RAÍZ de cada cadena de cabello.
+                    // Los huesos hijos (.001-.004) siguen a su padre automáticamente
+                    // por la jerarquía de Three.js. Anclarlos todos causaría conflictos.
+                    const safeOrphanSet = new Set(safeOrphans.map(b => b.uuid));
+                    const rootOrphans = safeOrphans.filter(b => !b.parent || !safeOrphanSet.has(b.parent.uuid));
+
+                    console.log(`🔗 ANCLANDO ${rootOrphans.length} raíces al cráneo (de ${safeOrphans.length} candidatos):`,
+                        rootOrphans.map(b => b.name).join(', '));
+
+                    // Aseguramos matrices actualizadas antes de calcular el offset
+                    headBone.updateWorldMatrix(true, true);
+
+                    const headWPos = new THREE.Vector3();
+                    const headWQuat = new THREE.Quaternion();
+                    headBone.getWorldPosition(headWPos);
+                    headBone.getWorldQuaternion(headWQuat);
+                    const headWQuatInv = headWQuat.clone().invert();
+
+                    headOrphansRef.current = rootOrphans.map(bone => {
+                        bone.updateWorldMatrix(true, false);
+
+                        const boneWPos = new THREE.Vector3();
+                        const boneWQuat = new THREE.Quaternion();
+                        bone.getWorldPosition(boneWPos);
+                        bone.getWorldQuaternion(boneWQuat);
+
+                        // Offset en espacio local del headBone:
+                        const offsetPos = boneWPos.clone().sub(headWPos).applyQuaternion(headWQuatInv);
+                        const offsetQuat = headWQuatInv.clone().multiply(boneWQuat);
+
+                        return {
+                            bone,
+                            offsetPos,
+                            offsetQuat,
+                            originalPos: bone.position.clone(),
+                            originalQuat: bone.quaternion.clone()
+                        };
+                    });
+
+                    // BUGFIX: Registrar los mismos huérfanos en el IKController como syncHeadBones.
+                    // Esto asegura que cuando el IK rota la cabeza principal, los huesos de
+                    // pelo/ojos reciben la misma rotación sin desprenderse.
+                    if (ikControllerRef.current) {
+                        const hairOrphansForIK = rootOrphans.filter(b => {
+                            const n = b.name.toLowerCase();
+                            return n.includes('hair') || n.includes('ponytail') || n.includes('twin') ||
+                                n.includes('bangs') || n.includes('braid') ||
+                                n.includes('pigtail') || n.includes('ahoge') || n.includes('fringe') ||
+                                n.includes('pelo') || n.includes('cabello') || n.includes('mechon') ||
+                                n.includes('front') || n.includes('top_hair');
+                        });
+                        if (hairOrphansForIK.length > 0) {
+                            ikControllerRef.current.setSyncHeadBones(hairOrphansForIK);
+                            console.log(`🔗 IK: ${hairOrphansForIK.length} huesos de cabello registrados como syncHeadBones`);
+                        }
+                    }
+                }
+            }
+
+            // --- GLOBAL DUAL-ARMATURE SYNC (Fix for Vroid/Rigify mesh tearing) ---
+            const allBonesInModel = modelRef.current.getObjectsByProperty('isBone', true) as THREE.Bone[];
+
+            const primaryBones: THREE.Bone[] = [];
+            const duplicatePrimaryBones: THREE.Bone[] = [];
+            const primaryNames = new Set<string>();
+
+            allBonesInModel.forEach(b => {
+                const n = b.name.toLowerCase();
+                if (n.includes('mixamorig') || n.includes('j_bip') || n.startsWith('def-') || n.startsWith('org-') || n === 'root' || n === 'hips') {
+                    if (primaryNames.has(n)) {
+                        duplicatePrimaryBones.push(b);
+                    } else {
+                        primaryNames.add(n);
+                        primaryBones.push(b);
+                    }
+                }
+            });
+
+            const secondaryBones = allBonesInModel.filter(b => {
+                const n = b.name.toLowerCase();
+                // Exclude facial morph bones or pure hair chains to not mess up IK
+                if (n.includes('lip') || n.includes('hair') || n.includes('jaw') || n.includes('mouth')) return false;
+
+                // EXCLUIR HUESOS ESTRUCTURALES DE COLUMNA/CUELLO:
+                // Sincronizar huesos de columna en cadena (spine -> spine.001 -> spine.002) duplica secuencialmente la rotación,
+                // provocando que la espina se incline salvajemente hacia adelante.
+                if (n.includes('spine') || n.includes('torso') || n.includes('chest') || n.includes('neck') || n.includes('head')) return false;
+
+                // Si es un hueso primario, solo sincronizar si es un duplicado o un hueso secundario real (ej: botas/accesorios)
+                if (n.includes('mixamorig') || n.includes('j_bip') || n === 'root' || n === 'hips') {
+                    return duplicatePrimaryBones.includes(b);
+                }
+
+                // EXCLUIR los huesos de deformación estructural principal (DEF-thigh, DEF-shin, DEF-foot, etc) para no romper la cinemática de las piernas
+                if (n.startsWith('def-') || n.startsWith('org-')) {
+                    const isAccessory = n.includes('boot') || n.includes('shoe') || n.includes('dress') || n.includes('skirt') || n.includes('cloth') || n.includes('garter');
+                    if (!isAccessory) return false;
+                }
+
+                // EXCLUIR ÚNICAMENTE LOS HUESOS SENSORES DE INTERACCIÓN (que el usuario arrastra con el ratón)
+                if (n.includes('ass') || n.includes('glute') || n.includes('breast') || n.includes('belly')) return false;
+
+                // Sincronizar todos los huesos (brazos, piernas, columna, pelvis) para que los accesorios (boots2, cinturones) 
+                // no se queden flotando. Al usar Position-Only sync, no hay riesgo de rotaciones rotas.
+                if (n === 'root') return false;
+
+                // FIX CRÍTICO: Prevenir "Feedback Loops" infinitos que hacen volar al personaje
+                // Si este hueso secundario contiene un hueso primario como hijo, NO sincronizarlo.
+                let hasPrimaryDescendant = false;
+                b.traverse(child => {
+                    if (child === b) return; // omit self
+                    const cn = child.name.toLowerCase();
+                    if (cn.includes('mixamorig') || cn.includes('j_bip') || cn.startsWith('def-') || cn === 'hips' || cn === 'pelvis') {
+                        hasPrimaryDescendant = true;
+                    }
+                });
+
+                if (hasPrimaryDescendant) {
+                    console.warn(`⚠️ OMITIENDO SYNC para ${b.name} porque contiene un hueso primario como hijo (evita salir volando).`);
+                    return false;
+                }
+
+                return true;
+            });
+
+            armatureSyncMapRef.current = [];
+
+            if (duplicatePrimaryBones.length > 0 && primaryBones.length > 0 && secondaryBones.length > 0) {
+                modelRef.current.updateMatrixWorld(true);
+
+                const getDepth = (obj: THREE.Object3D) => {
+                    let d = 0;
+                    let p = obj.parent;
+                    while (p) { d++; p = p.parent; }
+                    return d;
+                };
+
+                secondaryBones.forEach(sec => {
+                    sec.updateWorldMatrix(true, false);
+                    const secPos = new THREE.Vector3();
+                    sec.getWorldPosition(secPos);
+                    const secQuat = new THREE.Quaternion();
+                    sec.getWorldQuaternion(secQuat);
+
+                    let closestPrim: THREE.Bone | null = null;
+                    let minScore = Infinity;
+                    let bestPrimWPos = new THREE.Vector3();
+                    let bestPrimWQuat = new THREE.Quaternion();
+                    const sName = sec.name.toLowerCase();
+
+                    const getSide = (n: string): 'L' | 'R' | 'N' => {
+                        if (n.includes('left') || n.includes('_l_') || n.includes('_l.') || n.endsWith('.l') || n.endsWith('_l') || n.includes('.l.')) return 'L';
+                        if (n.includes('right') || n.includes('_r_') || n.includes('_r.') || n.endsWith('.r') || n.endsWith('_r') || n.includes('.r.')) return 'R';
+                        return 'N';
+                    };
+                    const secSide = getSide(sName);
+
+                    primaryBones.forEach(prim => {
+                        prim.updateWorldMatrix(true, false);
+                        const primPos = new THREE.Vector3();
+                        prim.getWorldPosition(primPos);
+                        const primQuat = new THREE.Quaternion();
+                        prim.getWorldQuaternion(primQuat);
+                        const dst = secPos.distanceTo(primPos);
+                        let penalty = 0;
+                        const pName = prim.name.toLowerCase();
+
+                        // IMPEDIR CRUCE DE LADOS (Evita que accesorios/huesos de pierna izquierda se enganchen a la derecha)
+                        const primSide = getSide(pName);
+                        if (secSide !== 'N' && primSide !== 'N' && secSide !== primSide) {
+                            penalty += 1000.0;
+                        }
+
+                        // Si los nombres son EXACTAMENTE iguales (ej. un hueso de bota mixamorigLeftFoot buscando el del cuerpo)
+                        // Le damos una prioridad absoluta (penalidad muy negativa) para que se emparejen sí o sí.
+                        if (sName === pName) {
+                            penalty -= 100.0;
+                        }
+
+                        // Heurísticas de nombres para emparejar huesos desplazados (espaldas rotas en Rigify, accesorios, botas, ojos)
+                        if (sName.includes('spine') && pName.includes('spine')) penalty -= 5.0;
+                        if (sName.includes('pelvis') && (pName.includes('hips') || pName.includes('pelvis'))) penalty -= 5.0;
+                        if (sName.includes('neck') && pName.includes('neck')) penalty -= 5.0;
+                        if (sName.includes('head') && pName.includes('head')) penalty -= 5.0;
+                        if (sName.includes('chest') && (pName.includes('spine') || pName.includes('chest'))) penalty -= 5.0;
+                        if (sName.includes('breast') && pName.includes('breast')) penalty -= 5.0;
+                        if (sName.includes('shoulder') && pName.includes('shoulder')) penalty -= 5.0;
+
+                        // 🥾 BOTAS Y CALZADO (boots2 / boots / shoes / feet)
+                        if ((sName.includes('boot') || sName.includes('boots') || sName.includes('shoe') || sName.includes('foot') || sName.includes('toe') || sName.includes('leg')) &&
+                            (pName.includes('foot') || pName.includes('toe') || pName.includes('leg') || pName.includes('shin') || pName.includes('ankle') || pName.includes('calf'))) {
+                            penalty -= 50.0; // Prioridad máxima para fijar boots2
+                        }
+
+                        // 👁️ BRILLO DE OJOS Y PUPILAS (eye shine / highlights / iris / pupil)
+                        if ((sName.includes('eye') || sName.includes('shine') || sName.includes('highlight') || sName.includes('pupil') || sName.includes('iris') || sName.includes('brillo')) &&
+                            (pName.includes('head') || pName.includes('eye'))) {
+                            penalty -= 30.0;
+                        }
+
+                        // 🎗️ ACCESORIO DEL CUELLO (collar / choker / necklace / cuello / ribbon / tie / cape / hombrera)
+                        if (sName.includes('collar') || sName.includes('choker') || sName.includes('necklace') || sName.includes('cuello') || sName.includes('ribbon') || sName.includes('tie') || sName.includes('cape')) {
+                            if (pName.includes('neck') || pName.includes('chest') || pName.includes('spine')) {
+                                penalty -= 80.0; // Pegar firmemente al cuello/pecho
+                            } else if (pName.includes('head')) {
+                                penalty += 100.0; // Impedir estrictamente que se pegue a la cabeza
+                            }
+                        }
+
+                        // Evitar que el estómago se conecte a las piernas
+                        if ((sName.includes('spine') || sName.includes('pelvis')) && (pName.includes('leg') || pName.includes('arm'))) penalty += 10.0;
+
+                        const score = dst + penalty;
+
+                        if (score < minScore) {
+                            minScore = score;
+                            closestPrim = prim;
+                            bestPrimWPos.copy(primPos);
+                            bestPrimWQuat.copy(primQuat);
+                        }
+                    });
+
+                    // Aceptamos si la distancia es menor a 80cm o si el score es negativo (heurística de nombre exitosa)
+                    if (closestPrim && (minScore < 0.80 || minScore < 0)) {
+                        const primWQuatInv = bestPrimWQuat.clone().invert();
+                        // Solo resetear offset a (0,0,0) si es un duplicado exacto por nombre (penalidad -100)
+                        const isExactDuplicate = minScore <= -95;
+
+                        // Si es un duplicado exacto por nombre, usamos offset cero. De lo contrario, preservamos la distancia real entre huesos.
+                        const offsetPos = isExactDuplicate ? new THREE.Vector3(0, 0, 0) : secPos.clone().sub(bestPrimWPos).applyQuaternion(primWQuatInv);
+                        const offsetQuat = isExactDuplicate ? new THREE.Quaternion() : primWQuatInv.clone().multiply(secQuat);
+
+                        armatureSyncMapRef.current.push({
+                            secondary: sec,
+                            primary: closestPrim,
+                            offsetPos,
+                            offsetQuat
+                        });
+                    }
+                });
+
+                // ORDENAR POR PROFUNDIDAD: Procesamos los padres antes que los hijos para evitar romper la cinemática directa (FK).
+                armatureSyncMapRef.current.sort((a, b) => getDepth(a.secondary) - getDepth(b.secondary));
+                console.log(`🔗 GLOBAL ARMATURE SYNC: Emparejados ${armatureSyncMapRef.current.length} huesos secundarios.`);
+            }
+
+            // 2.5 Jiggle Physics - Ropa, Cabello, Pechos
+            jigglePhysicsRef.current = new JigglePhysicsSystem();
+            jigglePhysicsRef.current.initialize(modelRef.current);
+
+            // Forzar registro manual de glúteos para asegurar rebote
+            if (leftButtRef.current && !leftButtRef.current.name.toLowerCase().includes('pelvis')) {
+                jigglePhysicsRef.current.addBone(leftButtRef.current, { stiffness: 0.05, damping: 0.1, maxAngle: Math.PI / 3 });
+            }
+            if (rightButtRef.current && !rightButtRef.current.name.toLowerCase().includes('pelvis')) {
+                jigglePhysicsRef.current.addBone(rightButtRef.current, { stiffness: 0.05, damping: 0.1, maxAngle: Math.PI / 3 });
+            }
+
+            // Agrandar pechos según solicitud del usuario
+            if (leftBreastRef.current) leftBreastRef.current.scale.set(1.4, 1.4, 1.4);
+            if (rightBreastRef.current) rightBreastRef.current.scale.set(1.4, 1.4, 1.4);
 
             // 3. Mood System - Estados anímicos persistentes
             moodSystemRef.current = new MoodSystem('calm');
@@ -1005,19 +1665,32 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 `| Huesos (${allBones.length}):`, allBones.join(', ')
             );
 
-            // --- CONFIGURACIÓN DE VISIBILIDAD POR DEFECTO PARA ANI NOVA ---
-            if (isGrokAni) {
-                modelRef.current.traverse((child: any) => {
-                    if (child.isMesh) {
-                        const name = child.name;
-                        // Ocultar meshes conflictivos/duplicados para evitar z-fighting e interferencias visuales
-                        if (name === 'Ani_MainFlatFooted' || name === 'Boots' || name === 'Pants' || name === 'Dress002' || name === 'Ani_GlovesSexy' || name === 'Skirt') {
-                            child.visible = false;
-                            console.log(`🚫 [DefaultVisibility] Ocultando mesh conflictivo: ${name}`);
-                        }
+            // --- CONFIGURACIÓN DE VISIBILIDAD Y MATERIALES POR DEFECTO ---
+            modelRef.current.traverse((child: any) => {
+                if (child.isMesh) {
+                    const name = child.name;
+                    const lower = name.toLowerCase();
+
+                    // Asegurar que las submallas tengan DoubleSide para que el interior no se vea negro ni transparente
+                    if (child.material) {
+                        const mats = Array.isArray(child.material) ? child.material : [child.material];
+                        mats.forEach((m: any) => {
+                            if (m) m.side = THREE.DoubleSide;
+                        });
                     }
-                });
-            }
+
+                    // Ocultar solo mallas duplicadas/incompatibles de la plantilla base (boots2, flatfooted)
+                    if (
+                        name === 'Ani_MainFlatFooted' ||
+                        lower.includes('flatfooted') ||
+                        lower.includes('boots2') ||
+                        lower.includes('bots2')
+                    ) {
+                        child.visible = false;
+                        console.log(`🚫 [DefaultVisibility] Ocultando mesh duplicado base: ${name}`);
+                    }
+                }
+            });
 
             // --- FORZAR POSE NEUTRA (BRAZOS ABAJO) ---
             // DIAGNÓSTICO FINAL: 
@@ -1025,8 +1698,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // - X (+75) -> ARRIBA (Confirmado por foto)
             // CONCLUSIÓN: X es el eje Vertical. Positivo es Arriba.
             // SOLUCIÓN: Usar X NEGATIVO para bajar los brazos.
-            // INICIALIZAR GESTOR DE ROPA
-            getClothingManager().initialize(modelRef.current);
+            // INICIALIZAR GESTOR DE ROPA Y VESTIR COMPLETAMENTE POR DEFECTO
+            const cm = getClothingManager();
+            cm.initialize(modelRef.current);
+            cm.presetFullClothed();
 
             const forceArmsDown = () => {
                 const armDownRot = THREE.MathUtils.degToRad(-80); // 80 grados ABAJO (Negativo)
@@ -1035,20 +1710,16 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     rightArmRef.current.rotation.set(0, 0, 0);
                     rightArmRef.current.rotation.z = 0;
                     rightArmRef.current.rotation.x = armDownRot; // X Negativo
-
-                    // Ajuste sutil Z para naturalidad (separar del cuerpo)
                     rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(10);
                     rightArmOriginalRot.current = rightArmRef.current.rotation.clone();
                 }
                 if (leftArmRef.current) {
                     leftArmRef.current.rotation.set(0, 0, 0);
-                    // X Negativo también (si +X fue arriba en el izquierdo, -X es abajo)
                     leftArmRef.current.rotation.x = armDownRot;
-
-                    // Ajuste sutil
                     leftArmRef.current.rotation.z = THREE.MathUtils.degToRad(-10);
                     leftArmOriginalRot.current = leftArmRef.current.rotation.clone();
                 }
+
             };
             if (isGrokAni) {
                 forceArmsDown();
@@ -1099,8 +1770,25 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             }
         }
 
+        // Guardar la rotación original (Bind Pose) de todos los huesos para poder resetearlos sin deformarlos
+        if (modelRef.current) {
+            modelRef.current.traverse((child: any) => {
+                if (child.isBone && !child.userData.baseQuat) {
+                    child.userData.baseQuat = child.quaternion.clone();
+                }
+            });
+
+            // CUSTOM SCALING (Solicitado por el usuario)
+            // Agrandar los glúteos de forma sutil pero notoria
+            const buttScale = 1.35; // 35% más grandes
+            if (leftButtRef.current) leftButtRef.current.scale.set(buttScale, buttScale, buttScale);
+            if (rightButtRef.current) rightButtRef.current.scale.set(buttScale, buttScale, buttScale);
+        }
+
         // Cleanup on unmount
         return () => {
+            ikRecalibrateFrames.current = 30; // Resetear para que al cargar nuevo modelo se recalibre de nuevo
+            ikControllerRef.current?.resetCalibration(); // Deshabilitar head tracking hasta que el nuevo Idle se estabilice
             cleanupResources();
         };
     }, [gltf]);
@@ -1139,7 +1827,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         gltfLoader.load(url, resolve, undefined, reject);
                     });
                     animations = gltfResult.animations || [];
-                    console.log(`📦 GLB cargado: ${animations.length} animaciones`);
+
+                    // Extraer rest poses del esqueleto (GLB)
+                    sourceRestPoses = new Map();
+                    if (gltfResult.scene || gltfResult.scenes?.length > 0) {
+                        const sceneToTraverse = gltfResult.scene || gltfResult.scenes[0];
+                        sceneToTraverse.traverse((child: any) => {
+                            if (child.isBone) {
+                                sourceRestPoses!.set(child.name, child.quaternion.clone());
+                            }
+                        });
+                    }
+                    console.log(`📦 GLB cargado: ${animations.length} anims, ${sourceRestPoses.size} huesos rest-pose`);
                 }
 
                 if (animations.length > 0) {
@@ -1150,6 +1849,12 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     modelRef.current!.traverse((child: any) => {
                         if (child.isSkinnedMesh && child.skeleton && !skeleton) {
                             skeleton = child.skeleton;
+                            // TEST DE DIAGNÓSTICO: Listar los huesos reales del Skeleton
+                            const skeletonBoneNames = skeleton.bones.map(b => b.name);
+                            console.log('💀 HUESOS REALES DEL SKELETON (SKINNED MESH):', skeletonBoneNames.join(', '));
+
+                            const hasDefAss = skeletonBoneNames.some(b => b.toLowerCase().includes('def-ass.l'));
+                            console.log(`¿El Skeleton incluye DEF-ass.L? -> ${hasDefAss ? 'SÍ' : 'NO (¡EXCLUIDO POR EXPORTER!)'}`);
                         }
                     });
 
@@ -1328,7 +2033,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         if (action) {
             console.log('🎬 Action prop changed:', action);
 
-            const animName = getAnimationName(action);
+            let animName = getAnimationName(action);
+
+            // Eliminar animación de sentarse porque está rota (piernas estiradas, caderas flotando)
+            if (animName.toLowerCase() === 'sit' || animName.toLowerCase() === 'sitting') {
+                console.log("⚠️ Animación de sentarse desactivada a petición del usuario. Cambiando a Idle.");
+                animName = 'Idle';
+            }
 
             // 1. Intentar con AnimationManager (clips de Blender)
             let played = false;
@@ -1336,7 +2047,28 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 const finalName = animName === 'Idle' && !action.toLowerCase().includes('idle')
                     ? action.charAt(0).toUpperCase() + action.slice(1).toLowerCase()
                     : animName;
-                played = animationManagerRef.current.play(finalName, { priority: 10, loop: true });
+
+                // Si la acción es Idle, forzamos la limpieza del esqueleto antes de reproducirla
+                if (finalName.toLowerCase().includes('idle')) {
+                    if (spineRef.current) {
+                        spineRef.current.traverse((child: any) => {
+                            if (child.isBone && (child.name.toLowerCase().includes('spine') || child.name.toLowerCase().includes('chest'))) {
+                                if (child.userData.baseQuat) {
+                                    child.quaternion.copy(child.userData.baseQuat);
+                                } else {
+                                    child.rotation.set(0, 0, 0);
+                                }
+                            }
+                        });
+                    }
+                    // SOLO reproducimos Idle en el AnimationManager para evitar el bug de mallas dobles (Rigify)
+                    played = animationManagerRef.current.play(finalName, { priority: 10, loop: true });
+                } else {
+                    // Para cualquier otra acción, forzamos el uso de animaciones procedurales 
+                    // porque las animaciones de Mixamo/Blender rompen la columna (vertex weights desalineados)
+                    console.log(`⚠️ Ignorando clip de animación ${finalName} para evitar deformación de malla. Usando procedural.`);
+                    played = false;
+                }
             }
 
             // 2. Fallback: ProceduralAnimator (gestos por huesos)
@@ -1348,6 +2080,22 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // Volver a Idle / detener procedural
             externalAnimPlayingRef.current = false;
             if (mixerRef.current) mixerRef.current.stopAllAction();
+
+            // FIX PARA BUG DE COLUMNA CAÍDA: Solo reseteamos rotaciones para no romper accesorios/pelo
+            if (spineRef.current) {
+                spineRef.current.traverse((child: any) => {
+                    if (child.isBone) {
+                        const n = child.name.toLowerCase();
+                        if (n.includes('spine') || n.includes('chest') || n.includes('body') || n.includes('torso')) {
+                            if (child.userData.baseQuat) {
+                                child.quaternion.copy(child.userData.baseQuat);
+                            } else {
+                                child.rotation.set(0, 0, 0);
+                            }
+                        }
+                    }
+                });
+            }
 
             if (animationManagerRef.current) {
                 animationManagerRef.current.play('Idle', { priority: 1, loop: true, blendDuration: 0.5 });
@@ -1386,46 +2134,92 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         const t = state.clock.elapsedTime;
         if (mixerRef.current) mixerRef.current.update(delta);
 
+        // Recalibrate IKController bind pose after AnimationMixer has applied the standing animation
+        if (ikRecalibrateFrames.current > 0) {
+            ikRecalibrateFrames.current--;
+            if (ikRecalibrateFrames.current === 0) {
+                if (ikControllerRef.current) {
+                    ikControllerRef.current.recalibrateBindPose();
+                }
+
+                // CRÍTICO: Recalibrar headOriginalQuat.current y headOriginalPos.current
+                // para que el sistema de huesos huérfanos (pelo, ojos) calcule el delta
+                // respecto al mismo punto de referencia que el IKController.
+                if (headBoneRef.current) {
+                    headOriginalQuat.current.copy(headBoneRef.current.quaternion);
+                    headOriginalPos.current.copy(headBoneRef.current.position);
+
+                    // Forzar actualización global de matrices para capturar offset real
+                    headBoneRef.current.updateWorldMatrix(true, false);
+                    const headWorldInv = headBoneRef.current.matrixWorld.clone().invert();
+
+                    // También recalibrar los originalQuat de los huérfanos y su offsetMatrix mundial
+                    headOrphansRef.current.forEach(orphan => {
+                        orphan.originalQuat.copy(orphan.bone.quaternion);
+                        orphan.originalPos.copy(orphan.bone.position);
+
+                        orphan.bone.updateWorldMatrix(true, false);
+                        orphan.offsetMatrix = headWorldInv.clone().multiply(orphan.bone.matrixWorld);
+                    });
+                    console.log('✅ headOriginalQuat + orphans recalibrados al estado Idle estabilizado');
+                }
+
+                // CRÍTICO: Recalibrar también userData.baseQuat para que cualquier reseteo (como al volver a Idle)
+                if (modelRef.current) {
+                    modelRef.current.traverse((child: any) => {
+                        if (child.isBone) {
+                            const name = child.name.toLowerCase();
+                            const isArm = name.includes('arm') || name.includes('hand') || name.includes('shoulder') ||
+                                name.includes('elbow') || name.includes('wrist') || name.includes('finger') ||
+                                name.includes('thumb');
+                            if (!isArm) {
+                                child.userData.baseQuat = child.quaternion.clone();
+                            }
+                        }
+                    });
+                    console.log("✅ Recalibración dinámica de userData.baseQuat completa (brazos excluidos)");
+                }
+            }
+        }
+
         // === ACTUALIZAR NUEVOS SISTEMAS ===
         if (animationManagerRef.current) animationManagerRef.current.update(delta);
         if (proceduralAnimatorRef.current) proceduralAnimatorRef.current.update(t, delta);
 
-        // === Si hay animación externa (Mixamo), procesar parpadeo ===
-        if (externalAnimPlayingRef.current) {
-            // Solo actualizar parpadeo y lipsync (no afectan huesos directamente)
-            blinkTimer.current += delta;
-            if (blinkTimer.current >= nextBlinkTime.current) {
-                isBlinking.current = true;
-                if (blinkTimer.current >= nextBlinkTime.current + blinkDuration) {
-                    isBlinking.current = false;
-                    blinkTimer.current = 0;
-                    nextBlinkTime.current = 2.5 + Math.random() * 4;
-                }
-            }
-            // NOTA: No retornamos temprano para permitir que el IK y gesticulación procedural operen sobre el esqueleto
-        }
+        // === Si hay animación externa (Mixamo), proceduralAnimator o idle ===
+        // El parpadeo y lipsync se procesan de forma unificada más abajo en el render loop
 
-        // --- SACCADIC EYE MOVEMENTS (MICRO-MOVIMIENTOS) ---
+        // --- SACCADIC EYE MOVEMENTS (MICRO-MOVIMIENTOS OCULARES BIOLÓGICOS) ---
         if (ikControllerRef.current?.isInitialized()) {
             saccadeTimer.current += delta;
             if (saccadeTimer.current > nextSaccadeTime.current) {
-                // Generar nuevo micro-offset aleatorio
-                const range = 0.05; // Rango muy sutil (en metros/world units)
+                // Saccades humanos: predominantemente horizontales (relación 3:1 o 4:1)
+                // Rango muy sutil (~3.5cm horizontal, ~1cm vertical)
+                const rangeX = 0.035;
+                const rangeY = 0.010;
                 const microOffset = new THREE.Vector3(
-                    (Math.random() - 0.5) * range * 0.5, // X: Izq/Der
-                    (Math.random() - 0.5) * range * 0.2, // Y: Arriba/Abajo (menos rango)
+                    (Math.random() - 0.5) * rangeX * 2, // X: Escaneo horizontal
+                    (Math.random() - 0.5) * rangeY * 2, // Y: Micro-fijación vertical
                     0
                 );
 
                 ikControllerRef.current.setMicroOffset(microOffset);
 
                 saccadeTimer.current = 0;
-                nextSaccadeTime.current = 2.0 + Math.random() * 3.0; // 2-5 segundos entre saltos
+                // Intervalo biológico: micro-fijaciones entre 1.8s y 4.5s con probabilidad de doble fijación
+                const isDoubleFixation = Math.random() < 0.15;
+                nextSaccadeTime.current = isDoubleFixation ? 0.35 + Math.random() * 0.4 : 1.8 + Math.random() * 2.7;
             }
 
-            ikControllerRef.current.setLookTargetFromScreen(state.pointer.x, state.pointer.y, 3);
+            // Seguir dinámicamente la cámara 3D para que el avatar te mire a los ojos al mover la cámara
+            ikControllerRef.current.setLookTarget(state.camera.position, true);
+
+            // Inyectar el estado del baile actual (calculado en el frame anterior o actual)
+            ikControllerRef.current.setDanceState(musicEnergyRef.current, danceTimeRef.current);
             ikControllerRef.current.update(delta, externalAnimPlayingRef.current);
         }
+
+        // --- SINCRONIZACIÓN DE CABELLO SE MOVIÓ AL FINAL DEL FRAME ---
 
         const moodInfluence = moodSystemRef.current?.getInfluence() || {
             breathingSpeed: 1, gestureFrequency: 1, expressionIntensity: 1, idleVariation: 1, timeScale: 1
@@ -1439,60 +2233,176 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
         // --- 1. MOVIMIENTO "VIVO" AVANZADO (Procedural Animation) ---
         if (modelRef.current && !externalAnimPlayingRef.current) {
-            // A. RESPIRACIÓN REALISTA (No solo arriba/abajo, sino expansión de pecho)
-            const breathT = t * (isHotMode ? 3.0 : 1.0) * moodInfluence.breathingSpeed;
-            const inhale = Math.sin(breathT); // -1 a 1
 
-            // Movimiento vertical sutil (Pecho sube al inhalar)
-            // Usamos lerp para suavizar cambios bruscos de mood
-            const targetY = -0.5 + (inhale * 0.005 * moodInfluence.expressionIntensity * proceduralLayerWeight);
-            modelRef.current.position.y = THREE.MathUtils.lerp(modelRef.current.position.y, targetY, 0.1);
+            // --- 0. INTERACCIÓN FÍSICA A MORPH TARGETS ---
+            if (interactionLayerRef.current) {
+                const mouthOffset = interactionLayerRef.current.getOffset('mouth');
+                const vaginaOffset = interactionLayerRef.current.getOffset('vagina');
+                const anusOffset = interactionLayerRef.current.getOffset('anus');
 
-            // B. MICRO-BALANCEO (Spine/Columna)
-            // Esto evita que parezca "clavada" al suelo. Se balancea sutilmente como si mantuviera el equilibrio.
-            if (spineRef.current && proceduralLayerWeight > 0.01) {
-                // Ruido orgánico para rotación (Simplex)
-                // Multiplicamos por proceduralLayerWeight para que no afecte a poses de animaciones (ej: sentada)
-                const noiseX = simplex.noise2D(t * 0.5, 0) * 0.02 * moodInfluence.idleVariation * proceduralLayerWeight;
-                const noiseY = simplex.noise2D(t * 0.3, 100) * 0.015 * moodInfluence.idleVariation * proceduralLayerWeight;
-                const noiseZ = simplex.noise2D(t * 0.4, 200) * 0.01 * moodInfluence.idleVariation * proceduralLayerWeight;
+                let mouthTarget = 0;
+                let tongueTarget = 0;
+                let vaginaTarget = 0;
+                let anusTarget = 0;
 
-                // Combinar micro-balanceo con respiración (hot breathing)
-                const breathIntensity = spineRef.current.userData.hotBreathIntensity || 1.0;
-                const breathX = inhale * 0.015 * breathIntensity * proceduralLayerWeight;
-                const targetRotX = noiseX + breathX;
-
-                // Aplicar suavemente
-                spineRef.current.rotation.x = THREE.MathUtils.lerp(spineRef.current.rotation.x, targetRotX, 0.1);
-                spineRef.current.rotation.y = THREE.MathUtils.lerp(spineRef.current.rotation.y, noiseY, 0.1);
-                spineRef.current.rotation.z = THREE.MathUtils.lerp(spineRef.current.rotation.z, noiseZ, 0.1);
-
-                // Mover piernas sutilmente junto con el balanceo del cuerpo
-                if (rightLegRef.current) {
-                    rightLegRef.current.rotation.z = THREE.MathUtils.lerp(rightLegRef.current.rotation.z, noiseZ * 0.35, 0.05);
+                if (mouthOffset) {
+                    mouthTarget = Math.max(0, -mouthOffset.y * 3); // Tirar hacia abajo abre la boca
+                    tongueTarget = Math.max(0, mouthOffset.x * 3); // Tirar hacia los lados saca la lengua
                 }
-                if (leftLegRef.current) {
-                    leftLegRef.current.rotation.z = THREE.MathUtils.lerp(leftLegRef.current.rotation.z, -noiseZ * 0.35, 0.05);
+                if (vaginaOffset) {
+                    // Multiplicador reducido de 4 a 1.5 para hacer el movimiento mucho más leve
+                    vaginaTarget = Math.min(1, Math.abs(vaginaOffset.y) * 0.1 + Math.abs(vaginaOffset.x) * 0.1);
+                }
+                if (anusOffset) {
+                    // Multiplicador reducido de 4 a 1.5 para hacer el movimiento mucho más leve
+                    anusTarget = Math.min(1, Math.abs(anusOffset.y) * 0.1 + Math.abs(anusOffset.x) * 0.1);
                 }
 
-                // Extra en Hot Mode
-                if (isHotMode) {
-                    spineRef.current.rotation.z += Math.sin(t * 2) * 0.02 * proceduralLayerWeight;
-                }
+                morphMeshesRef.current.forEach(mesh => {
+                    if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
+
+                    const dict = mesh.morphTargetDictionary;
+                    const infl = mesh.morphTargetInfluences;
+
+                    const applyMorph = (keys: string[], targetVal: number) => {
+                        keys.forEach(k => {
+                            // Find case insensitive match
+                            const exactKey = Object.keys(dict).find(dk => dk.toLowerCase().includes(k.toLowerCase()));
+                            if (exactKey !== undefined) {
+                                const idx = dict[exactKey];
+                                if (idx !== undefined) infl[idx] = THREE.MathUtils.lerp(infl[idx], targetVal, 0.2);
+                            }
+                        });
+                    };
+
+                    if (mouthOffset || isHotMode) {
+                        const eroticStroke = Math.abs(Math.sin(t * 8));
+                        applyMorph(['MouthOpen', 'Fcl_MTH_A', 'mouth_a', 'open'], Math.max(mouthTarget, eroticStroke * 0.7));
+                        applyMorph(['TongueOut', 'tongue', 'roll', 'Fcl_MTH_O'], Math.max(tongueTarget, eroticStroke * 0.8));
+                        // Expresión Ahegao al recibir la mamada/interacción rítmica
+                        if (eroticStroke > 0.5 && isHotMode) {
+                            applyMorph(['Joy', 'Fcl_EYE_Joy', 'Ahegao', 'wink'], 0.6);
+                        }
+                    }
+                    if (vaginaOffset) {
+                        applyMorph(['vagina', 'pussy', 'hole', 'Fcl_MTH_O'], vaginaTarget);
+                    }
+                    if (anusOffset) {
+                        applyMorph(['anus', 'ass', 'hole'], anusTarget);
+                    }
+                });
             }
 
+            // A. RESPIRACIÓN REALISTA ASIMÉTRICA (Inhalación activa, meseta y exhalación relajada lenta)
+            const breathSpeed = (isHotMode ? 2.4 : 1.0) * moodInfluence.breathingSpeed * 0.28;
+            const breathCycle = ((t * breathSpeed) % 1.0 + 1.0) % 1.0;
+            let inhaleNorm = 0;
+            if (breathCycle < 0.38) {
+                // Inhalación (rápida y activa)
+                const p = breathCycle / 0.38;
+                inhaleNorm = Math.sin(p * Math.PI * 0.5);
+            } else if (breathCycle < 0.46) {
+                // Pausa / retención elástica en el pico
+                inhaleNorm = 1.0;
+            } else {
+                // Exhalación lenta (relajación diafragmática)
+                const p = (breathCycle - 0.46) / 0.54;
+                inhaleNorm = Math.cos(p * Math.PI * 0.5);
+            }
+            const inhale = (inhaleNorm - 0.5) * 2.0; // -1 a 1
+
+            // Movimiento vertical sutil (Pecho sube al inhalar)
+            let baseY = -0.5; // El offset base necesario para este modelo (evita flotar)
+            if (currentBasePoseRef.current === 'sit') baseY = -0.9;
+            if (currentBasePoseRef.current === 'lie') baseY = -1.5;
+
+            const targetY = baseY + (inhale * 0.0045 * moodInfluence.expressionIntensity * proceduralLayerWeight);
+            modelRef.current.position.y = THREE.MathUtils.lerp(modelRef.current.position.y, targetY, 0.08);
+
+            // B. MICRO-BALANCEO (REMOVED)
+            // Removido porque lerp() hacia el ruido (que está cerca de 0) forzaba la columna a estar recta, 
+            // rompiendo la pose de la animación (ej. sentada) y desencajando la malla.
+
             // C. CABEZA "FLOTANTE" (Head Stabilization)
-            if (headBoneRef.current && spineRef.current && proceduralLayerWeight > 0.01) {
-                // Contrarrestar sutilmente el movimiento del cuerpo para mantener la mirada estable
-                const counterX = -spineRef.current.rotation.x * 0.5;
-                const counterY = -spineRef.current.rotation.y * 0.5;
+            // NOTA: El IKController maneja la rotación de cabeza vía quaternion.slerp().
+            // Modificar rotation.x/y aquí directamente CONFLICTA con el IK y produce la cabeza girada 90°.
+            // Solo aplicamos ruido de atención MÍNIMO cuando el IK no está activo (primeros frames).
+            // El "counterX/counterY" ha sido ELIMINADO porque el IK ya maneja el look-at de forma correcta.
+            if (headBoneRef.current && spineRef.current && proceduralLayerWeight > 0.01 && !ikControllerRef.current?.isInitialized()) {
+                // Solo correr si el IK aún no se ha inicializado (fase de arranque)
+                const attentionNoise = simplex.noise2D(t, 600) * 0.005 * moodInfluence.expressionIntensity;
+                headBoneRef.current.rotation.y = THREE.MathUtils.lerp(headBoneRef.current.rotation.y, attentionNoise, 0.05);
+            }
 
-                // Añadir "Sacadas" (movimientos rápidos y pequeños de atención) - Simplex Noise
-                const attentionNoise = simplex.noise2D(t, 600) * 0.05 * moodInfluence.expressionIntensity * proceduralLayerWeight;
+            // --- D. AGENTIC GENERATIVE MOTOR SYSTEM ---
+            if (activeCustomPoseRef.current) {
+                const pose = activeCustomPoseRef.current;
 
-                // Aplicar suavemente
-                headBoneRef.current.rotation.x = THREE.MathUtils.lerp(headBoneRef.current.rotation.x, counterX + attentionNoise * 0.2, 0.1);
-                headBoneRef.current.rotation.y = THREE.MathUtils.lerp(headBoneRef.current.rotation.y, counterY + attentionNoise, 0.1);
+                const applyCustomLimbPose = (
+                    boneRef: React.RefObject<THREE.Bone | THREE.Object3D>,
+                    rotations: { x?: number; y?: number; z?: number },
+                    clamps: {
+                        minX?: number; maxX?: number;
+                        minY?: number; maxY?: number;
+                        minZ?: number; maxZ?: number;
+                    }
+                ) => {
+                    if (!boneRef.current) return;
+                    const bone = boneRef.current;
+                    const baseQuat = bone.userData.baseQuat || bone.userData.ikBaseRotation;
+
+                    const safeX = rotations.x !== undefined ? THREE.MathUtils.clamp(rotations.x, clamps.minX ?? -45, clamps.maxX ?? 45) : 0;
+                    const safeY = rotations.y !== undefined ? THREE.MathUtils.clamp(rotations.y, clamps.minY ?? -45, clamps.maxY ?? 45) : 0;
+                    const safeZ = rotations.z !== undefined ? THREE.MathUtils.clamp(rotations.z, clamps.minZ ?? -45, clamps.maxZ ?? 45) : 0;
+
+                    const deltaEuler = new THREE.Euler(
+                        THREE.MathUtils.degToRad(safeX),
+                        THREE.MathUtils.degToRad(safeY),
+                        THREE.MathUtils.degToRad(safeZ)
+                    );
+                    const deltaQuat = new THREE.Quaternion().setFromEuler(deltaEuler);
+
+                    if (baseQuat) {
+                        const targetQuat = baseQuat.clone().multiply(deltaQuat);
+                        bone.quaternion.slerp(targetQuat, 0.1);
+                    } else {
+                        bone.quaternion.slerp(deltaQuat, 0.1);
+                    }
+                };
+
+                // Limites anatómicos estrictos para la columna y el tronco
+                applyCustomLimbPose(spineRef, 
+                    { x: pose.torsoX, y: pose.torsoY, z: pose.torsoZ }, 
+                    { minX: -20, maxX: 25, minY: -30, maxY: 30, minZ: -15, maxZ: 15 }
+                );
+
+                applyCustomLimbPose(headBoneRef, 
+                    { x: pose.headX, y: pose.headY, z: pose.headZ }, 
+                    { minX: -25, maxX: 25, minY: -40, maxY: 40, minZ: -20, maxZ: 20 }
+                );
+
+                applyCustomLimbPose(leftArmRef, 
+                    { x: pose.leftArmX, z: pose.leftArmZ }, 
+                    { minX: -90, maxX: 90, minZ: -90, maxZ: 90 }
+                );
+
+                applyCustomLimbPose(rightArmRef, 
+                    { x: pose.rightArmX, z: pose.rightArmZ }, 
+                    { minX: -90, maxX: 90, minZ: -90, maxZ: 90 }
+                );
+
+                applyCustomLimbPose(leftLegRef, 
+                    { x: pose.leftLegX, y: pose.leftLegY, z: pose.leftLegZ }, 
+                    { minX: -35, maxX: 35, minY: -30, maxY: 30, minZ: -25, maxZ: 25 }
+                );
+
+                applyCustomLimbPose(rightLegRef, 
+                    { x: pose.rightLegX, y: pose.rightLegY, z: pose.rightLegZ }, 
+                    { minX: -35, maxX: 35, minY: -30, maxY: 30, minZ: -25, maxZ: 25 }
+                );
+
+                applyCustomLimbPose(leftShineRef, { x: pose.leftKneeX }, { minX: -30, maxX: 30 });
+                applyCustomLimbPose(rightShineRef, { x: pose.rightKneeX }, { minX: -30, maxX: 30 });
             }
         }
 
@@ -1500,239 +2410,30 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // Gestión de brazos: si el ProceduralAnimator está activo, él controla los brazos.
         // Si no, devolvemos suavemente a pose de descanso natural.
 
-        // --- 🦵 REALISTIC BIOMECHANICS & KNEE HANGING PHYSICS ---
-        if (!externalAnimPlayingRef.current && leftLegRef.current && rightLegRef.current) {
-            const legReturnSpeed = 0.025;
-            const isActive = !action && proceduralLayerWeight > 0.01;
+        // --- 🦵 PROCEDURAL POSE OVERRIDES (SIT/LIE) ---
+        // Deshabilitado temporalmente por petición del usuario (animaciones generadas proceduralmente)
+        if (modelRef.current) {
+            modelRef.current.rotation.x = THREE.MathUtils.lerp(modelRef.current.rotation.x, 0, 0.05);
 
-            if (isActive) {
-                // --- MODO INACTIVO (REPOSO): Retornar suavemente al STAND con cambio de peso orgánico (Weight Shifting) ---
-                // Dos ondas súper lentas, desfasadas y con ritmos distintos para evitar simetría robótica
-                const leftIdleLift = Math.max(0, Math.sin(t * 0.45) * 0.03 - 0.008);  // Ritmo 1: ~14 segundos por ciclo (elevación ultra sutil ~1.2°)
-                const rightIdleLift = Math.max(0, Math.sin(t * 0.31 + 2.5) * 0.03 - 0.008); // Ritmo 2: ~20 segundos por ciclo, desfasado
+            // --- 🏃 DESPLAZAMIENTO NAVEGACIÓN 3D SOBRE EL SUELO ---
+            if (isNavigating3D.current) {
+                const curPos = modelRef.current.position;
+                const tgtPos = target3DPos.current;
+                const dist2D = new THREE.Vector2(curPos.x, curPos.z).distanceTo(new THREE.Vector2(tgtPos.x, tgtPos.z));
 
-                if (leftLegOriginalRot.current) {
-                    leftLegRef.current.rotation.x = THREE.MathUtils.lerp(
-                        leftLegRef.current.rotation.x,
-                        leftLegOriginalRot.current.x + leftIdleLift, // Micro-elevación ociosa
-                        legReturnSpeed
-                    );
-                    leftLegRef.current.rotation.y = THREE.MathUtils.lerp(
-                        leftLegRef.current.rotation.y,
-                        leftLegOriginalRot.current.y - leftIdleLift * 0.12, // Apertura rotacional ociosa
-                        legReturnSpeed
-                    );
-                    leftLegRef.current.rotation.z = THREE.MathUtils.lerp(
-                        leftLegRef.current.rotation.z,
-                        leftLegOriginalRot.current.z - leftIdleLift * 0.15, // Abducción lateral ociosa
-                        legReturnSpeed
-                    );
-                }
-                if (leftLegOriginalPos.current) {
-                    // Retornar posición a original
-                    leftLegRef.current.position.copy(leftLegOriginalPos.current);
-                }
-
-                if (rightLegOriginalRot.current) {
-                    rightLegRef.current.rotation.x = THREE.MathUtils.lerp(
-                        rightLegRef.current.rotation.x,
-                        rightLegOriginalRot.current.x + rightIdleLift,
-                        legReturnSpeed
-                    );
-                    rightLegRef.current.rotation.y = THREE.MathUtils.lerp(
-                        rightLegRef.current.rotation.y,
-                        rightLegOriginalRot.current.y + rightIdleLift * 0.12,
-                        legReturnSpeed
-                    );
-                    rightLegRef.current.rotation.z = THREE.MathUtils.lerp(
-                        rightLegRef.current.rotation.z,
-                        rightLegOriginalRot.current.z + rightIdleLift * 0.15,
-                        legReturnSpeed
-                    );
-                }
-                if (rightLegOriginalPos.current) {
-                    rightLegRef.current.position.copy(rightLegOriginalPos.current);
-                }
-
-                // Cuelgue natural leve + rodilla colgante proporcional al peso ocioso levantado
-                const naturalKneeFlex = THREE.MathUtils.degToRad(3);
-                if (leftShineRef.current && leftShineOriginalRot.current) {
-                    leftShineRef.current.rotation.x = THREE.MathUtils.lerp(
-                        leftShineRef.current.rotation.x,
-                        leftShineOriginalRot.current.x + naturalKneeFlex + leftIdleLift * 0.9,
-                        legReturnSpeed
-                    );
-                }
-                if (rightShineRef.current && rightShineOriginalRot.current) {
-                    rightShineRef.current.rotation.x = THREE.MathUtils.lerp(
-                        rightShineRef.current.rotation.x,
-                        rightShineOriginalRot.current.x + naturalKneeFlex + rightIdleLift * 0.9,
-                        legReturnSpeed
-                    );
-                }
-            } else {
-                // --- MODO ACTIVO (LEVANTADO): Biomecánica Realista y Gravedad ---
-                // 1. Flexión del fémur: Desviación absoluta respecto al reposo únicamente en el eje X (elevación frontal)
-                // Excluimos Z e Y de este cálculo para romper el bucle de retroalimentación infinita
-                const leftFemurFlex = leftLegOriginalRot.current
-                    ? Math.abs(leftLegRef.current.rotation.x - leftLegOriginalRot.current.x)
-                    : 0;
-                const rightFemurFlex = rightLegOriginalRot.current
-                    ? Math.abs(rightLegRef.current.rotation.x - rightLegOriginalRot.current.x)
-                    : 0;
-
-                // 2. ABDUCCIÓN (Abrir hacia afuera) y ROTACIÓN EXTERNA:
-                // Si el fémur sube, se abre lateralmente y gira el muslo hacia afuera (diva)
-                if (leftLegOriginalRot.current && leftFemurFlex > 0.05) {
-                    // Abrir hacia afuera (Z negativo en este rig) y rotación externa (Y negativo)
-                    leftLegRef.current.rotation.z = THREE.MathUtils.lerp(
-                        leftLegRef.current.rotation.z,
-                        leftLegOriginalRot.current.z - leftFemurFlex * 0.15, // Suavizado a 0.15 para una abducción más contenida y estética
-                        0.1
-                    );
-                    leftLegRef.current.rotation.y = THREE.MathUtils.lerp(
-                        leftLegRef.current.rotation.y,
-                        leftLegOriginalRot.current.y - leftFemurFlex * 0.08, // Suavizado a 0.08 para evitar enrosques de cadera
-                        0.1
-                    );
-                }
-                if (rightLegOriginalRot.current && rightFemurFlex > 0.05) {
-                    // Abrir hacia afuera (Z positivo en este rig) y rotación externa (Y positivo)
-                    rightLegRef.current.rotation.z = THREE.MathUtils.lerp(
-                        rightLegRef.current.rotation.z,
-                        rightLegOriginalRot.current.z + rightFemurFlex * 0.15,
-                        0.1
-                    );
-                    rightLegRef.current.rotation.y = THREE.MathUtils.lerp(
-                        rightLegRef.current.rotation.y,
-                        rightLegOriginalRot.current.y + rightFemurFlex * 0.08,
-                        0.1
-                    );
-                }
-
-                // 3. CORRECTOR DE VOLUMEN DE GLÚTEO (Corrective Joint Translation):
-                // Para evitar que la malla del glúteo se aplaste al levantar el fémur, desplazamos ligeramente el fémur hacia adelante y abajo para preservar el volumen
-                if (leftLegOriginalPos.current && leftFemurFlex > 0.05) {
-                    leftLegRef.current.position.y = THREE.MathUtils.lerp(
-                        leftLegRef.current.position.y,
-                        leftLegOriginalPos.current.y - leftFemurFlex * 0.015, // Mover sutilmente abajo para relajar la malla del glúteo
-                        0.1
-                    );
-                    leftLegRef.current.position.x = THREE.MathUtils.lerp(
-                        leftLegRef.current.position.x,
-                        leftLegOriginalPos.current.x - leftFemurFlex * 0.008, // Mover sutilmente hacia afuera
-                        0.1
-                    );
-                }
-                if (rightLegOriginalPos.current && rightFemurFlex > 0.05) {
-                    rightLegRef.current.position.y = THREE.MathUtils.lerp(
-                        rightLegRef.current.position.y,
-                        rightLegOriginalPos.current.y - rightFemurFlex * 0.015,
-                        0.1
-                    );
-                    rightLegRef.current.position.x = THREE.MathUtils.lerp(
-                        rightLegRef.current.position.x,
-                        rightLegOriginalPos.current.x + rightFemurFlex * 0.008,
-                        0.1
-                    );
-                }
-
-                // 4. CAÍDA POR GRAVEDAD (Flexión de Rodilla / Tibia):
-                // Cuanto más se levanta el fémur, más cae la rodilla hacia atrás por el peso de la pierna y el pie
-                if (leftShineRef.current && leftShineOriginalRot.current && leftFemurFlex > 0.05) {
-                    const kneeTarget = leftShineOriginalRot.current.x + leftFemurFlex * 0.9; // Bending de rodilla natural y elegante
-                    leftShineRef.current.rotation.x = THREE.MathUtils.lerp(
-                        leftShineRef.current.rotation.x,
-                        kneeTarget,
-                        0.15
-                    );
-                }
-                if (rightShineRef.current && rightShineOriginalRot.current && rightFemurFlex > 0.05) {
-                    const kneeTarget = rightShineOriginalRot.current.x + rightFemurFlex * 0.9;
-                    rightShineRef.current.rotation.x = THREE.MathUtils.lerp(
-                        rightShineRef.current.rotation.x,
-                        kneeTarget,
-                        0.15
-                    );
+                if (dist2D > 0.03) {
+                    curPos.x = THREE.MathUtils.lerp(curPos.x, tgtPos.x, 0.05);
+                    curPos.z = THREE.MathUtils.lerp(curPos.z, tgtPos.z, 0.05);
+                } else {
+                    isNavigating3D.current = false;
+                    console.log('🏁 [AvatarViewer3D] Llegó al destino 3D');
                 }
             }
         }
 
-        if (!isProceduralPlaying && !action && !externalAnimPlayingRef.current && isGrokAniRef.current) {
-            // --- RELAX / IDLE ARMS ---
-            const baseDownX = THREE.MathUtils.degToRad(-82);
-            const baseForwardZ = THREE.MathUtils.degToRad(-10);
-
-            if (isAiSpeaking) {
-                // --- AUTO GESTOS AL HABLAR ---
-                const gestureSpeed = 5;
-                const noise = Math.sin(t * gestureSpeed) * Math.cos(t * gestureSpeed * 0.7);
-                const liftAmount = THREE.MathUtils.degToRad(25);
-
-                if (rightArmRef.current) {
-                    const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3)));
-                    const targetZ = THREE.MathUtils.degToRad(-15) + (noise * 0.1);
-                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, targetX, 0.06);
-                    rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, targetZ, 0.06);
-                }
-                if (leftArmRef.current) {
-                    const targetX = baseDownX + (liftAmount * (0.5 + 0.5 * Math.sin(t * 3 + 1)));
-                    const targetZ = THREE.MathUtils.degToRad(15) - (noise * 0.1);
-                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, targetX, 0.06);
-                    leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, targetZ, 0.06);
-                }
-
-                // Flexión natural de los codos (forearms) al hablar
-                if (rightForeArmRef.current) {
-                    const targetElbow = THREE.MathUtils.degToRad(35 + Math.sin(t * 4) * 20);
-                    rightForeArmRef.current.rotation.z = THREE.MathUtils.lerp(rightForeArmRef.current.rotation.z, targetElbow, 0.06);
-                }
-                if (leftForeArmRef.current) {
-                    const targetElbow = THREE.MathUtils.degToRad(-35 - Math.sin(t * 4 + 1) * 20);
-                    leftForeArmRef.current.rotation.z = THREE.MathUtils.lerp(leftForeArmRef.current.rotation.z, targetElbow, 0.06);
-                }
-
-                // Ciclado de posturas de las manos
-                const now = state.clock.elapsedTime;
-                if (now - lastHandPoseTime.current > 2.0) {
-                    lastHandPoseTime.current = now;
-                    speakerPoseIndex.current = (speakerPoseIndex.current + 1) % speakerPoseCycle.current.length;
-                    const nextPose = speakerPoseCycle.current[speakerPoseIndex.current];
-                    window.dispatchEvent(new CustomEvent('aiko-hand-pose', {
-                        detail: { side: 'BOTH', pose: nextPose }
-                    }));
-                }
-                wasSpeakingRef.current = true;
-            } else {
-                // --- POSE DE DESCANSO (brazos abajo con micro-movimientos) ---
-                const lerpReturn = 0.04; // Velocidad suave de retorno
-                const microSway = Math.sin(t * 0.8) * THREE.MathUtils.degToRad(2); // Micro-balanceo natural
-
-                if (rightArmRef.current) {
-                    rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, baseDownX + microSway, lerpReturn);
-                    rightArmRef.current.rotation.z = THREE.MathUtils.lerp(rightArmRef.current.rotation.z, baseForwardZ, lerpReturn);
-                }
-                if (leftArmRef.current) {
-                    leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, baseDownX - microSway, lerpReturn);
-                    leftArmRef.current.rotation.z = THREE.MathUtils.lerp(leftArmRef.current.rotation.z, -baseForwardZ, lerpReturn);
-                }
-
-                // Retornar codos suavemente a 0
-                if (rightForeArmRef.current) {
-                    rightForeArmRef.current.rotation.z = THREE.MathUtils.lerp(rightForeArmRef.current.rotation.z, 0, lerpReturn);
-                }
-                if (leftForeArmRef.current) {
-                    leftForeArmRef.current.rotation.z = THREE.MathUtils.lerp(leftForeArmRef.current.rotation.z, 0, lerpReturn);
-                }
-
-                // Retornar manos a RELAX al dejar de hablar (solo update interno)
-                if (wasSpeakingRef.current) {
-                    wasSpeakingRef.current = false;
-                    fingerPoseRef.current.name = 'RELAX';
-                    fingerPoseRef.current.timer = 0;
-                }
-            }
-        }
+        // --- RELAX / IDLE ARMS (DELETED) ---
+        // Ya no sobreescribimos los brazos manualmente porque el AnimationManager (Mixamo/Blender Idle)
+        // lo hace 1000 veces mejor y evita las torceduras ("brazo torcida") del bind pose roto.
         // Si isProceduralPlaying === true, el ProceduralAnimator controla los brazos en su update().
 
         // --- 🖐️ FINGER PROCEDURAL ANIMATION ---
@@ -1798,22 +2499,101 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             applyFingerPose(fingerBonesRef.current.right);
         }
 
-        // --- 2. CONTROL \"MODO HOT\" (Lengua) ---
-        if (tongueMeshRef.current && tongueRef.current !== null) {
-            const current = tongueMeshRef.current.morphTargetInfluences![tongueRef.current];
-            const targetTongue = isHotMode ? 0.6 : 0;
-            tongueMeshRef.current.morphTargetInfluences![tongueRef.current] =
-                THREE.MathUtils.lerp(current, targetTongue, delta * 5);
+        // --- 2. CONTROL "MODO HOT" Y GESTOS FACIALES VOLUNTARIOS (Ojos, Boca, Lengua) ---
+        let currentTongueTarget = isHotMode ? 0.6 : 0;
+
+        if (activeFacialActionRef.current) {
+            const act = activeFacialActionRef.current;
+            act.timer += delta;
+            const progress = act.timer / act.duration;
+            const intensity = progress < 0.15 ? progress / 0.15 : progress > 0.8 ? (1 - progress) / 0.2 : 1.0;
+
+            morphMeshesRef.current.forEach(mesh => {
+                if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) return;
+                const dict = mesh.morphTargetDictionary;
+                const infl = mesh.morphTargetInfluences;
+
+                const applyMorphKeys = (keys: string[], val: number) => {
+                    keys.forEach(k => {
+                        const foundKey = Object.keys(dict).find(dk => dk.toLowerCase().includes(k.toLowerCase()));
+                        if (foundKey !== undefined) {
+                            const idx = dict[foundKey];
+                            infl[idx] = THREE.MathUtils.lerp(infl[idx], val, 0.25);
+                        }
+                    });
+                };
+
+                if (act.action.includes('wink_left') || act.action === 'wink_l') {
+                    applyMorphKeys(['eyeblink_l', 'blink_l', 'fcl_eye_close_l', 'vrc.blink_left'], intensity);
+                } else if (act.action.includes('wink_right') || act.action === 'wink_r' || act.action === 'wink') {
+                    applyMorphKeys(['eyeblink_r', 'blink_r', 'fcl_eye_close_r', 'vrc.blink_right'], intensity);
+                } else if (act.action.includes('close_eyes') || act.action.includes('cerrar_ojos')) {
+                    applyMorphKeys(['eyeblink', 'blink', 'fcl_eye_close', 'vrc.blink'], intensity);
+                } else if (act.action.includes('tongue') || act.action.includes('lengua')) {
+                    currentTongueTarget = intensity * 0.95;
+                    applyMorphKeys(['tongue', 'fcl_mth_tongue', 'tongueout', 'tongue_out'], intensity * 0.95);
+                } else if (act.action.includes('smile') || act.action.includes('sonre')) {
+                    applyMorphKeys(['smile', 'joy', 'fcl_mth_joy', 'fcl_all_joy'], intensity * 0.85);
+                } else if (act.action.includes('pout') || act.action.includes('puchero')) {
+                    applyMorphKeys(['frown', 'sorrow', 'fcl_mth_sorrow', 'pout'], intensity * 0.75);
+                } else if (act.action.includes('kiss') || act.action.includes('beso')) {
+                    applyMorphKeys(['mouthpucker', 'fcl_mth_u', 'viseme_u', 'kiss'], intensity * 0.9);
+                } else if (act.action.includes('open_mouth') || act.action.includes('abrir_boca')) {
+                    applyMorphKeys(['mouthopen', 'fcl_mth_a', 'viseme_aa'], intensity * 0.7);
+                } else if (act.action.includes('ahegao')) {
+                    currentTongueTarget = intensity * 0.95;
+                    applyMorphKeys(['ahegao', 'roll', 'tongue', 'fcl_mth_tongue'], intensity * 0.9);
+                }
+            });
+
+            if (act.timer >= act.duration) {
+                activeFacialActionRef.current = null;
+            }
         }
 
-        // --- 3. PARPADEO Y LIPSYNC ---
+        if (tongueMeshRef.current && tongueRef.current !== null) {
+            const current = tongueMeshRef.current.morphTargetInfluences![tongueRef.current];
+            tongueMeshRef.current.morphTargetInfluences![tongueRef.current] =
+                THREE.MathUtils.lerp(current, currentTongueTarget, delta * 8);
+        }
+
+        // --- 3. PARPADEO BIOLÓGICO CON CURVA ASIMÉTRICA Y ADAPTACIÓN EMOCIONAL ---
         blinkTimer.current += delta;
+        let blinkCurve = 0;
+
         if (blinkTimer.current >= nextBlinkTime.current) {
             isBlinking.current = true;
-            if (blinkTimer.current >= nextBlinkTime.current + blinkDuration) {
+            const blinkElapsed = blinkTimer.current - nextBlinkTime.current;
+            const totalDuration = blinkDuration; // ~0.20s
+
+            if (blinkElapsed < totalDuration * 0.35) {
+                // Fase 1: Cierre rápido (inercia del párpado superior ~70ms)
+                const p = blinkElapsed / (totalDuration * 0.35);
+                blinkCurve = p * p;
+            } else if (blinkElapsed < totalDuration) {
+                // Fase 2: Reapertura más suave y gradual (~130ms)
+                const p = (blinkElapsed - totalDuration * 0.35) / (totalDuration * 0.65);
+                blinkCurve = 1.0 - Math.sin(p * Math.PI * 0.5);
+            } else {
+                // Parpadeo finalizado: calcular el siguiente intervalo según estado emocional
                 isBlinking.current = false;
                 blinkTimer.current = 0;
-                nextBlinkTime.current = 2.5 + Math.random() * 4;
+
+                let minInterval = 2.4;
+                let maxInterval = 4.6;
+                if (emotion === 'happy' || emotion === 'excited') {
+                    minInterval = 1.8; maxInterval = 3.6;
+                } else if (emotion === 'sad') {
+                    minInterval = 3.4; maxInterval = 6.2;
+                } else if (emotion === 'angry') {
+                    minInterval = 4.5; maxInterval = 7.5; // mirada fija
+                } else if (emotion === 'thinking') {
+                    minInterval = 2.5; maxInterval = 4.6;
+                }
+
+                // Posibilidad de micro doble parpadeo humano natural (~8% de probabilidad)
+                const isDoubleBlink = Math.random() < 0.08;
+                nextBlinkTime.current = isDoubleBlink ? 0.12 + Math.random() * 0.16 : minInterval + Math.random() * (maxInterval - minInterval);
             }
         }
 
@@ -1911,7 +2691,11 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             });
         }
 
-        const blinkValue = isBlinking.current ? 1 : (isHotMode ? 0.3 : 0);
+        const blinkValue = THREE.MathUtils.clamp(
+            isBlinking.current ? blinkCurve : (isHotMode ? 0.25 : 0),
+            0,
+            1
+        );
 
         // --- ANÁLISIS DE AUDIO Y DETECCIÓN DE VISEMAS (Vocales) ---
         let currentViseme: string = 'neutral';
@@ -1928,13 +2712,17 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             mouthIntensity = lsState.intensity;
         }
 
-        // Si el AI está hablando pero no hay audio analizado, usar ciclo procedimental de vocales
+        // Si el AI está hablando pero no hay audio analizado, usar ciclo procedimental de visemas (incluyendo cierres bilabiales)
         if (isAiSpeaking && (mouthIntensity < 0.05 || !audioAnalyser)) {
-            const cycleSpeed = 8; // velocidad de cambio de vocal
-            const visemeCycle = ['A', 'E', 'I', 'O', 'U'];
+            const cycleSpeed = 7; // velocidad de cambio de visema
+            const visemeCycle = ['A', 'M', 'E', 'O', 'M', 'I', 'U', 'P', 'A', 'M', 'E'];
             const cycleIndex = Math.floor(t * cycleSpeed) % visemeCycle.length;
             currentViseme = visemeCycle[cycleIndex];
-            mouthIntensity = 0.45 + Math.sin(t * 12) * 0.25; // oscilar para que no esté estático
+            if (currentViseme === 'M' || currentViseme === 'P') {
+                mouthIntensity = 0;
+            } else {
+                mouthIntensity = 0.45 + Math.sin(t * 12) * 0.25; // oscilar para que no esté estático
+            }
         }
 
         // Suavizar intensidad final
@@ -1951,70 +2739,6 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
         // --- JAW BONE LIP SYNC (para modelos sin morph targets de boca) ---
         if (jawBoneRef.current && jawOriginalRotation.current) {
-            // 🆕 Validar que jawOriginalRotation tenga valores válidos
-            if (isNaN(jawOriginalRotation.current.x) || isNaN(jawOriginalRotation.current.z)) {
-                console.warn('⚠️ jawOriginalRotation tiene valores inválidos, resetando...');
-                jawOriginalRotation.current.copy(jawBoneRef.current.rotation);
-            }
-
-            // Determinar factor de apertura del jaw según el viseme
-            let jawFactor = 0;
-            if (isAiSpeaking) {
-                if (currentViseme === 'A') jawFactor = 1.0;
-                else if (currentViseme === 'E') jawFactor = 0.6;
-                else if (currentViseme === 'I') jawFactor = 0.3;
-                else if (currentViseme === 'O') jawFactor = 0.8;
-                else if (currentViseme === 'U') jawFactor = 0.45;
-                else jawFactor = 0.5;
-            }
-
-            // Rotar la mandíbula para abrir la boca
-            const maxJawRotation = Math.PI / 6.5; // ~27 grados max
-
-            const jawName = jawBoneRef.current.name.toLowerCase();
-            const isDazModel = jawName.includes('lowerjaw') || jawName.includes('genesis');
-
-            if (isDazModel) {
-                // DAZ: rotación en Z (hacia abajo)
-                const baseJawZ = isAiSpeaking ? 0 : 0.05; // Forzar cierre (Z positivo sube mandíbula)
-                const targetZ = jawOriginalRotation.current.z + baseJawZ - (autoMouthOpen * jawFactor * maxJawRotation);
-                const clampedTargetZ = THREE.MathUtils.clamp(
-                    targetZ,
-                    jawOriginalRotation.current.z - Math.PI / 4,
-                    jawOriginalRotation.current.z + Math.PI / 12
-                );
-
-                jawBoneRef.current.rotation.z = THREE.MathUtils.lerp(
-                    jawBoneRef.current.rotation.z,
-                    clampedTargetZ,
-                    0.25
-                );
-
-                if (isNaN(jawBoneRef.current.rotation.z)) {
-                    jawBoneRef.current.rotation.z = jawOriginalRotation.current.z;
-                }
-            } else {
-                // Blender/otros: rotación en X
-                // Sin forzar cierre para evitar que los dientes sobresalgan hacia adelante
-                const baseJawX = 0; 
-                const targetX = jawOriginalRotation.current.x + baseJawX + (autoMouthOpen * jawFactor * maxJawRotation);
-                const clampedTargetX = THREE.MathUtils.clamp(
-                    targetX,
-                    jawOriginalRotation.current.x - Math.PI / 12,
-                    jawOriginalRotation.current.x + Math.PI / 4
-                );
-
-                jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(
-                    jawBoneRef.current.rotation.x,
-                    clampedTargetX,
-                    0.25
-                );
-
-                if (isNaN(jawBoneRef.current.rotation.x)) {
-                    jawBoneRef.current.rotation.x = jawOriginalRotation.current.x;
-                }
-            }
-
             // ACTIVAR MORPHS JCM DE DAZ
             if (dazJawMorphs.current.length > 0) {
                 dazJawMorphs.current.forEach(({ mesh, index }) => {
@@ -2031,181 +2755,21 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             // Actualizar morphs faciales (ojos, cejas, boca base)
             updateFacialExpression(morphTargetMeshes, emotion, isAiSpeaking);
-
-            // Calcular offsets de labios 3D según el viseme
-            // Dejar que el modelo mantenga su pose original
-            let topYOffset = 0;    
-            let topZOffset = 0;    
-            let bottomYOffset = 0;
-            let bottomZOffset = 0;      
-            let cornerXOffset = 0;
-
-            if (isAiSpeaking && autoMouthOpen > 0.01) {
-                const amt = autoMouthOpen;
-                switch (currentViseme) {
-                    case 'A':
-                        topZOffset = -0.022 * amt;
-                        bottomZOffset = 0.03 * amt;
-                        cornerXOffset = -0.005 * amt;
-                        break;
-                    case 'E':
-                        topZOffset = -0.008 * amt;
-                        bottomZOffset = 0.012 * amt;
-                        cornerXOffset = 0.000 * amt; // pull outward
-                        break;
-                    case 'I':
-                        topZOffset = -0.004 * amt;
-                        bottomZOffset = 0.005 * amt;
-                        cornerXOffset = 0.022 * amt; // pull outward strongly
-                        break;
-                    case 'O':
-                        topZOffset = -0.012 * amt;
-                        bottomZOffset = 0.018 * amt;
-                        topYOffset = 0.014 * amt; // push forward
-                        bottomYOffset = 0.014 * amt;
-                        cornerXOffset = -0.012 * amt; // pull inward
-                        break;
-                    case 'U':
-                        topZOffset = -0.006 * amt;
-                        bottomZOffset = 0.008 * amt;
-                        topYOffset = 0.02 * amt; // push forward strongly
-                        bottomYOffset = 0.02 * amt;
-                        cornerXOffset = -0.02 * amt; // pull inward tightly
-                        break;
-                    default:
-                        topZOffset = -0.01 * amt;
-                        bottomZOffset = 0.015 * amt;
-                        break;
-                }
-            }
-
-            // Aplicar a los huesos de labios con lerp suave
-            const boneLerp = 0.25;
-
-            // Labio superior izquierdo (DEF-lip.T.L)
-            if (lipTopBoneRef.current && lipTopOriginalPos.current) {
-                lipTopBoneRef.current.position.z = THREE.MathUtils.lerp(
-                    lipTopBoneRef.current.position.z,
-                    lipTopOriginalPos.current.z + topZOffset,
-                    boneLerp
-                );
-                lipTopBoneRef.current.position.y = THREE.MathUtils.lerp(
-                    lipTopBoneRef.current.position.y,
-                    lipTopOriginalPos.current.y + topYOffset,
-                    boneLerp
-                );
-                lipTopBoneRef.current.position.x = THREE.MathUtils.lerp(
-                    lipTopBoneRef.current.position.x,
-                    lipTopOriginalPos.current.x + cornerXOffset,
-                    boneLerp
-                );
-            }
-
-            // Labio superior derecho (DEF-lip.T.R)
-            if (lipTopRightRef.current && lipTopRightOriginalPos.current) {
-                lipTopRightRef.current.position.z = THREE.MathUtils.lerp(
-                    lipTopRightRef.current.position.z,
-                    lipTopRightOriginalPos.current.z + topZOffset,
-                    boneLerp
-                );
-                lipTopRightRef.current.position.y = THREE.MathUtils.lerp(
-                    lipTopRightRef.current.position.y,
-                    lipTopRightOriginalPos.current.y + topYOffset,
-                    boneLerp
-                );
-                lipTopRightRef.current.position.x = THREE.MathUtils.lerp(
-                    lipTopRightRef.current.position.x,
-                    lipTopRightOriginalPos.current.x - cornerXOffset, // eje inverso
-                    boneLerp
-                );
-            }
-
-            // Labio inferior izquierdo (DEF-lip.B.L)
-            if (lipBottomBoneRef.current && lipBottomOriginalPos.current) {
-                lipBottomBoneRef.current.position.z = THREE.MathUtils.lerp(
-                    lipBottomBoneRef.current.position.z,
-                    lipBottomOriginalPos.current.z + bottomZOffset,
-                    boneLerp
-                );
-                lipBottomBoneRef.current.position.y = THREE.MathUtils.lerp(
-                    lipBottomBoneRef.current.position.y,
-                    lipBottomOriginalPos.current.y + bottomYOffset,
-                    boneLerp
-                );
-                lipBottomBoneRef.current.position.x = THREE.MathUtils.lerp(
-                    lipBottomBoneRef.current.position.x,
-                    lipBottomOriginalPos.current.x + cornerXOffset * 0.7,
-                    boneLerp
-                );
-            }
-
-            // Labio inferior derecho (DEF-lip.B.R)
-            if (lipBottomRightRef.current && lipBottomRightOriginalPos.current) {
-                lipBottomRightRef.current.position.z = THREE.MathUtils.lerp(
-                    lipBottomRightRef.current.position.z,
-                    lipBottomRightOriginalPos.current.z + bottomZOffset,
-                    boneLerp
-                );
-                lipBottomRightRef.current.position.y = THREE.MathUtils.lerp(
-                    lipBottomRightRef.current.position.y,
-                    lipBottomRightOriginalPos.current.y + bottomYOffset,
-                    boneLerp
-                );
-                lipBottomRightRef.current.position.x = THREE.MathUtils.lerp(
-                    lipBottomRightRef.current.position.x,
-                    lipBottomRightOriginalPos.current.x - cornerXOffset * 0.7, // eje inverso
-                    boneLerp
-                );
-            }
-
-            // Animar también huesos externos (.001) para mayor suavidad y realismo de contorno de boca
             if (lipTopOuterRef.current && lipTopOuterOriginalPos.current) {
-                lipTopOuterRef.current.position.z = THREE.MathUtils.lerp(
-                    lipTopOuterRef.current.position.z,
-                    lipTopOuterOriginalPos.current.z + topZOffset * 0.85,
-                    boneLerp
-                );
-                lipTopOuterRef.current.position.x = THREE.MathUtils.lerp(
-                    lipTopOuterRef.current.position.x,
-                    lipTopOuterOriginalPos.current.x + cornerXOffset * 0.9,
-                    boneLerp
-                );
+                lipTopOuterRef.current.position.z = THREE.MathUtils.lerp(lipTopOuterRef.current.position.z, lipTopOuterOriginalPos.current.z + topZOffset * 0.85, boneLerp);
+                lipTopOuterRef.current.position.x = THREE.MathUtils.lerp(lipTopOuterRef.current.position.x, lipTopOuterOriginalPos.current.x + cornerXOffset * 0.9, boneLerp);
             }
             if (lipTopRightOuterRef.current && lipTopRightOuterOriginalPos.current) {
-                lipTopRightOuterRef.current.position.z = THREE.MathUtils.lerp(
-                    lipTopRightOuterRef.current.position.z,
-                    lipTopRightOuterOriginalPos.current.z + topZOffset * 0.85,
-                    boneLerp
-                );
-                lipTopRightOuterRef.current.position.x = THREE.MathUtils.lerp(
-                    lipTopRightOuterRef.current.position.x,
-                    lipTopRightOuterOriginalPos.current.x - cornerXOffset * 0.9,
-                    boneLerp
-                );
+                lipTopRightOuterRef.current.position.z = THREE.MathUtils.lerp(lipTopRightOuterRef.current.position.z, lipTopRightOuterOriginalPos.current.z + topZOffset * 0.85, boneLerp);
+                lipTopRightOuterRef.current.position.x = THREE.MathUtils.lerp(lipTopRightOuterRef.current.position.x, lipTopRightOuterOriginalPos.current.x - cornerXOffset * 0.9, boneLerp);
             }
             if (lipBottomOuterRef.current && lipBottomOuterOriginalPos.current) {
-                lipBottomOuterRef.current.position.z = THREE.MathUtils.lerp(
-                    lipBottomOuterRef.current.position.z,
-                    lipBottomOuterOriginalPos.current.z + bottomZOffset * 0.85,
-                    boneLerp
-                );
-                lipBottomOuterRef.current.position.x = THREE.MathUtils.lerp(
-                    lipBottomOuterRef.current.position.x,
-                    lipBottomOuterOriginalPos.current.x + cornerXOffset * 0.7,
-                    boneLerp
-                );
+                lipBottomOuterRef.current.position.z = THREE.MathUtils.lerp(lipBottomOuterRef.current.position.z, lipBottomOuterOriginalPos.current.z + bottomZOffset * 0.85, boneLerp);
+                lipBottomOuterRef.current.position.x = THREE.MathUtils.lerp(lipBottomOuterRef.current.position.x, lipBottomOuterOriginalPos.current.x + cornerXOffset * 0.7, boneLerp);
             }
             if (lipBottomRightOuterRef.current && lipBottomRightOuterOriginalPos.current) {
-                lipBottomRightOuterRef.current.position.z = THREE.MathUtils.lerp(
-                    lipBottomRightOuterRef.current.position.z,
-                    lipBottomRightOuterOriginalPos.current.z + bottomZOffset * 0.85,
-                    boneLerp
-                );
-                lipBottomRightOuterRef.current.position.x = THREE.MathUtils.lerp(
-                    lipBottomRightOuterRef.current.position.x,
-                    lipBottomRightOuterOriginalPos.current.x - cornerXOffset * 0.7,
-                    boneLerp
-                );
+                lipBottomRightOuterRef.current.position.z = THREE.MathUtils.lerp(lipBottomRightOuterRef.current.position.z, lipBottomRightOuterOriginalPos.current.z + bottomZOffset * 0.85, boneLerp);
+                lipBottomRightOuterRef.current.position.x = THREE.MathUtils.lerp(lipBottomRightOuterRef.current.position.x, lipBottomRightOuterOriginalPos.current.x - cornerXOffset * 0.7, boneLerp);
             }
         }
 
@@ -2224,18 +2788,23 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 });
 
                 // Aplicar LipSync
-                // Intentamos usar el mapa detectado (A, E, I, O, U)
                 if (isAiSpeaking) {
                     const mappings: Record<string, string> = {
                         'A': 'viseme_aa',
                         'E': 'viseme_E',
                         'I': 'viseme_I',
                         'O': 'viseme_O',
-                        'U': 'viseme_U'
+                        'U': 'viseme_U',
+                        'M': 'viseme_PP',
+                        'P': 'viseme_PP',
+                        'B': 'viseme_PP',
+                        'F': 'viseme_FF',
+                        'TH': 'viseme_TH',
+                        'neutral': 'viseme_PP'
                     };
 
-                    const activeTargetKey = mappings[currentViseme] || 'viseme_aa';
-                    const activeIdx = visemeMap[activeTargetKey];
+                    const activeTargetKey = mappings[currentViseme];
+                    const isClosureViseme = currentViseme === 'M' || currentViseme === 'P' || currentViseme === 'B' || currentViseme === 'neutral';
 
                     // Resetear los otros morphs de visemas que no estén activos
                     Object.entries(mappings).forEach(([vowel, key]) => {
@@ -2251,18 +2820,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                         }
                     });
 
-                    // Multiplicador para aumentar la apertura
-                    const mouthIntensity = autoMouthOpen * 0.9;
-                    const clampedIntensity = THREE.MathUtils.clamp(mouthIntensity, 0, 0.85);
+                    const activeIdx = activeTargetKey ? visemeMap[activeTargetKey] : undefined;
+                    const mouthIntensityVal = autoMouthOpen * 0.9;
+                    const clampedIntensity = THREE.MathUtils.clamp(mouthIntensityVal, 0, 0.85);
 
                     if (activeIdx !== undefined) {
                         mesh.morphTargetInfluences[activeIdx] = THREE.MathUtils.lerp(
                             mesh.morphTargetInfluences[activeIdx],
-                            clampedIntensity,
+                            isClosureViseme ? 0.8 : clampedIntensity,
                             0.3
                         );
-                    } else {
-                        // Fallback a cualquier morph "open"
+                    } else if (!isClosureViseme) {
+                        // Fallback a cualquier morph "open" SOLO si NO es un visema de cierre
                         Object.keys(mesh.morphTargetDictionary!).forEach(k => {
                             if (k.toLowerCase().includes('open') || k.toLowerCase().includes('aa')) {
                                 const idx = mesh.morphTargetDictionary![k];
@@ -2276,7 +2845,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
                 } else {
                     // Cerrar boca suavemente - resetear todos los morphs de visemas
-                    const visemeKeys = ['viseme_aa', 'viseme_E', 'viseme_I', 'viseme_O', 'viseme_U'];
+                    const visemeKeys = ['viseme_aa', 'viseme_E', 'viseme_I', 'viseme_O', 'viseme_U', 'viseme_PP', 'viseme_FF', 'viseme_TH'];
                     visemeKeys.forEach(key => {
                         const idx = visemeMap[key];
                         if (idx !== undefined) {
@@ -2307,121 +2876,133 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             });
         }
 
-        // --- Breast and Butt Jiggle Physics ---
-        if (leftBreastRef.current || rightBreastRef.current || leftButtRef.current || rightButtRef.current) {
-            const jiggleStiffness = 0.15;
-            const jiggleDamping = 0.85;
-            let hotFactor = 1.0;
 
-            if (isHotMode) {
-                hotFactor = 1.5;
+        // === 3. APLICAR CAPA DE INTERACCIÓN FÍSICA Y ARRASTRE AL FINAL ===
+        // Esto garantiza que el usuario pueda sobreescribir cualquier animación
 
-                // Aplicar amplificación de velocidad solicitada en el parche
-                jiggleState.current.lBreast.velocity *= hotFactor;
-                jiggleState.current.rBreast.velocity *= hotFactor;
-
-                // Oscilación orgánica sensual adicional en hot mode
-                jiggleState.current.lBreast.velocity += Math.sin(t * 8) * 0.015;
-                jiggleState.current.rBreast.velocity += Math.sin(t * 8 + Math.PI) * 0.015;
-                jiggleState.current.lButt.velocity += Math.cos(t * 6) * 0.01;
-                jiggleState.current.rButt.velocity += Math.cos(t * 6 + Math.PI) * 0.01;
-            } else {
-                // Movimiento muy sutil en reposo normal
-                jiggleState.current.lBreast.velocity += Math.sin(t * 4) * 0.002;
-                jiggleState.current.rBreast.velocity += Math.sin(t * 4 + Math.PI) * 0.002;
-            }
-
-            // Left Breast
-            if (leftBreastRef.current) {
-                const force = (0 - jiggleState.current.lBreast.position) * jiggleStiffness;
-                jiggleState.current.lBreast.velocity += force;
-                jiggleState.current.lBreast.velocity *= jiggleDamping;
-                jiggleState.current.lBreast.position += jiggleState.current.lBreast.velocity;
-                leftBreastRef.current.rotation.x = jiggleState.current.lBreast.position;
-            }
-
-            // Right Breast
-            if (rightBreastRef.current) {
-                const force = (0 - jiggleState.current.rBreast.position) * jiggleStiffness;
-                jiggleState.current.rBreast.velocity += force;
-                jiggleState.current.rBreast.velocity *= jiggleDamping;
-                jiggleState.current.rBreast.position += jiggleState.current.rBreast.velocity;
-                rightBreastRef.current.rotation.x = jiggleState.current.rBreast.position;
-            }
-
-            // Left Butt
-            if (leftButtRef.current) {
-                const force = (0 - jiggleState.current.lButt.position) * jiggleStiffness;
-                jiggleState.current.lButt.velocity += force;
-                jiggleState.current.lButt.velocity *= jiggleDamping;
-                jiggleState.current.lButt.position += jiggleState.current.lButt.velocity;
-                leftButtRef.current.rotation.x = jiggleState.current.lButt.position;
-            }
-
-            // Right Butt
-            if (rightButtRef.current) {
-                const force = (0 - jiggleState.current.rButt.position) * jiggleStiffness;
-                jiggleState.current.rButt.velocity += force;
-                jiggleState.current.rButt.velocity *= jiggleDamping;
-                jiggleState.current.rButt.position += jiggleState.current.rButt.velocity;
-                rightButtRef.current.rotation.x = jiggleState.current.rButt.position;
-            }
+        // 6. Interaction Layer - Física de arrastre con el cursor
+        // (Modifica huesos como la cabeza si el usuario los arrastra)
+        if (interactionLayerRef.current) {
+            interactionLayerRef.current.updatePhysics(delta);
         }
 
-        // --- SECONDARY PHYSICS (HAIR & SKIRT SWAY) ---
-        const windX = simplex.noise2D(t * 1.5, 0) * 0.05;
-        const windZ = simplex.noise2D(0, t * 1.5) * 0.05;
+        // 7. SINCRONIZACIÓN PERFECTA DE CABELLO/CARA (PEGADO AL HEADBONE)
+        // CRÍTICO: Se movió aquí al final para que la cabeza ya tenga su transform FINAL
+        // después de IK, Custom Poses, y Arrastre (InteractionLayer).
+        if (headBoneRef.current && headOrphansRef.current.length > 0) {
+            const head = headBoneRef.current;
+            head.updateWorldMatrix(true, false);
 
-        // Animar cabello de forma fluida
-        if (hairBonesRef.current.length > 0) {
-            hairBonesRef.current.forEach(bone => {
-                const state = swayState.current[bone.uuid];
-                if (state) {
-                    const targetRotX = state.baseRot.x + windX;
-                    const targetRotZ = state.baseRot.z + windZ;
-                    bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, targetRotX, 0.1);
-                    bone.rotation.z = THREE.MathUtils.lerp(bone.rotation.z, targetRotZ, 0.1);
+            const headWPos = new THREE.Vector3();
+            const headWQuat = new THREE.Quaternion();
+            head.getWorldPosition(headWPos);
+            head.getWorldQuaternion(headWQuat);
+
+            headOrphansRef.current.forEach(({ bone, offsetPos, offsetQuat }) => {
+                // Calcular posición y rotación mundial objetivo = headBone + offset (en espacio del head)
+                const targetWPos = offsetPos.clone().applyQuaternion(headWQuat).add(headWPos);
+                const targetWQuat = headWQuat.clone().multiply(offsetQuat);
+
+                // Convertir a espacio local del padre del hueso de cabello
+                if (bone.parent) {
+                    bone.parent.updateWorldMatrix(true, true);
+                    bone.position.copy(bone.parent.worldToLocal(targetWPos.clone()));
+                    const parentWQuat = new THREE.Quaternion();
+                    bone.parent.getWorldQuaternion(parentWQuat);
+                    bone.quaternion.copy(parentWQuat.clone().invert().multiply(targetWQuat));
+                } else {
+                    bone.position.copy(targetWPos);
+                    bone.quaternion.copy(targetWQuat);
                 }
+
+                // Registrar la rotación base para JigglePhysics
+                bone.userData.ikBaseRotation = bone.quaternion.clone();
             });
         }
 
-        // Animar vestido/falda: viento + SEGUIMIENTO DE PIERNAS (evitar clipping)
-        if (skirtBonesRef.current.length > 0) {
-            // Leer cuánto se desvió cada pierna de su posición de reposo
-            const leftLegDelta = (leftLegRef.current && leftLegOriginalRot.current)
-                ? leftLegRef.current.rotation.x - leftLegOriginalRot.current.x
-                : 0;
-            const rightLegDelta = (rightLegRef.current && rightLegOriginalRot.current)
-                ? rightLegRef.current.rotation.x - rightLegOriginalRot.current.x
-                : 0;
+        // Agrandar proporciones permanentemente cada frame (para sobreescribir animaciones)
+        if (leftBreastRef.current) leftBreastRef.current.scale.set(1.4, 1.4, 1.4);
+        if (rightBreastRef.current) rightBreastRef.current.scale.set(1.4, 1.4, 1.4);
+        if (leftButtRef.current) leftButtRef.current.scale.set(1.3, 1.3, 1.3);
+        if (rightButtRef.current) rightButtRef.current.scale.set(1.3, 1.3, 1.3);
+        // Mantener escala uniforme de piernas para evitar torcedura ("pierna chueca") y descalibración de botas/anillos
+        if (leftLegRef.current) leftLegRef.current.scale.set(1.0, 1.0, 1.0);
+        if (rightLegRef.current) rightLegRef.current.scale.set(1.0, 1.0, 1.0);
 
-            // Influencia proporcional: 60% del movimiento de la pierna se transfiere al vestido
-            const LEG_INFLUENCE = 0.60;
+        // =========================================================================
+        // 🔧 ZONA DE AJUSTE MANUAL DE ROPA Y ACCESORIOS (Para ti)
+        // =========================================================================
+        // Ajusta estos valores (en metros) si ves que la ropa o el brillo de los ojos 
+        // quedan flotando o "más arriba". 
+        // - Valores negativos (ej: -0.05) bajan la pieza 5 centímetros.
+        // - Valores positivos (ej: 0.05) la suben 5 centímetros.
+        const manualOffsets = {
+            pelvis: 0.0,    // Falda y caderas
+            spine: 0.0,     // Espalda baja y estómago
+            chest: 0.0,     // Pecho y corsé
+            breast: 0.0,    // Pechos (jiggle)
+            neck: 0.0,      // Collar y accesorios del cuello
+            head: 0.0,      // Brillo de ojos, pelo, sombreros
+            leg: 0.0,       // Piernas y botas (boots2)
+            arm: 0.0        // Brazos y guantes
+        };
+        // =========================================================================
 
-            skirtBonesRef.current.forEach(bone => {
-                const st = swayState.current[bone.uuid];
-                if (!st) return;
+        // --- GLOBAL ARMATURE SYNC (Position & Rotation Copy with Offsets) ---
+        armatureSyncMapRef.current.forEach(({ secondary, primary, offsetPos, offsetQuat }) => {
+            primary.updateWorldMatrix(true, true);
+            const primWPos = new THREE.Vector3();
+            const primWQuat = new THREE.Quaternion();
+            primary.getWorldPosition(primWPos);
+            primary.getWorldQuaternion(primWQuat);
 
-                const bn = bone.name.toLowerCase();
-                const isL = bn.includes('.l') || bn.includes('_l') || bn.includes('left') || bn.endsWith('l');
-                const isR = bn.includes('.r') || bn.includes('_r') || bn.includes('right') || bn.endsWith('r');
+            // Sumamos el offset original al mundo conservando la pose de binding
+            const targetWPos = offsetPos.clone().applyQuaternion(primWQuat).add(primWPos);
+            const targetWQuat = primWQuat.clone().multiply(offsetQuat);
 
-                // Influencia de pierna correspondiente
-                let legInfluenceX = 0;
-                if (isL) legInfluenceX = leftLegDelta * LEG_INFLUENCE;
-                else if (isR) legInfluenceX = rightLegDelta * LEG_INFLUENCE;
-                else legInfluenceX = (leftLegDelta + rightLegDelta) * 0.3; // Huesos centrales: promedio
+            // Aplicar el ajuste manual que configuraste arriba
+            const sName = secondary.name.toLowerCase();
+            if (sName.includes('pelvis')) targetWPos.y += manualOffsets.pelvis;
+            else if (sName.includes('spine')) targetWPos.y += manualOffsets.spine;
+            else if (sName.includes('chest')) targetWPos.y += manualOffsets.chest;
+            else if (sName.includes('breast')) {
+                targetWPos.y += manualOffsets.breast;
+                // Forzar escala gigante cada frame para evitar que la animación lo reinicie
+                secondary.scale.set(1.4, 1.4, 1.4);
+                primary.scale.set(1.4, 1.4, 1.4);
+            }
+            else if (sName.includes('neck')) targetWPos.y += manualOffsets.neck;
+            else if (sName.includes('head') || sName.includes('eye')) targetWPos.y += manualOffsets.head;
+            else if (sName.includes('leg') || sName.includes('thigh') || sName.includes('calf') || sName.includes('foot') || sName.includes('toe')) targetWPos.y += manualOffsets.leg;
+            else if (sName.includes('arm') || sName.includes('hand') || sName.includes('finger')) targetWPos.y += manualOffsets.arm;
 
-                // Target = base de reposo + viento sutil + influencia de pierna
-                const targetRotX = st.baseRot.x + windX * 0.3 + legInfluenceX;
-                const targetRotZ = st.baseRot.z + windZ * 0.3;
+            if (secondary.parent) {
+                secondary.parent.updateWorldMatrix(true, true);
+                secondary.position.copy(secondary.parent.worldToLocal(targetWPos.clone()));
 
-                // Lerp más rápido al seguir la pierna (0.12), retorno más suave (0.06)
-                const lerpSpeed = Math.abs(legInfluenceX) > 0.05 ? 0.12 : 0.06;
-                bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, targetRotX, lerpSpeed);
-                bone.rotation.z = THREE.MathUtils.lerp(bone.rotation.z, targetRotZ, lerpSpeed);
-            });
+                const parentWQuat = new THREE.Quaternion();
+                secondary.parent.getWorldQuaternion(parentWQuat);
+                secondary.quaternion.copy(parentWQuat.clone().invert().multiply(targetWQuat));
+            } else {
+                secondary.position.copy(targetWPos);
+                secondary.quaternion.copy(targetWQuat);
+            }
+
+            // Registrar rotación base para JigglePhysics (pechos, faldas, etc.)
+            secondary.userData.ikBaseRotation = secondary.quaternion.clone();
+
+            secondary.updateMatrixWorld(true);
+        });
+
+        // 8. Actualizar Jiggle Physics (Ropa, Cabello, Pechos)
+        // CRÍTICO: Debe correr DESPUÉS de sincronizar el cabello, para que jiggle 
+        // aplique su simulación física sobre la base (ikBaseRotation) recién sincronizada.
+        if (jigglePhysicsRef.current) {
+            jigglePhysicsRef.current.update(delta, spineRef.current || modelRef.current, t);
         }
+
+        // 9. Attach floating boots to the right foot (REMOVED)
+        // No debemos trasladar un SkinnedMesh porque ya es deformado por sus huesos.
     });
 
     // LISTENER PARA COMANDOS DE ROPA Y HOT MODE
@@ -2472,55 +3053,123 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             if (!spineRef.current || !rightArmRef.current || !leftArmRef.current) return;
 
-            // Reset básico
-            // IMPORTANTE: Resetear rotación del modelo entero por si acaso (missionary)
-            if (modelRef.current) modelRef.current.rotation.x = 0;
+            // RESET OBLIGATORIO: Mantener la raíz del modelo siempre vertical (0°)
+            // NUNCA inclinar modelRef.current porque despega la ropa y los accesorios en espacio 3D
+            if (modelRef.current) {
+                modelRef.current.rotation.x = 0;
+                modelRef.current.rotation.y = 0;
+                modelRef.current.rotation.z = 0;
+            }
 
-            spineRef.current.rotation.set(0, 0, 0);
+            // Reset básico de la columna y pelvis
+            spineRef.current.traverse((child: any) => {
+                if (child.isBone) {
+                    const n = child.name.toLowerCase();
+                    if (n.includes('spine') || n.includes('chest') || n.includes('body') || n.includes('torso')) {
+                        if (child.userData.baseQuat) {
+                            child.quaternion.copy(child.userData.baseQuat);
+                        } else {
+                            child.rotation.set(0, 0, 0);
+                        }
+                    }
+                }
+            });
+            if (spineRef.current.userData.baseQuat) {
+                spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat);
+            } else {
+                spineRef.current.rotation.set(0, 0, 0);
+            }
+
+            if (hipsRef.current) {
+                if (hipsRef.current.userData.baseQuat) {
+                    hipsRef.current.quaternion.copy(hipsRef.current.userData.baseQuat);
+                } else {
+                    hipsRef.current.rotation.set(0, 0, 0);
+                }
+            }
+
+            if (leftLegRef.current) {
+                if (leftLegRef.current.userData.baseQuat) leftLegRef.current.quaternion.copy(leftLegRef.current.userData.baseQuat);
+                else leftLegRef.current.rotation.set(0, 0, 0);
+            }
+            if (rightLegRef.current) {
+                if (rightLegRef.current.userData.baseQuat) rightLegRef.current.quaternion.copy(rightLegRef.current.userData.baseQuat);
+                else rightLegRef.current.rotation.set(0, 0, 0);
+            }
+            if (leftShineRef.current) {
+                if (leftShineRef.current.userData.baseQuat) leftShineRef.current.quaternion.copy(leftShineRef.current.userData.baseQuat);
+                else leftShineRef.current.rotation.set(0, 0, 0);
+            }
+            if (rightShineRef.current) {
+                if (rightShineRef.current.userData.baseQuat) rightShineRef.current.quaternion.copy(rightShineRef.current.userData.baseQuat);
+                else rightShineRef.current.rotation.set(0, 0, 0);
+            }
+
             rightArmRef.current.rotation.set(0, 0, 0);
             leftArmRef.current.rotation.set(0, 0, 0);
 
-            // Forzar brazos abajo (Neutro)
-            const baseDownX = THREE.MathUtils.degToRad(-80);
+            // Forzar brazos relajados (Neutro mejorado)
+            const baseDownX = THREE.MathUtils.degToRad(-70);
+            const baseDownZ = THREE.MathUtils.degToRad(15);
             rightArmRef.current.rotation.x = baseDownX;
+            rightArmRef.current.rotation.z = baseDownZ;
             leftArmRef.current.rotation.x = baseDownX;
+            leftArmRef.current.rotation.z = -baseDownZ;
+
+            if (pose === 'lie') {
+                currentBasePoseRef.current = 'lie';
+            } else {
+                currentBasePoseRef.current = 'stand';
+            }
+
+            console.log(` Pose cambiada a: ${currentBasePoseRef.current}`);
 
             if (pose === 'doggy') {
-                // Doggy: Inclinar tronco adelante, brazos apoyados?
-                spineRef.current.rotation.x = THREE.MathUtils.degToRad(70);
-                // Brazos hacia adelante para apoyar
+                // Inclinar tronco adelante suavemente (sin rotar el contenedor)
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(35), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(35);
+                }
                 rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(45);
                 leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(45);
             } else if (pose === 'kneeling') {
-                // Kneeling: Troco recto, quizás manos en muslos?
-                // Simulación visual solo con tronco/brazos ya que piernas no suelen tener IK completo aquí
                 rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(-20);
-                rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(-20); // Manos al centro
+                rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(-20);
                 leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(-20);
                 leftArmRef.current.rotation.z = THREE.MathUtils.degToRad(20);
             } else if (pose === 'spread_legs') {
-                // Spread legs: Si está sentada o acostada.
-                // Como es avatar de medio cuerpo mayormente, simulamos con brazos abiertos invitando
-                rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(-45); // Abrir brazo
+                rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(-45);
                 rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(-60);
-                leftArmRef.current.rotation.z = THREE.MathUtils.degToRad(45); // Abrir brazo
+                leftArmRef.current.rotation.z = THREE.MathUtils.degToRad(45);
                 leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(-60);
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-15), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-15);
+                }
+            } else if (pose === 'missionary' || pose === 'lie' || pose === 'cowgirl') {
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-15), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-15);
+                }
+                rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(120);
+                leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(120);
+            }
+        };
 
-                // Inclinar atrás sugerente
-                spineRef.current.rotation.x = THREE.MathUtils.degToRad(-20);
-            } else if (pose === 'missionary') {
-                // Acostada boca arriba
-                if (modelRef.current) modelRef.current.rotation.x = THREE.MathUtils.degToRad(-90); // Rotar todo el modelo
-                // Brazos arriba (abrazando)
-                rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(160);
-                leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(160);
-            } else if (pose === 'cowgirl') {
-                // Sentada encima: Tronco recto, saltando levemente (animado en useFrame si quisiéramos)
-                spineRef.current.rotation.x = THREE.MathUtils.degToRad(-15); // Echarse atrás placer
-                rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(150); // Manos en el pecho del usuario/cabeza
-                leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(150);
-            } else if (pose === 'stand' || pose === 'default') {
-                if (modelRef.current) modelRef.current.rotation.x = 0; // Reset rotación modelo
+        // Exponer la función para testear desde la consola
+        (window as any).changePose = (poseName: 'stand' | 'sit' | 'lie') => {
+            handleNovaPose({ detail: { pose: poseName } });
+        };
+
+        const handleNovaTouch = (event: any) => {
+            const { target, forceX, forceY, forceZ } = event.detail;
+            if (jigglePhysicsRef.current && target) {
+                const force = new THREE.Vector3(forceX || 0, forceY || 0, forceZ || 0);
+                jigglePhysicsRef.current.applyImpulse(target, force);
+                console.log(`👐 [AvatarViewer3D] Física aplicada a ${target}:`, force);
             }
         };
 
@@ -2589,14 +3238,34 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         window.addEventListener('nova-action', handleNovaAction);
         window.addEventListener('nova-pose', handleNovaPose);
         window.addEventListener('nova-fluid', handleNovaFluid);
+        window.addEventListener('nova-touch', handleNovaTouch);
+
+        const handleNovaWalkTo = (event: any) => {
+            const { x, z, y } = event.detail || {};
+            if (x !== undefined && z !== undefined) {
+                target3DPos.current.set(x, y || 0, z);
+                isNavigating3D.current = true;
+                console.log(`🚶 [AvatarViewer3D] Navegando 3D hacia: (${x}, ${z})`);
+            }
+        };
+        window.addEventListener('nova-walk-to', handleNovaWalkTo);
 
         return () => {
             window.removeEventListener('nova-clothing-action', handleClothingAction);
             window.removeEventListener('nova-action', handleNovaAction);
             window.removeEventListener('nova-pose', handleNovaPose);
             window.removeEventListener('nova-fluid', handleNovaFluid);
+            window.removeEventListener('nova-touch', handleNovaTouch);
+            window.removeEventListener('nova-walk-to', handleNovaWalkTo);
         };
     }, []);
+
+    // Efecto para escuchar el trigger de reset de físicas
+    useEffect(() => {
+        if (resetPhysicsTrigger > 0 && interactionLayerRef.current) {
+            interactionLayerRef.current.resetPhysics();
+        }
+    }, [resetPhysicsTrigger]);
 
     // LISTENER PARA INTERACCIONES CON EL AVATAR
     useEffect(() => {
@@ -2662,27 +3331,118 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
     }, []);
 
     useFrame((state, delta) => {
-        // Decay gradual del impacto musical
+        // Decay gradual del impacto musical (CRITICO para que deje de moverse)
         musicEnergyRef.current = THREE.MathUtils.lerp(musicEnergyRef.current, 0, delta * 3);
 
-        // Si hay energía musical, modular animación
-        if (musicEnergyRef.current > 0.01) {
-            // 1. Acelerar ligeramente animaciones (vibe)
-            if (mixerRef.current) {
-                // Base 1.0 -> Hasta 1.3 en beat fuerte
-                mixerRef.current.timeScale = THREE.MathUtils.lerp(mixerRef.current.timeScale, 1.0 + musicEnergyRef.current * 0.3, 0.1);
+        // Si hay energía musical, modular animación y aplicar baile procedural
+        // Siempre ejecutamos la interpolación para que regresen suavemente a 0 cuando se apague
+        if (mixerRef.current) {
+            const targetTimeScale = musicEnergyRef.current > 0.01 ? 1.0 + musicEnergyRef.current * 0.3 : 1.0;
+            mixerRef.current.timeScale = THREE.MathUtils.lerp(mixerRef.current.timeScale, targetTimeScale, 0.1);
+        }
+
+        // Incrementar tiempo de baile dinámicamente según la intensidad de la música
+        danceTimeRef.current += delta * (1 + musicEnergyRef.current * 8);
+        const t = danceTimeRef.current;
+        const energy = musicEnergyRef.current; // Multiplicador de amplitud
+
+        // PIERNAS Y RODILLAS: Paso de marcha alternado (más lento, subiendo la rodilla)
+        // Ritmo reducido a la mitad (cada 2 tiempos)
+        const stepSpeed = t * 0.25;
+
+        // Osciladores perfectamente alternados
+        const leftStep = Math.sin(stepSpeed);
+        const rightStep = -Math.sin(stepSpeed); // Fase exactamente opuesta
+
+        // Math.max(0, osc) asegura que la pierna solo suba hacia adelante y repose cuando le toca estar atrás
+        // Multiplicador 0.4 para que levante la pierna notoriamente
+        const leftKneeUp = Math.max(0, leftStep) * 0.4 * energy;
+        const rightKneeUp = Math.max(0, rightStep) * 0.4 * energy;
+
+        // Helper para aplicar offsets transitorios sin corromper la rotación base
+        const applyTransientOffset = (bone: THREE.Object3D, axis: 'x' | 'y' | 'z', offset: number) => {
+            const key = `danceOffset_${axis}`;
+            if (bone.userData[key]) {
+                bone.rotation[axis] -= bone.userData[key];
             }
-            // 2. Head Bobbing sutil 
-            if (headBoneRef.current) {
-                // Un pequeño movimiento rítmico
-                const beatBounce = Math.sin(state.clock.elapsedTime * 15) * musicEnergyRef.current * 0.02;
-                headBoneRef.current.rotation.x += beatBounce * 0.2; // Cabeceo
+            bone.rotation[axis] += offset;
+            bone.userData[key] = offset;
+        };
+
+        if (leftLegRef.current) applyTransientOffset(leftLegRef.current, 'x', -leftKneeUp);
+        if (rightLegRef.current) applyTransientOffset(rightLegRef.current, 'x', -rightKneeUp);
+        if (leftShineRef.current) applyTransientOffset(leftShineRef.current, 'x', leftKneeUp * 1.5);
+        if (rightShineRef.current) applyTransientOffset(rightShineRef.current, 'x', rightKneeUp * 1.5);
+
+        // (Moved applyTransientOffset above)
+
+        // Helper para aplicar offsets de POSICIÓN (para brincos/rebotes)
+        const applyTransientPositionOffset = (bone: THREE.Object3D, axis: 'x' | 'y' | 'z', offset: number) => {
+            const key = `dancePosOffset_${axis}`;
+            if (bone.userData[key]) {
+                bone.position[axis] -= bone.userData[key];
             }
-        } else {
-            // Restaurar velocidad normal suavemente
-            if (mixerRef.current) {
-                mixerRef.current.timeScale = THREE.MathUtils.lerp(mixerRef.current.timeScale, 1.0, 0.1);
+            bone.position[axis] += offset;
+            bone.userData[key] = offset;
+        };
+
+        // Caderas: Balanceo de rotación más lento (igual que las piernas)
+        if (hipsRef.current) {
+            const swayRot = Math.cos(stepSpeed) * 0.04 * energy; // stepSpeed = t * 0.25 (reducido para no deformar)
+            applyTransientOffset(hipsRef.current, 'z', swayRot);
+            applyTransientOffset(hipsRef.current, 'y', swayRot * 0.5);
+            // Eliminado el offset de posición (bobbing) porque desconecta la cadera de la espina
+        }
+
+        // Espalda/Torso y Cuello: Sigue a las caderas con desfase para mover todo el tren superior
+        if (spineRef.current) {
+            applyTransientOffset(spineRef.current, 'z', Math.sin(stepSpeed) * 0.02 * energy); // Reducido drásticamente
+            applyTransientOffset(spineRef.current, 'x', Math.cos(stepSpeed * 2.0) * 0.02 * energy); // Reducido drásticamente
+        }
+
+        // Hombros / Brazos: Paso del pachito (Translación alternada para activar jiggle)
+        if (leftArmRef.current && rightArmRef.current) {
+            // Translación alternada rápida (uno adelante, uno atrás)
+            const armShimmy = Math.sin(t * 1.5) * 0.01 * energy; // Reducido para mayor sutileza
+
+            // Pequeño encogimiento de hombros al ritmo
+            const shoulderShrug = Math.abs(Math.sin(t * 1.0)) * 0.015 * energy; // Reducido para mayor sutileza
+
+            // Rotación original para los hombros
+            applyTransientOffset(leftArmRef.current, 'z', shoulderShrug);
+            applyTransientOffset(rightArmRef.current, 'z', -shoulderShrug);
+
+            // TRANSLACIÓN en el eje X (Local) para el paso del pachito (Adelante/Atrás)
+            // Como los huesos izquierdo y derecho están espejados en el esqueleto,
+            // usar el mismo signo (armShimmy) hará que se muevan alternadamente en el mundo real.
+            applyTransientPositionOffset(leftArmRef.current, 'x', armShimmy);
+            applyTransientPositionOffset(rightArmRef.current, 'x', armShimmy);
+
+            // Repercusión del movimiento en el pecho (Sincronizado con los hombros)
+            if (leftBreastRef.current) {
+                applyTransientPositionOffset(leftBreastRef.current, 'x', armShimmy * 0.8);
             }
+            if (rightBreastRef.current) {
+                applyTransientPositionOffset(rightBreastRef.current, 'x', armShimmy * 0.8);
+            }
+        }
+
+        // Movimiento procedural de cabeza eliminado para evitar que se desincronice
+        // del cuello y del cabello (spine.004, spine.005) durante los bailes.
+
+        // Antebrazos y Muñecas: Movimiento con inercia
+        if (leftForeArmRef.current) {
+            applyTransientOffset(leftForeArmRef.current, 'x', Math.sin(t - 0.5) * 0.2 * energy);
+        }
+        if (rightForeArmRef.current) {
+            applyTransientOffset(rightForeArmRef.current, 'x', Math.sin(t - 0.5 + Math.PI) * 0.2 * energy);
+        }
+
+        if (leftHandRef.current) {
+            applyTransientOffset(leftHandRef.current, 'z', Math.sin(t - 1.0) * 0.3 * energy);
+        }
+        if (rightHandRef.current) {
+            applyTransientOffset(rightHandRef.current, 'z', Math.sin(t - 1.0 + Math.PI) * 0.3 * energy);
         }
 
         // --- 4. FLUID PARTICLE ANIMATION ---
@@ -2711,13 +3471,142 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         }
     });
 
+    // Listener de físicas Jiggle y estiramiento de masa en tiempo real para interacción AR 3D
+    useEffect(() => {
+        const jiggleHandler = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.part) {
+                const partName = detail.part;
+                const isBack = partName.toLowerCase().includes('butt') || partName.toLowerCase().includes('anus');
+                
+                // 1. Aplicar Impulso Físico Elástico Aislado a la Masa Suave (Soft-flesh Jiggle)
+                if (jigglePhysicsRef.current) {
+                    let jiggleTarget = '';
+                    if (partName === 'leftBreast') jiggleTarget = 'breast.l';
+                    else if (partName === 'rightBreast') jiggleTarget = 'breast.r';
+                    else if (partName === 'leftButt' || partName === 'anus') jiggleTarget = 'ass.l';
+                    else if (partName === 'rightButt') jiggleTarget = 'ass.r';
+
+                    if (jiggleTarget) {
+                        const impulse = new THREE.Vector3(
+                            (Math.random() - 0.5) * 0.4,
+                            (Math.random() - 0.5) * 0.4,
+                            isBack ? 0.8 : -0.8
+                        );
+                        jigglePhysicsRef.current.applyImpulse(jiggleTarget, impulse);
+                    }
+                }
+
+                // 2. Aplicar Deformación/Estiramiento Directo de Masa Mamaria / Glúteos (Agarrar en VR/AR)
+                if (detail.screenX && detail.screenY) {
+                    const canvas = document.querySelector('canvas');
+                    if (canvas) {
+                        const evtDown = new PointerEvent('pointerdown', {
+                            clientX: detail.screenX,
+                            clientY: detail.screenY,
+                            bubbles: true,
+                            cancelable: true,
+                            button: 0,
+                            buttons: 1,
+                            pointerId: 1
+                        });
+                        const evtMove = new PointerEvent('pointermove', {
+                            clientX: detail.screenX + (Math.random() - 0.5) * 30,
+                            clientY: detail.screenY + (Math.random() - 0.5) * 30,
+                            bubbles: true,
+                            cancelable: true,
+                            button: 0,
+                            buttons: 1,
+                            pointerId: 1
+                        });
+                        try {
+                            canvas.dispatchEvent(evtDown);
+                            canvas.dispatchEvent(evtMove);
+                        } catch (err) {
+                            // Silencioso
+                        }
+                    }
+                }
+            }
+        };
+        window.addEventListener('nova-jiggle-trigger', jiggleHandler);
+        return () => window.removeEventListener('nova-jiggle-trigger', jiggleHandler);
+    }, []);
+
+    // Manejo de eventos de interacción física y envío al systemBus/geminiService
+    const handleAvatarInteract = (partName: string, interactionType: string, type?: 'sensory' | 'pose', tool?: string) => {
+        // Evitamos spamear eventos, solo enviamos 'pull' o 'grab' o 'hit'
+        if (interactionType === 'grab' || interactionType === 'pull' || interactionType === 'hit') {
+
+            // Si es un golpe, aplicar físicas de impacto instantáneo (Spank/Hit)
+            if (interactionType === 'hit' && jigglePhysicsRef.current) {
+                const isBack = partName.toLowerCase().includes('butt') || partName.toLowerCase().includes('anus');
+                // Golpe hacia adelante o hacia atrás dependiendo de la zona
+                const impulse = new THREE.Vector3(0, 0, isBack ? 2.5 : -2.5);
+
+                // Mapear el hitbox a los nombres de huesos físicos
+                let jiggleTarget = partName;
+                if (partName === 'leftButt' || partName === 'anus') jiggleTarget = 'ass.l';
+                if (partName === 'rightButt') jiggleTarget = 'ass.r';
+                if (partName === 'leftBreast') jiggleTarget = 'breast.l';
+                if (partName === 'rightBreast') jiggleTarget = 'breast.r';
+                if (partName === 'mouth' || partName === 'head') jiggleTarget = 'head';
+
+                jigglePhysicsRef.current.applyImpulse(jiggleTarget, impulse);
+            }
+
+            // Si el punto es solo para 'pose' (mover/agitar miembros) y estamos usando la mano, NO enviamos el evento al cerebro (es silencioso).
+            if (type === 'pose' && currentTool === 'hand') {
+                return; // Solo se mueven las físicas
+            }
+
+            const event = new CustomEvent('nova-physical-interaction', {
+                detail: { part: partName, action: interactionType, isBoldMode: isHotMode, tool: currentTool }
+            });
+            window.dispatchEvent(event);
+        }
+    };
+
     return (
-        <primitive
-            ref={modelRef}
-            object={gltf.scene}
-            scale={2.5}
-            position={[0, -1.5, 0]}
-        />
+        <group>
+            <primitive
+                ref={modelRef}
+                object={gltf.scene}
+                scale={2.5}
+                position={[0, -1.5, 0]}
+            />
+            <AvatarInteractionLayer
+                ref={interactionLayerRef}
+                bones={{
+                    head: headBoneRef.current,
+                    leftBreast: leftBreastRef.current,
+                    rightBreast: rightBreastRef.current,
+                    leftButt: leftButtRef.current,
+                    rightButt: rightButtRef.current,
+                    leftArm: leftArmRef.current,
+                    rightArm: rightArmRef.current,
+                    leftForeArm: leftForeArmRef.current,
+                    rightForeArm: rightForeArmRef.current,
+                    leftHand: leftHandRef.current,
+                    rightHand: rightHandRef.current,
+                    leftLeg: leftLegRef.current,
+                    rightLeg: rightLegRef.current,
+                    leftFoot: leftFootRef.current,
+                    rightFoot: rightFootRef.current,
+                    hips: hipsRef.current as THREE.Bone,
+                    spine: spineRef.current as THREE.Bone,
+                    vagina: vaginaRef.current || (hipsRef.current as THREE.Bone),
+                    anus: anusRef.current || (hipsRef.current as THREE.Bone),
+                    lips: lipsRef.current || headBoneRef.current
+                }}
+                currentTool={currentTool}
+                onInteract={handleAvatarInteract}
+                isBoldMode={isHotMode}
+                showDebugZones={showDebugZones}
+                dragSensitivity={physicsSensitivity}
+                maxAngle={physicsMaxAngle}
+            />
+        </group>
     );
 }
 
@@ -2814,10 +3703,71 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     // Referencia para manipular OrbitControls
     const controlsRef = useRef<any>(null);
 
+    // Estado para la herramienta de interacción activa (fuera del modelo para que la UI no recargue el canvas)
+    const [activeTool, setActiveTool] = useState<InteractionTool>('hand');
+    const [showDebugZones, setShowDebugZones] = useState<boolean>(false);
+    const [isHandTrackingActive, setIsHandTrackingActive] = useState<boolean>(false);
+    const [handPosData, setHandPosData] = useState<{ x: number; y: number; isPinching: boolean; gesture: string } | null>(null);
+
+    // Estado de calibración física
+    const [physicsSensitivity, setPhysicsSensitivity] = useState(0.015);
+    const [physicsMaxAngle, setPhysicsMaxAngle] = useState(Math.PI / 1.5);
+    const [resetPhysicsTrigger, setResetPhysicsTrigger] = useState(0);
+
     const cameraFov = disableControls ? 30 : 50;
 
+    // Handler para simular interacción 3D cuando el tracking de mano hace pinch o agarre en pantalla
+    const handleHandInteract = (screenX: number, screenY: number, isPinching: boolean) => {
+        // Si OrbitControls o HandTracking están activos, evitamos que los eventos del canvas desplacen la cámara
+        const canvasEl = document.querySelector('canvas');
+        if (canvasEl && isPinching) {
+            const eventType = 'pointermove';
+            const pointerEvent = new PointerEvent(eventType, {
+                bubbles: false,
+                cancelable: true,
+                clientX: screenX,
+                clientY: screenY,
+                button: 0,
+                pointerId: 1,
+                pointerType: 'touch',
+                isPrimary: true,
+            });
+            canvasEl.dispatchEvent(pointerEvent);
+        }
+    };
+
+    // Determinar cursor
+    const getCursorClass = () => {
+        if (activeTool === 'hand') return 'cursor-grab active:cursor-grabbing';
+        if (activeTool === 'pencil') return 'cursor-crosshair';
+        return 'cursor-crosshair'; // Default genérico para otras herramientas
+    };
+
     return (
-        <div className="w-full h-full rounded-2xl overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800">
+        <div className={`w-full h-full relative rounded-2xl overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800 ${getCursorClass()}`}>
+
+            <InteractionToolbar
+                isBoldMode={isHotMode || false}
+                activeTool={activeTool}
+                setActiveTool={setActiveTool}
+                showDebugZones={showDebugZones}
+                setShowDebugZones={setShowDebugZones}
+                physicsSensitivity={physicsSensitivity}
+                setPhysicsSensitivity={setPhysicsSensitivity}
+                physicsMaxAngle={physicsMaxAngle}
+                setPhysicsMaxAngle={setPhysicsMaxAngle}
+                resetPhysics={() => setResetPhysicsTrigger(prev => prev + 1)}
+                isHandTrackingActive={isHandTrackingActive}
+                toggleHandTracking={() => setIsHandTrackingActive(prev => !prev)}
+            />
+
+            <HandTrackingOverlay
+                isActive={isHandTrackingActive}
+                onClose={() => setIsHandTrackingActive(false)}
+                onHandInteract={handleHandInteract}
+                onHandUpdate={(pos) => setHandPosData(pos)}
+            />
+
             <Canvas
                 shadows
                 gl={{
@@ -2862,6 +3812,15 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
 
                 <CameraManager viewMode={viewMode} controlsRef={controlsRef} />
 
+                {/* CUERPO Y HERRAMIENTAS 3D DEL USUARIO DENTRO DEL ESCENARIO WEBGL (Solo activo si el botón AR está encendido) */}
+                {isHandTrackingActive && (
+                    <UserAvatar3D
+                        handPos={handPosData}
+                        activeTool={activeTool}
+                        isHotMode={isHotMode}
+                    />
+                )}
+
                 {/* ILUMINACIÓN SUAVE ESTILO ANIME: Mayor luz ambiente para reducir sombras duras */}
                 <ambientLight intensity={1.2} color="#ffffff" />
                 <directionalLight
@@ -2887,15 +3846,26 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                         isHotMode={isHotMode}
                         hairColor={hairColor}
                         audioAnalyser={audioAnalyser}
+                        currentTool={activeTool}
+                        showDebugZones={showDebugZones}
+                        physicsSensitivity={physicsSensitivity}
+                        physicsMaxAngle={physicsMaxAngle}
+                        resetPhysicsTrigger={resetPhysicsTrigger}
                     />
                 </Suspense>
 
                 {!disableControls && (
                     <OrbitControls
+                        makeDefault
                         ref={controlsRef}
-                        enabled={true}
+                        enabled={!isHandTrackingActive}
                         // Target inicial (se sobreescribe por CameraManager)
                         target={[0, 2.2, 0]}
+                        mouseButtons={{
+                            LEFT: undefined as any, // Deshabilitar rotación con click izquierdo
+                            MIDDLE: THREE.MOUSE.ROTATE, // Rotar con la rueda del ratón
+                            RIGHT: THREE.MOUSE.PAN
+                        }}
                     />
                 )}
             </Canvas>

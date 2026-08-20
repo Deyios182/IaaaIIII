@@ -29,10 +29,17 @@ const CATEGORY_PATTERNS: Record<string, string[]> = {
 export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
     const lower = meshName.toLowerCase();
 
-    // 1. BASURA DEL RIG (WIDGETS) - ¡IGNORAR SIEMPRE!
-    // Si el nombre empieza por WGT, es un control de Blender, no ropa.
-    if (lower.startsWith('wgt') || lower.includes('collision') || lower.includes('ik_')) {
-        return 'body'; // Lo marcamos como cuerpo para que NUNCA se oculte accidentalmente
+    // 1. BASURA DEL RIG (WIDGETS) Y MALLAS DUPLICADAS/ROTAS - ¡IGNORAR SIEMPRE!
+    // Si el nombre empieza por WGT, es un control de Blender, o mallas duplicadas con pesos rotos (boots2, flatfooted).
+    if (
+        lower.startsWith('wgt') ||
+        lower.includes('collision') ||
+        lower.includes('ik_') ||
+        lower.includes('boots2') ||
+        lower.includes('bots2') ||
+        lower.includes('flatfooted')
+    ) {
+        return 'body'; // Lo marcamos como cuerpo/protegido para que NUNCA se categorice como outfit ni se muestre
     }
 
     // 2. LISTA BLANCA DE CUERPO (PROTEGIDO)
@@ -54,8 +61,8 @@ export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
     // 3. ROPA REAL DETECTADA (Lo que sí se puede quitar)
     const clothingMap: Record<string, string[]> = {
         'underwear': ['brassiere', 'panties', 'underwear', 'bra', 'thong'],
-        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves', 'necklace', 'stockings', 'bow'],
-        'accessory': ['glasses', 'hat', 'ribbon', 'earring', 'choker', 'headband']
+        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves', 'stockings'],
+        'accessory': ['glasses', 'hat', 'ribbon', 'earring', 'choker', 'headband', 'necklace', 'collar', 'neckband', 'neckstrap', 'neck_acc', 'neck', 'bow']
     };
 
     for (const [cat, keywords] of Object.entries(clothingMap)) {
@@ -186,11 +193,25 @@ export class ClothingManager {
         this.toggleCategory('accessory', true);
     }
 
+    // Ocultar gargantillas y accesorios de cuello que causan desprendimiento o clipping
+    hideNeckAccessories(): void {
+        const keywords = ['choker', 'necklace', 'collar', 'neckband', 'neckstrap', 'neck_ribbon', 'neck_acc', 'neck_accessory', 'neckacc'];
+        this.items.forEach(item => {
+            const lower = item.name.toLowerCase();
+            if (keywords.some(k => lower.includes(k))) {
+                item.visible = false;
+                item.mesh.visible = false;
+                console.log(`🚫 [ClothingManager] Accesorio de cuello ocultado para evitar clipping: ${item.name}`);
+            }
+        });
+    }
+
     // Preset: Solo accesorios
     presetAccessoriesOnly(): void {
         this.toggleCategory('outfit', false);
         this.toggleCategory('underwear', false);
         this.toggleCategory('accessory', true);
+        this.hideNeckAccessories();
     }
 
     // --- STRIP LOGIC ---

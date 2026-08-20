@@ -163,10 +163,29 @@ export function completeReminder(memory: NovaMemory, reminderId: string): NovaMe
     return updated;
 }
 
-// Obtener recordatorios pendientes (que ya deberían haberse disparado)
+// Obtener recordatorios pendientes activos (y auto-archivar vencidos)
 export function getPendingReminders(memory: NovaMemory): Reminder[] {
     const now = Date.now();
-    return memory.reminders.filter(r => !r.completed && r.triggerTime <= now);
+    const fiveMinutesMs = 5 * 60 * 1000;
+    let modified = false;
+
+    const activeReminders: Reminder[] = [];
+    const updatedReminders = memory.reminders.map(r => {
+        if (!r.completed && r.triggerTime < (now - fiveMinutesMs)) {
+            modified = true;
+            return { ...r, completed: true };
+        }
+        if (!r.completed) {
+            activeReminders.push(r);
+        }
+        return r;
+    });
+
+    if (modified) {
+        saveMemory({ ...memory, reminders: updatedReminders });
+    }
+
+    return activeReminders;
 }
 
 // Guardar una conversación importante

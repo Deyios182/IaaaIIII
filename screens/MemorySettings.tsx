@@ -81,26 +81,26 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
   };
 
   return (
-    <div className="flex-1 px-8 py-8 overflow-y-auto custom-scrollbar">
-      <div className="max-w-4xl mx-auto flex flex-col gap-8">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-black tracking-tight">Configuración de Memoria</h1>
-          <p className="text-slate-400 text-lg">Gestiona cómo tu compañero IA almacena, recuerda y utiliza la información sobre ti.</p>
+    <div className="flex-1 px-4 sm:px-8 py-5 sm:py-8 overflow-y-auto custom-scrollbar">
+      <div className="max-w-4xl mx-auto flex flex-col gap-6 sm:gap-8">
+        <div className="flex flex-col gap-1.5 sm:gap-2">
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Configuración de Memoria</h1>
+          <p className="text-slate-400 text-sm sm:text-lg">Gestiona cómo tu compañero IA almacena, recuerda y utiliza la información sobre ti.</p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8">
           <div className="lg:col-span-7 flex flex-col gap-6">
-            <div className="rounded-2xl border border-surface-border bg-surface-dark p-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
+            <div className="rounded-2xl border border-surface-border bg-surface-dark p-4 sm:p-6">
+              <h2 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-4 sm:mb-6">
                 <span className="material-symbols-outlined text-primary">psychology</span> Nivel de Retención
               </h2>
-              <div className="space-y-4">
+              <div className="space-y-3 sm:space-y-4">
                 {[
                   { value: MemoryRetention.SESSION, title: 'Amnésico (Solo sesión)', desc: 'La IA olvidará todo al reiniciar. Máxima privacidad.' },
                   { value: MemoryRetention.SHORT_TERM, title: 'Corto Plazo (30 días)', desc: 'Mantiene contexto de interacciones recientes.' },
                   { value: MemoryRetention.LONG_TERM, title: 'Largo Plazo (Indefinido)', desc: 'Construye una base de conocimiento permanente.' }
                 ].map(opt => (
-                  <label key={opt.value} className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${retention === opt.value ? 'border-primary bg-primary/5' : 'border-surface-border hover:border-white/10'}`}>
+                  <label key={opt.value} className={`flex items-start gap-3 sm:gap-4 p-3.5 sm:p-4 rounded-xl border-2 cursor-pointer transition-all ${retention === opt.value ? 'border-primary bg-primary/5' : 'border-surface-border hover:border-white/10'}`}>
                     <input
                       type="radio"
                       name="retention"
@@ -109,26 +109,26 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ retention, style, known
                       className="mt-1 text-primary focus:ring-primary border-slate-600 bg-transparent"
                     />
                     <div className="flex flex-col">
-                      <span className="text-sm font-bold">{opt.title}</span>
-                      <span className="text-xs text-slate-400 mt-1">{opt.desc}</span>
+                      <span className="text-xs sm:text-sm font-bold">{opt.title}</span>
+                      <span className="text-[11px] sm:text-xs text-slate-400 mt-0.5 sm:mt-1">{opt.desc}</span>
                     </div>
                   </label>
                 ))}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-surface-border bg-surface-dark p-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 mb-5">
+            <div className="rounded-2xl border border-surface-border bg-surface-dark p-4 sm:p-6">
+              <h2 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-4 sm:mb-5">
                 <span className="material-symbols-outlined text-primary">record_voice_over</span> Estilo de Conversación
               </h2>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
                 {Object.values(ConversationStyle).map(s => (
                   <button
                     key={s}
                     onClick={() => setStyle(s)}
-                    className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${style === s ? 'border-primary bg-primary/10' : 'border-surface-border hover:bg-white/5'}`}
+                    className={`flex flex-col items-center gap-2 p-3 sm:p-4 rounded-xl border-2 transition-all ${style === s ? 'border-primary bg-primary/10' : 'border-surface-border hover:bg-white/5'}`}
                   >
-                    <span className="material-symbols-outlined text-2xl">{s === ConversationStyle.EMPATHIC ? 'sentiment_satisfied' : s === ConversationStyle.ANALYTICAL ? 'rocket_launch' : 'lightbulb'}</span>
+                    <span className="material-symbols-outlined text-xl sm:text-2xl">{s === ConversationStyle.EMPATHIC ? 'sentiment_satisfied' : s === ConversationStyle.ANALYTICAL ? 'rocket_launch' : 'lightbulb'}</span>
                     <span className="text-xs font-bold">{s}</span>
                   </button>
                 ))}

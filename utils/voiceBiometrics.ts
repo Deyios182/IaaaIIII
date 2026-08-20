@@ -45,8 +45,10 @@ export function extractVoiceFeatures(buffer: Float32Array, sampleRate: number): 
  */
 function autoCorrelate(buffer: Float32Array, sampleRate: number): number {
     // Perform a naive autocorrelation
+    // Limit MAX_SAMPLES to prevent O(N^2) freezing the main thread.
+    // 1024 samples at 16kHz allows detecting pitch down to ~15.6Hz, which is plenty for human voice.
     let SIZE = buffer.length;
-    let MAX_SAMPLES = Math.floor(SIZE / 2);
+    let MAX_SAMPLES = Math.min(Math.floor(SIZE / 2), 1024);
     let bestOffset = -1;
     let bestCorrelation = 0;
     let rms = 0;
@@ -121,3 +123,35 @@ export function compareVoiceSignatures(sig1: VoiceSignature, sig2: VoiceSignatur
     const score = 1 - (pitchDiff / MAX_PITCH_DIFF);
     return Math.max(0, score);
 }
+
+/**
+ * Detects if a PCM frame contains actual human voice/speech.
+ * Differentiates human speech from transient loud noises (claps, taps, coughs, speaker bass thuds).
+ */
+export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16000): { isSpeech: boolean; pitch: number; energy: number } {
+    let sumSq = 0;
+    for (let i = 0; i < buffer.length; i++) sumSq += buffer[i] * buffer[i];
+    const rms = Math.sqrt(sumSq / buffer.length);
+    
+    // Silence floor
+    if (rms < 0.03) {
+        return { isSpeech: false, pitch: -1, energy: rms };
+    }
+
+    const zcr = calculateZeroCrossingRate(buffer);
+    // Transient clicks/hisses/sharp noise have very high ZCR (> 0.42)
+    if (zcr > 0.42) {
+        return { isSpeech: false, pitch: -1, energy: rms };
+    }
+
+    const pitch = autoCorrelate(buffer, sampleRate);
+    // Human vocal range fundamental frequency is typically 75Hz - 360Hz
+    const isVocalPitch = pitch >= 75 && pitch <= 360;
+
+    return {
+        isSpeech: isVocalPitch && rms >= 0.035,
+        pitch,
+        energy: rms
+    };
+}
+

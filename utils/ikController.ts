@@ -47,6 +47,7 @@ export type LimbTarget =
 export interface LimbIKState {
     bone: THREE.Bone | null;
     originalRot: THREE.Euler;
+    originalQuat?: THREE.Quaternion;
     targetRot: THREE.Euler;
     currentRot: THREE.Euler;
     active?: boolean;
@@ -114,12 +115,15 @@ const HIPS_POSES: Record<string, THREE.Euler> = {
     NEUTRAL:    new THREE.Euler(0, 0, 0),
 };
 
-/** Poses de las PIERNAS (Bones thigh/upleg) - Estrictamente limitadas a micro-movimientos estéticos y ultra-sutiles */
+/** Poses de las PIERNAS (Bones thigh/upleg) - Movimientos naturales visibles */
 const LEG_POSES_RIGHT: Record<string, THREE.Euler> = {
-    FORWARD: new THREE.Euler(deg(1.5), 0, 0),   // Paso ultra-sutil (1.5°)
-    SIDE:    new THREE.Euler(0, 0, deg(1.2)), // Abertura mínima (1.2°)
-    STAND:   new THREE.Euler(0, 0, 0),
-    WIDE:    new THREE.Euler(0, 0, deg(1.0)),   // Postura firme sutil (1.0°)
+    FORWARD:  new THREE.Euler(deg(24), 0, deg(2)),   // Paso adelante visible (24°)
+    BACKWARD: new THREE.Euler(deg(-18), 0, deg(2)),  // Paso atrás (-18°)
+    SIDE:     new THREE.Euler(0, 0, deg(16)),        // Abertura lateral (16°)
+    STAND:    new THREE.Euler(0, 0, 0),              // Postura neutra
+    WIDE:     new THREE.Euler(deg(4), 0, deg(12)),   // Postura firme abierta (12°)
+    CROSS:    new THREE.Euler(deg(10), 0, deg(-8)),  // Pierna cruzada
+    KICK:     new THREE.Euler(deg(38), 0, deg(5)),   // Patada / pierna alzada
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,11 +152,18 @@ export class IKController {
 
     // ── Head & Eye Bones ──────────────────────────────────────────────────────
     private headBone: THREE.Bone | null = null;
+    private dummyHeadBone: THREE.Bone | null = null; // Para capturar huesos separados de pelo/ropa
     private neckBone: THREE.Bone | null = null;
     private leftEye: THREE.Bone | null = null;
     private rightEye: THREE.Bone | null = null;
 
+    // Lista de huesos adicionales de la cabeza que deben rotar sincrónicamente 
+    // (para resolver jerarquías divididas como las de Rigify donde DEF-spine.006, ORG-spine.006 y head son separados)
+    private syncHeadBones: THREE.Bone[] = [];
+    private syncHeadOriginalQuats: THREE.Quaternion[] = [];
+
     private headOriginalQuat: THREE.Quaternion  = new THREE.Quaternion();
+    private dummyHeadOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
     private neckOriginalQuat: THREE.Quaternion  = new THREE.Quaternion();
     private leftEyeOriginalQuat: THREE.Quaternion  = new THREE.Quaternion();
     private rightEyeOriginalQuat: THREE.Quaternion = new THREE.Quaternion();
@@ -162,7 +173,13 @@ export class IKController {
         position: new THREE.Vector3(0, 0, 0),
         enabled: false
     };
+    
+    // ── Dance State ───────────────────────────────────────────────────────────
+    private danceEnergy: number = 0;
+    private danceTime: number = 0;
+    
     private microOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
+    private idleTime: number = 0;
 
     // ── Thinking Mode ─────────────────────────────────────────────────────────
     private thinkingActive: boolean = false;
@@ -182,6 +199,8 @@ export class IKController {
     private fullBodyReady: boolean = false;
     private fingerBones: Map<string, THREE.Bone> = new Map();
     private isVRMModel: boolean = false;
+    /** Flag: el IK NO actualiza cabeza/cuello hasta que recalibrateBindPose() haya capturado el estado real del Idle */
+    private isCalibrated: boolean = false;
 
     // Timer para auto-retorno de piernas al reposo
     private leftLegTimer: number = 0;
@@ -214,6 +233,36 @@ export class IKController {
     // HEAD / EYE INITIALIZATION
     // ─────────────────────────────────────────────────────────────────────────
 
+    public setExplicitHeadBone(bone: THREE.Bone | null) {
+        if (!bone) return;
+        
+        // Si ya teníamos un headBone que es DIFERENTE al que nos pasan,
+        // probablemente nuestro headBone anterior era un dummy (para pelo/sombreros).
+        // Así que lo guardamos en dummyHeadBone antes de sobrescribir.
+        if (this.headBone && this.headBone !== bone) {
+            this.dummyHeadBone = this.headBone;
+            this.dummyHeadOriginalQuat.copy(this.headBone.quaternion);
+        }
+
+        this.headBone = bone;
+        this.headOriginalQuat.copy(bone.quaternion);
+        this.headPose.bone = bone;
+        this.headPose.originalRot.copy(bone.rotation);
+        this.headPose.targetRot.copy(bone.rotation);
+        this.headPose.currentRot.copy(bone.rotation);
+    }
+
+    public setSyncHeadBones(bones: THREE.Bone[]) {
+        // Filtrar el headBone principal y el dummyHeadBone para no rotarlos dos veces
+        this.syncHeadBones = bones.filter(b => b !== this.headBone && b !== this.dummyHeadBone);
+        this.syncHeadOriginalQuats = this.syncHeadBones.map(b => b.quaternion.clone());
+    }
+
+    public clearDummyHeadBones() {
+        this.dummyHeadBone = null;
+        this.syncHeadBones = [];
+    }
+
     initialize(model: THREE.Object3D): void {
         model.traverse((child) => {
             if (!(child as any).isBone) return;
@@ -226,29 +275,49 @@ export class IKController {
                 this.fingerBones.set(name, bone);
             }
 
-            if (name.includes('head') && !name.includes('headtop')) {
-                this.headBone = bone;
-                this.headOriginalQuat.copy(bone.quaternion);
-                this.headPose.bone = bone;
-                this.headPose.originalRot.copy(bone.rotation);
-                this.headPose.targetRot.copy(bone.rotation);
-                this.headPose.currentRot.copy(bone.rotation);
+            // Match exacto o difuso para HEAD
+            const isDeformHead = name === 'j_bip_c_head' || name === 'mixamorighead' || name === 'def-head' || name === 'bip01_head';
+            const isExactHead = isDeformHead || name === 'head';
+            const isFuzzyHead = name.includes('head') && !name.includes('headtop') && !name.includes('hair') && !name.includes('accessory');
+            
+            if (isExactHead || isFuzzyHead) {
+                if (isDeformHead || !this.headBone) {
+                    // Si encontramos el hueso deformador real, y ya teníamos otro, el anterior era un dummy (pelo/sombrero)
+                    if (this.headBone && isDeformHead && this.headBone !== bone) {
+                        this.dummyHeadBone = this.headBone;
+                        this.dummyHeadOriginalQuat.copy(this.headBone.quaternion);
+                    }
+                    this.headBone = bone;
+                    this.headOriginalQuat.copy(bone.quaternion);
+                    this.headPose.bone = bone;
+                    this.headPose.originalRot.copy(bone.rotation);
+                    this.headPose.targetRot.copy(bone.rotation);
+                    this.headPose.currentRot.copy(bone.rotation);
+                } else if (!this.dummyHeadBone && name === 'head') {
+                    // Si ya tenemos el deformador, pero encontramos un "head" suelto, es el dummy
+                    this.dummyHeadBone = bone;
+                    this.dummyHeadOriginalQuat.copy(bone.quaternion);
+                }
             }
 
-            if (name.includes('neck')) {
-                this.neckBone = bone;
-                this.neckOriginalQuat.copy(bone.quaternion);
+            // Match exacto o difuso para NECK
+            const isExactNeck = name === 'neck' || name === 'j_bip_c_neck' || name === 'mixamorigneck' || name === 'def-neck' || name === 'bip01_neck';
+            if (isExactNeck || name.includes('neck')) {
+                if (isExactNeck || !this.neckBone) {
+                    this.neckBone = bone;
+                    this.neckOriginalQuat.copy(bone.quaternion);
+                }
             }
 
-            if (name.includes('eye')) {
+            if (name.includes('eye') && !name.includes('master') && !name.includes('lid') && !name.includes('brow') && !name.includes('lash')) {
                 const isLeft  = name.includes('left')  || name.includes('_l') || name.endsWith('.l');
                 const isRight = name.includes('right') || name.includes('_r') || name.endsWith('.r');
 
-                if (isLeft && !this.leftEye) {
+                if (isLeft && (!this.leftEye || name === 'def-eye.l' || name === 'eye.l' || name === 'def-eye_iris.l')) {
                     this.leftEye = bone;
                     this.leftEyeOriginalQuat.copy(bone.quaternion);
                 }
-                if (isRight && !this.rightEye) {
+                if (isRight && (!this.rightEye || name === 'def-eye.r' || name === 'eye.r' || name === 'def-eye_iris.r')) {
                     this.rightEye = bone;
                     this.rightEyeOriginalQuat.copy(bone.quaternion);
                 }
@@ -292,50 +361,58 @@ export class IKController {
         if (refs.leftArm) {
             this.leftArm.bone = refs.leftArm;
             this.leftArm.originalRot.copy(refs.leftArm.rotation);
+            this.leftArm.originalQuat = refs.leftArm.quaternion.clone();
             this.leftArm.targetRot.copy(refs.leftArm.rotation);
             this.leftArm.currentRot.copy(refs.leftArm.rotation);
         }
         if (refs.rightArm) {
             this.rightArm.bone = refs.rightArm;
             this.rightArm.originalRot.copy(refs.rightArm.rotation);
+            this.rightArm.originalQuat = refs.rightArm.quaternion.clone();
             this.rightArm.targetRot.copy(refs.rightArm.rotation);
             this.rightArm.currentRot.copy(refs.rightArm.rotation);
         }
         if (refs.leftForeArm) {
             this.leftForeArm.bone = refs.leftForeArm;
             this.leftForeArm.originalRot.copy(refs.leftForeArm.rotation);
+            this.leftForeArm.originalQuat = refs.leftForeArm.quaternion.clone();
             this.leftForeArm.targetRot.copy(refs.leftForeArm.rotation);
             this.leftForeArm.currentRot.copy(refs.leftForeArm.rotation);
         }
         if (refs.rightForeArm) {
             this.rightForeArm.bone = refs.rightForeArm;
             this.rightForeArm.originalRot.copy(refs.rightForeArm.rotation);
+            this.rightForeArm.originalQuat = refs.rightForeArm.quaternion.clone();
             this.rightForeArm.targetRot.copy(refs.rightForeArm.rotation);
             this.rightForeArm.currentRot.copy(refs.rightForeArm.rotation);
         }
         if (refs.torso) {
             this.torso.bone = refs.torso;
             this.torso.originalRot.copy(refs.torso.rotation);
-            this.torso.targetRot.copy(refs.torso.rotation);
-            this.torso.currentRot.copy(refs.torso.rotation);
+            this.torso.originalQuat = refs.torso.quaternion.clone();
+            this.torso.targetRot.set(0, 0, 0);
+            this.torso.currentRot.set(0, 0, 0);
         }
         if (refs.hips) {
             this.hips.bone = refs.hips;
             this.hips.originalRot.copy(refs.hips.rotation);
-            this.hips.targetRot.copy(refs.hips.rotation);
-            this.hips.currentRot.copy(refs.hips.rotation);
+            this.hips.originalQuat = refs.hips.quaternion.clone();
+            this.hips.targetRot.set(0, 0, 0);
+            this.hips.currentRot.set(0, 0, 0);
         }
         if (refs.leftLeg) {
             this.leftLeg.bone = refs.leftLeg;
             this.leftLeg.originalRot.copy(refs.leftLeg.rotation);
-            this.leftLeg.targetRot.copy(refs.leftLeg.rotation);
-            this.leftLeg.currentRot.copy(refs.leftLeg.rotation);
+            this.leftLeg.originalQuat = refs.leftLeg.quaternion.clone();
+            this.leftLeg.targetRot.set(0, 0, 0);
+            this.leftLeg.currentRot.set(0, 0, 0);
         }
         if (refs.rightLeg) {
             this.rightLeg.bone = refs.rightLeg;
             this.rightLeg.originalRot.copy(refs.rightLeg.rotation);
-            this.rightLeg.targetRot.copy(refs.rightLeg.rotation);
-            this.rightLeg.currentRot.copy(refs.rightLeg.rotation);
+            this.rightLeg.originalQuat = refs.rightLeg.quaternion.clone();
+            this.rightLeg.targetRot.set(0, 0, 0);
+            this.rightLeg.currentRot.set(0, 0, 0);
         }
 
         this.fullBodyReady = true;
@@ -439,14 +516,26 @@ export class IKController {
             }
             case 'TORSO': {
                 const preset = TORSO_POSES[tStr] || TORSO_POSES.NEUTRAL;
-                this.torso.targetRot.copy(preset);
-                this.torso.active = (tStr !== 'NEUTRAL');
+                if (tStr === 'NEUTRAL') {
+                    this.torso.targetRot.set(0, 0, 0);
+                    this.torso.active = true;
+                    setTimeout(() => { this.torso.active = false; }, 800);
+                } else {
+                    this.torso.targetRot.copy(preset);
+                    this.torso.active = true;
+                }
                 break;
             }
             case 'HIPS': {
                 const preset = HIPS_POSES[tStr] || HIPS_POSES.NEUTRAL;
-                this.hips.targetRot.copy(preset);
-                this.hips.active = (tStr !== 'NEUTRAL');
+                if (tStr === 'NEUTRAL') {
+                    this.hips.targetRot.set(0, 0, 0);
+                    this.hips.active = true;
+                    setTimeout(() => { this.hips.active = false; }, 800);
+                } else {
+                    this.hips.targetRot.copy(preset);
+                    this.hips.active = true;
+                }
                 break;
             }
             case 'LEFT_LEG':
@@ -457,7 +546,6 @@ export class IKController {
                 if (limb === 'RIGHT_LEG' || limb === 'BOTH_LEGS') {
                     this.rightLeg.targetRot.copy(preset);
                     this.rightLeg.active = !isStand;
-                    // Resetear timer al activar, para que el auto-retorno empiece a contar
                     this.rightLegTimer = isStand ? 0 : this.LEG_AUTO_RETURN_DELAY;
                 }
                 if (limb === 'LEFT_LEG' || limb === 'BOTH_LEGS') {
@@ -478,14 +566,14 @@ export class IKController {
         this.rightForeArm.targetRot.copy(this.rightForeArm.originalRot);
         this.headPose.targetRot.copy(this.headPose.originalRot);
         
-        // Reset a original y desactivar para dar control al mixer
-        this.torso.targetRot.copy(this.torso.originalRot);
+        // Reset a offset 0 y desactivar para dar control al mixer
+        this.torso.targetRot.set(0, 0, 0);
         this.torso.active = false;
-        this.hips.targetRot.copy(this.hips.originalRot);
+        this.hips.targetRot.set(0, 0, 0);
         this.hips.active = false;
-        this.leftLeg.targetRot.copy(this.leftLeg.originalRot);
+        this.leftLeg.targetRot.set(0, 0, 0);
         this.leftLeg.active = false;
-        this.rightLeg.targetRot.copy(this.rightLeg.originalRot);
+        this.rightLeg.targetRot.set(0, 0, 0);
         this.rightLeg.active = false;
     }
 
@@ -626,8 +714,8 @@ export class IKController {
         this.lookTarget.enabled = enabled;
     }
 
-    setLookTargetFromScreen(x: number, y: number, distance: number = 3): void {
-        this.lookTarget.position.set(x * distance, y * distance, distance);
+    setLookTargetFromScreen(x: number, y: number, distance: number = 3, heightOffset: number = 1.4): void {
+        this.lookTarget.position.set(x * distance, (y * distance) + heightOffset, distance);
         this.lookTarget.enabled = true;
     }
 
@@ -643,11 +731,24 @@ export class IKController {
     // UPDATE
     // ─────────────────────────────────────────────────────────────────────────
 
+    public setDanceState(energy: number, time: number): void {
+        this.danceEnergy = energy;
+        this.danceTime = time;
+    }
+
     update(delta: number, skipLimbs: boolean = false): void {
+        this.idleTime += delta;
+
         // Interpolaciones suaves de todos los limbs
         if (!skipLimbs) {
             this.updateLimbs(delta);
         }
+
+        // ── GUARD: No actualizar cabeza/cuello hasta que el Idle esté estabilizado ─────────────────
+        // El AnimationMixer necesita ~30 frames para alcanzar su pose estable.
+        // Si el IK mueve la cabeza antes, capturará un ángulo incorrecto del bind pose de Blender
+        // y producirá la cabeza girada 90° hacia atrás al hablar.
+        if (!this.isCalibrated) return;
 
         // Auto-retorno de piernas al reposo
         if (this.leftLeg.active && this.leftLegTimer > 0) {
@@ -669,6 +770,11 @@ export class IKController {
             }
         }
 
+        // Actualizar posturas de las extremidades y articulaciones del cuerpo completo
+        if (!skipLimbs) {
+            this.updateLimbs(delta);
+        }
+
         // Actualizar posturas de las manos (procedural + slerp)
         this.updateHandPoses(delta);
 
@@ -688,6 +794,10 @@ export class IKController {
 
         this.updateHeadLookAt(delta);
         this.updateEyeLookAt(delta);
+    }
+
+    isThinking(): boolean {
+        return this.thinkingActive;
     }
 
     private updateHandPoses(delta: number): void {
@@ -805,38 +915,55 @@ export class IKController {
         if (!limb.bone) return;
 
         if (limb.active) {
-            // Slerp gradual hacia targetRot
-            const targetQuat = new THREE.Quaternion().setFromEuler(limb.targetRot);
+            // BUGFIX: Las rotaciones de limbs flexibles (Torso, Hips, Legs) deben ser RELATIVAS a su pose de reposo original (originalQuat),
+            // en lugar de sobreescribir la rotación absoluta del hueso con setFromEuler(targetRot).
+            // Sobreescribir con setFromEuler(0,0,0) destruía la pose de reposo de Rigify (+90° X) y tumbaba al avatar de espaldas.
+            const deltaQuat = new THREE.Quaternion().setFromEuler(limb.targetRot);
+            const baseQuat = limb.originalQuat || new THREE.Quaternion().setFromEuler(limb.originalRot);
+            const targetQuat = baseQuat.clone().multiply(deltaQuat);
             limb.bone.quaternion.slerp(targetQuat, speed);
-        } else {
-            // Si no está activo, slerp gradual hacia originalRot para retorno fluido y natural
-            const originalQuat = new THREE.Quaternion().setFromEuler(limb.originalRot);
-            const angle = limb.bone.quaternion.angleTo(originalQuat);
-            if (angle > 0.005) {
-                limb.bone.quaternion.slerp(originalQuat, speed);
-            } else {
-                // Ajustar al valor exacto una vez alcanzado el reposo
-                limb.bone.quaternion.copy(originalQuat);
-            }
         }
     }
 
     private updateThinking(delta: number): void {
         this.thinkingTime += delta * 1.5;
 
-        const oscY = Math.sin(this.thinkingTime) * 0.05;
-        const oscX = Math.cos(this.thinkingTime * 0.5) * 0.03 + 0.04;
-        const oscZ = Math.sin(this.thinkingTime * 0.5) * 0.03;
+        let oscY = Math.sin(this.thinkingTime) * 0.05;
+        let oscX = Math.cos(this.thinkingTime * 0.5) * 0.03 + 0.04;
+        let oscZ = Math.sin(this.thinkingTime * 0.5) * 0.03;
+
+        // Añadir energía de baile
+        if (this.danceEnergy > 0.05) {
+            oscZ += Math.sin(this.danceTime * 1.0) * 0.2 * this.danceEnergy;
+            oscX += Math.cos(this.danceTime * 2.0) * 0.15 * this.danceEnergy; // Asentir
+            oscY += Math.sin(this.danceTime * 0.5) * 0.1 * this.danceEnergy;
+        }
 
         if (this.headBone) {
             const thinkingQuat = this.headOriginalQuat.clone()
                 .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(oscX, oscY, oscZ)));
-            this.headBone.quaternion.slerp(thinkingQuat, 0.08);
+            this.headBone.quaternion.slerp(thinkingQuat, this.danceEnergy > 0.05 ? 0.2 : 0.08);
+            this.headBone.userData.ikBaseRotation = this.headBone.quaternion.clone();
+        }
+        if (this.dummyHeadBone) {
+            const dummyThinkingQuat = this.dummyHeadOriginalQuat.clone()
+                .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(oscX, oscY, oscZ)));
+            this.dummyHeadBone.quaternion.slerp(dummyThinkingQuat, this.danceEnergy > 0.05 ? 0.2 : 0.08);
+            this.dummyHeadBone.userData.ikBaseRotation = this.dummyHeadBone.quaternion.clone();
+        }
+
+        for (let i = 0; i < this.syncHeadBones.length; i++) {
+            const bone = this.syncHeadBones[i];
+            const originalQuat = this.syncHeadOriginalQuats[i];
+            const syncThinkingQuat = originalQuat.clone()
+                .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(oscX, oscY, oscZ)));
+            bone.quaternion.slerp(syncThinkingQuat, this.danceEnergy > 0.05 ? 0.2 : 0.08);
+            bone.userData.ikBaseRotation = bone.quaternion.clone();
         }
         if (this.neckBone) {
             const thinkingNeckQuat = this.neckOriginalQuat.clone()
                 .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(oscX * 0.5, oscY * 0.5, oscZ * 0.5)));
-            this.neckBone.quaternion.slerp(thinkingNeckQuat, 0.08);
+            this.neckBone.quaternion.slerp(thinkingNeckQuat, this.danceEnergy > 0.05 ? 0.2 : 0.08);
         }
 
         if (this.leftEye) {
@@ -869,27 +996,68 @@ export class IKController {
         targetRotation.y = Math.atan2(direction.x, direction.z);
         targetRotation.x = -Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
 
-        const originalEuler = new THREE.Euler().setFromQuaternion(this.headOriginalQuat);
-        targetRotation.x = THREE.MathUtils.clamp(
-            targetRotation.x,
-            originalEuler.x - this.settings.maxHeadRotation,
-            originalEuler.x + this.settings.maxHeadRotation
-        );
-        targetRotation.y = THREE.MathUtils.clamp(
-            targetRotation.y,
-            originalEuler.y - this.settings.maxHeadRotation,
-            originalEuler.y + this.settings.maxHeadRotation
-        );
+        // Límites anatómicos seguros para cabeza (evita torcedura/deformación de cuello)
+        const maxHeadY = THREE.MathUtils.degToRad(35);   // Máx 35° izquierda/derecha
+        const maxHeadXUp = THREE.MathUtils.degToRad(20);  // Máx 20° arriba
+        const maxHeadXDown = THREE.MathUtils.degToRad(12); // Máx 12° abajo
 
-        // Mezclar rotación de look-at con override de pose de cabeza
-        const poseQuat = new THREE.Quaternion().setFromEuler(this.headPose.currentRot);
-        const targetQuat = new THREE.Quaternion().setFromEuler(targetRotation).multiply(poseQuat);
+        targetRotation.y = THREE.MathUtils.clamp(targetRotation.y, -maxHeadY, maxHeadY);
+        targetRotation.x = THREE.MathUtils.clamp(targetRotation.x, -maxHeadXDown, maxHeadXUp);
+
+        // Deriva biológica sutil (micro-movimiento vivo al respirar y sostener la cabeza)
+        const bioDriftX = Math.sin(this.idleTime * 0.45) * deg(0.6) + Math.sin(this.idleTime * 1.1) * deg(0.25);
+        const bioDriftY = Math.cos(this.idleTime * 0.35) * deg(0.7) + Math.cos(this.idleTime * 0.9) * deg(0.3);
+        // Inclinación natural z que acompaña la rotación y (los humanos inclinan ligeramente la cabeza al mirar a los lados)
+        const bioDriftZ = -targetRotation.y * 0.08 + Math.sin(this.idleTime * 0.28) * deg(0.5);
+
+        // Añadir energía de baile
+        let danceX = 0, danceY = 0, danceZ = 0;
+        if (this.danceEnergy > 0.05) {
+            danceZ = Math.sin(this.danceTime * 1.0) * 0.2 * this.danceEnergy;
+            danceX = Math.cos(this.danceTime * 2.0) * 0.15 * this.danceEnergy; // Asentir
+            danceY = Math.sin(this.danceTime * 0.5) * 0.1 * this.danceEnergy;
+        }
+
+        // Combinar delta de mirada + deriva biológica + pose de cabeza + baile
+        const lookEuler = new THREE.Euler(
+            targetRotation.x + bioDriftX,
+            targetRotation.y + bioDriftY,
+            bioDriftZ
+        );
+        const lookDeltaQuat = new THREE.Quaternion().setFromEuler(lookEuler);
+        const poseQuat = new THREE.Quaternion().setFromEuler(this.headPose.targetRot);
+        const danceQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(danceX, danceY, danceZ));
         
-        this.headBone.quaternion.slerp(targetQuat, this.settings.headLookSpeed);
+        const totalRelativeQuat = lookDeltaQuat.clone().multiply(poseQuat).multiply(danceQuat);
+        const lookSpeed = this.danceEnergy > 0.05 ? 0.03 : this.settings.headLookSpeed;
 
-        if (this.neckBone) {
-            const neckTargetQuat = this.neckOriginalQuat.clone().slerp(targetQuat, 0.3);
-            this.neckBone.quaternion.slerp(neckTargetQuat, this.settings.headLookSpeed);
+        // Cabeza: Aplica la rotación completa de mirada sobre el hueso del cráneo
+        const targetQuat = this.headOriginalQuat.clone().multiply(totalRelativeQuat);
+        this.headBone.quaternion.slerp(targetQuat, lookSpeed);
+        this.headBone.userData.ikBaseRotation = this.headBone.quaternion.clone();
+
+        // Cuello: Solo se aplica movimiento cinemático dinámico durante el baile (danceEnergy > 0.05).
+        // En modo Idle normal, se permite que la animación fluya de manera continua entre el pecho y el cuello,
+        // eliminando por completo el conflicto de articulación que generaba la joroba.
+        if (this.neckBone && this.danceEnergy > 0.05) {
+            const neckDanceQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(danceX * 0.1, danceY * 0.1, danceZ * 0.1));
+            const neckTargetQuat = this.neckOriginalQuat.clone().multiply(neckDanceQuat);
+            this.neckBone.quaternion.slerp(neckTargetQuat, lookSpeed);
+            this.neckBone.userData.ikBaseRotation = this.neckBone.quaternion.clone();
+        }
+
+        if (this.dummyHeadBone) {
+            const dummyTargetQuat = this.dummyHeadOriginalQuat.clone().multiply(totalRelativeQuat);
+            this.dummyHeadBone.quaternion.slerp(dummyTargetQuat, lookSpeed);
+            this.dummyHeadBone.userData.ikBaseRotation = this.dummyHeadBone.quaternion.clone();
+        }
+
+        for (let i = 0; i < this.syncHeadBones.length; i++) {
+            const bone = this.syncHeadBones[i];
+            const originalQuat = this.syncHeadOriginalQuats[i];
+            const syncTargetQuat = originalQuat.clone().multiply(totalRelativeQuat);
+            bone.quaternion.slerp(syncTargetQuat, lookSpeed);
+            bone.userData.ikBaseRotation = bone.quaternion.clone();
         }
     }
 
@@ -908,7 +1076,7 @@ export class IKController {
         targetRotation.y = Math.atan2(direction.x, direction.z);
         targetRotation.x = -Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
 
-        targetRotation.x = THREE.MathUtils.clamp(targetRotation.x, -this.settings.maxEyeRotation, this.settings.maxEyeRotation);
+        targetRotation.x = THREE.MathUtils.clamp(targetRotation.x, -this.settings.maxEyeRotation, this.settings.maxEyeRotation * 0.4);
         targetRotation.y = THREE.MathUtils.clamp(targetRotation.y, -this.settings.maxEyeRotation, this.settings.maxEyeRotation);
 
         const targetQuat = new THREE.Quaternion().setFromEuler(targetRotation);
@@ -926,11 +1094,12 @@ export class IKController {
     private returnToOriginalPose(_delta: number): void {
         const returnSpeed = 0.05;
         // Mezclar original con pose de cabeza si existe override
-        const poseQuat = new THREE.Quaternion().setFromEuler(this.headPose.currentRot);
+        const poseQuat = new THREE.Quaternion().setFromEuler(this.headPose.targetRot);
         const headTarget = this.headOriginalQuat.clone().multiply(poseQuat);
 
         if (this.headBone)  this.headBone.quaternion.slerp(headTarget, returnSpeed);
-        if (this.neckBone)  this.neckBone.quaternion.slerp(this.neckOriginalQuat, returnSpeed);
+        if (this.dummyHeadBone) this.dummyHeadBone.quaternion.slerp(headTarget, returnSpeed);
+        if (this.neckBone)  this.neckBone.quaternion.slerp(this.neckOriginalQuat, returnSpeed * 0.5); // Retorno más lento para el cuello
         if (this.leftEye)   this.leftEye.quaternion.slerp(this.leftEyeOriginalQuat, returnSpeed);
         if (this.rightEye)  this.rightEye.quaternion.slerp(this.rightEyeOriginalQuat, returnSpeed);
     }
@@ -939,8 +1108,59 @@ export class IKController {
     // UTILIDADES PÚBLICAS
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Recalibrar las rotaciones base de la cabeza y el cuello DESPUÉS de que
+     * el AnimationMixer haya estabilizado la animación Idle.
+     * Llamar ~5 frames después de cargar el modelo.
+     */
+    recalibrateBindPose(): void {
+        if (this.headBone) {
+            this.headOriginalQuat.copy(this.headBone.quaternion);
+            this.headPose.originalRot.copy(this.headBone.rotation);
+            console.log('🔧 IK: headOriginalQuat recalibrado al estado Idle estabilizado');
+        }
+        if (this.dummyHeadBone) {
+            this.dummyHeadOriginalQuat.copy(this.dummyHeadBone.quaternion);
+        }
+        if (this.neckBone) {
+            this.neckOriginalQuat.copy(this.neckBone.quaternion);
+            console.log('🔧 IK: neckOriginalQuat recalibrado al estado Idle estabilizado');
+        }
+        // Recalibrar también los syncHeadBones
+        this.syncHeadOriginalQuats = this.syncHeadBones.map(b => b.quaternion.clone());
+
+        // Recalibrar torso, caderas y piernas para que NEUTRAL sepa a dónde volver
+        if (this.torso.bone) {
+            this.torso.originalRot.copy(this.torso.bone.rotation);
+            this.torso.originalQuat = this.torso.bone.quaternion.clone();
+            console.log('🔧 IK: torso.originalRot recalibrado al estado Idle estabilizado');
+        }
+        if (this.hips.bone) {
+            this.hips.originalRot.copy(this.hips.bone.rotation);
+            this.hips.originalQuat = this.hips.bone.quaternion.clone();
+        }
+        if (this.leftLeg.bone) {
+            this.leftLeg.originalRot.copy(this.leftLeg.bone.rotation);
+            this.leftLeg.originalQuat = this.leftLeg.bone.quaternion.clone();
+        }
+        if (this.rightLeg.bone) {
+            this.rightLeg.originalRot.copy(this.rightLeg.bone.rotation);
+            this.rightLeg.originalQuat = this.rightLeg.bone.quaternion.clone();
+        }
+
+        // ✅ Ahora el IK puede actualizar la cabeza con certeza de tener el quaternion correcto
+        this.isCalibrated = true;
+        console.log('✅ IK: Calibración completa — head tracking activado');
+    }
+
     updateSettings(settings: Partial<IKSettings>): void {
         this.settings = { ...this.settings, ...settings };
+    }
+
+    /** Resetear la calibración (llamar cuando se carga un nuevo modelo) */
+    resetCalibration(): void {
+        this.isCalibrated = false;
+        console.log('🔄 IK: Calibración reseteada — esperando nuevo recalibrateBindPose()');
     }
 
     isInitialized(): boolean {

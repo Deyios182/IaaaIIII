@@ -45,13 +45,13 @@ export function useAudioPipeline(config: AudioPipelineConfig = {}): AudioPipelin
 
     const startCapture = useCallback(async (deviceId?: string): Promise<MediaStream | null> => {
         try {
-            // Audio constraints - raw audio for nuance detection
+            // Audio constraints - AEC enabled & raw audio for nuance detection (claps, rhythms, music)
             const audioConstraints: MediaTrackConstraints = {
                 deviceId: deviceId ? { exact: deviceId } : undefined,
                 sampleRate: targetSampleRate,
                 channelCount: 1,
-                noiseSuppression: false,  // Allow all sounds (claps, rhythms)
-                echoCancellation: false,
+                noiseSuppression: false, // Permitir que Gemini escuche ruidos, aplausos y música
+                echoCancellation: true,  // Cancelación acústica para altavoces
                 autoGainControl: true
             };
 

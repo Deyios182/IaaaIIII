@@ -39,8 +39,32 @@ export class AnimationManager {
     constructor(model: THREE.Object3D, animations: THREE.AnimationClip[]) {
         this.mixer = new THREE.AnimationMixer(model);
 
-        // Cargar todos los clips disponibles
-        animations.forEach(clip => {
+        // Filtrar tracks faciales para evitar que las animaciones horneadas (ej: Idle)
+        // sobrescriban el LipSync o el ProceduralAnimator.
+        const filteredAnimations = animations.map(clip => {
+            const newClip = clip.clone();
+            newClip.tracks = newClip.tracks.filter(track => {
+                const lowerName = track.name.toLowerCase();
+                // Si el track afecta a un hueso de la cara, lo eliminamos
+                if (
+                    lowerName.includes('lip') ||
+                    lowerName.includes('jaw') ||
+                    lowerName.includes('mouth') ||
+                    lowerName.includes('eye') ||
+                    lowerName.includes('brow') ||
+                    lowerName.includes('cheek') ||
+                    lowerName.includes('tongue') ||
+                    lowerName.includes('smile')
+                ) {
+                    return false;
+                }
+                return true;
+            });
+            return newClip;
+        });
+
+        // Cargar todos los clips disponibles filtrados
+        filteredAnimations.forEach(clip => {
             this.clips.set(clip.name, clip);
             const action = this.mixer.clipAction(clip);
             this.actions.set(clip.name, action);

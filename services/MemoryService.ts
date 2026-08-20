@@ -10,12 +10,17 @@ import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 // ============ HELPER: Error Logging ============
 const logSupabaseError = (context: string, error: any) => {
+    const errorStr = typeof error === 'string' ? error : JSON.stringify(error || {});
     const isNetworkError = error?.message?.includes('Failed to fetch') || 
-                          (typeof error === 'string' && error.includes('Failed to fetch')) ||
+                          errorStr.includes('Failed to fetch') ||
                           error?.message?.includes('fetch') ||
-                          error?.details?.includes('Failed to fetch');
+                          error?.details?.includes('Failed to fetch') ||
+                          error?.status === 522 ||
+                          errorStr.includes('522') ||
+                          errorStr.includes('CORS') ||
+                          error?.code === 'ERR_FAILED';
     if (isNetworkError) {
-        console.warn(`⚠️ [MemoryService] Conexión fallida con Supabase en: ${context} (Offline/Unreachable)`);
+        console.warn(`⚠️ [MemoryService] Conexión fallida con Supabase en: ${context} (Offline/Unreachable / HTTP 522 Timeout)`);
     } else {
         console.error(`❌ [MemoryService] Error en ${context}:`, error);
     }
@@ -297,9 +302,21 @@ export const addKnownPerson = async (person: Omit<KnownPerson, 'id' | 'user_id'>
     if (!isSupabaseConfigured()) return null;
 
     const userId = await getCurrentUserId();
+    let photoData = person.photo_data;
+    if (photoData && typeof photoData === 'string' && photoData.length > 500000) {
+        console.warn('⚠️ [MemoryService] photo_data excede 500KB. Omitiendo la imagen Base64 para prevenir timeouts 522.');
+        photoData = undefined;
+    }
+
+    const payload = {
+        ...person,
+        photo_data: photoData,
+        user_id: userId
+    };
+
     const { data, error } = await supabase
         .from('nova_known_people')
-        .insert({ user_id: userId, ...person })
+        .insert(payload)
         .select()
         .single();
 
@@ -351,8 +368,18 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
     if (!isSupabaseConfigured()) return null;
     const userId = await getCurrentUserId();
 
-    const dbPayload = {
-        id: person.id,
+    // Validar UUID para prevenir errores de casteo en PostgreSQL
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const validId = (person.id && uuidRegex.test(person.id)) ? person.id : undefined;
+
+    // Truncar o evitar enviar Base64 gigante (>500KB) directamente por REST para evitar HTTP 522 Timeout
+    let photoData = person.photo_data || person.photoData;
+    if (photoData && typeof photoData === 'string' && photoData.length > 500000) {
+        console.warn('⚠️ [MemoryService] photo_data excede 500KB en upsert. Omitiendo Base64 para prevenir HTTP 522 Timeout.');
+        photoData = undefined;
+    }
+
+    const dbPayload: any = {
         user_id: userId,
         name: person.name,
         relationship: person.relationship,
@@ -361,10 +388,14 @@ export const upsertKnownPerson = async (person: any): Promise<KnownPerson | null
         face_descriptor: (person.face_descriptor || person.faceDescriptor)
             ? Array.from(person.face_descriptor || person.faceDescriptor)
             : null,
-        photo_data: person.photo_data || person.photoData,
+        photo_data: photoData,
         is_unknown: person.is_unknown !== undefined ? person.is_unknown : person.isUnknown,
         last_seen: person.last_seen || (person.lastSeen ? new Date(person.lastSeen).toISOString() : new Date().toISOString())
     };
+
+    if (validId) {
+        dbPayload.id = validId;
+    }
 
     const { data, error } = await supabase
         .from('nova_known_people')
@@ -499,14 +530,43 @@ export const getPendingReminders = async (): Promise<Reminder[]> => {
         .from('nova_reminders')
         .select('*')
         .eq('user_id', userId)
-        .eq('completed', false)
-        .lte('trigger_time', new Date().toISOString());
+        .eq('completed', false);
 
     if (error) {
         logSupabaseError('getPendingReminders', error);
         return [];
     }
-    return data || [];
+    if (!data || data.length === 0) return [];
+
+    const nowMs = Date.now();
+    const fiveMinutesMs = 5 * 60 * 1000;
+
+    const activeReminders: Reminder[] = [];
+    const expiredIds: string[] = [];
+
+    for (const r of data) {
+        const triggerMs = new Date(r.trigger_time).getTime();
+        // Si la alarma/recordatorio pasó hace más de 5 minutos, marcarlo como completado/archivado
+        if (triggerMs < (nowMs - fiveMinutesMs)) {
+            if (r.id) expiredIds.push(r.id);
+        } else {
+            activeReminders.push(r);
+        }
+    }
+
+    // Auto-archivar en Supabase los recordatorios/alarmas pasados
+    if (expiredIds.length > 0) {
+        console.log(`🧹 [MemoryService] Auto-archivando ${expiredIds.length} recordatorios/alarmas vencidos...`);
+        supabase
+            .from('nova_reminders')
+            .update({ completed: true })
+            .in('id', expiredIds)
+            .then(({ error: err }) => {
+                if (err) console.warn('⚠️ Error al auto-archivar recordatorios vencidos:', err);
+            });
+    }
+
+    return activeReminders;
 };
 
 export const completeReminder = async (reminderId: string): Promise<void> => {

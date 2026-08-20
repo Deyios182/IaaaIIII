@@ -1,0 +1,13 @@
+{
+  "name": "inmoov-gym-server",
+  "version": "1.0.0",
+  "description": "InMoov RL Brain Server — WebSocket + REST API",
+  "type": "commonjs",
+  "main": "gym-server.js",
+  "scripts": {
+    "start": "node gym-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

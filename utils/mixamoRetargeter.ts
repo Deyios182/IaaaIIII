@@ -136,6 +136,17 @@ function scoreBoneMatch(
     return 0;
   }
 
+  // Excluir huesos twist o auxiliares (.001, .002, twist) salvo para dedos
+  const isFinger = definition.mixamoName.includes('HandThumb') ||
+                   definition.mixamoName.includes('HandIndex') ||
+                   definition.mixamoName.includes('HandMiddle') ||
+                   definition.mixamoName.includes('HandRing') ||
+                   definition.mixamoName.includes('HandPinky');
+
+  if (!isFinger && (lower.includes('.0') || lower.includes('_0') || lower.includes('twist') || lower.includes('pole'))) {
+    return 0;
+  }
+
   // Debe matchear el lado correcto
   if (definition.side !== null && !matchesSide(boneName, definition.side)) {
     return 0;
@@ -183,15 +194,26 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
   });
   spineBonesInModel.sort(); // Ordenar: DEF-spine, DEF-spine.001, DEF-spine.002, etc.
 
-  // Mapear spine/torso primero (caso especial por la numeración)
-  const spineDefinitions = MIXAMO_BONE_DEFINITIONS.filter(d =>
-    d.mixamoName.includes('Spine') || d.mixamoName.includes('Hips')
-  );
+  // Hips: Debe ser la pelvis/caderas del personaje (def-pelvis, pelvis, hips, j_bip_c_hips)
+  // NUNCA 'root', 'armature' ni 'torso', ya que eso rotaría el contenedor 3D entero 90° hacia atrás.
+  let hipBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-pelvis') ||
+    Array.from(modelBoneNames).find(n => {
+      const lower = n.toLowerCase();
+      return (lower.includes('pelvis') || lower.includes('hip')) &&
+             !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
+             lower !== 'root' && lower !== 'armature' && lower !== 'torso';
+    });
 
-  // Hips = primer spine bone (o el que tenga "hip" en el nombre)
-  const hipBone = Array.from(modelBoneNames).find(n =>
-    n.toLowerCase().includes('hip') || n.toLowerCase().includes('pelvis')
-  ) || spineBonesInModel[0];
+  if (!hipBone) {
+    hipBone = Array.from(modelBoneNames).find(n => {
+      const lower = n.toLowerCase();
+      return lower.includes('hips') && lower !== 'root' && lower !== 'armature' && lower !== 'torso';
+    });
+  }
+
+  if (!hipBone && spineBonesInModel.length > 0) {
+    hipBone = spineBonesInModel[0];
+  }
 
   if (hipBone) {
     mapping.set('mixamorigHips', hipBone);
@@ -201,6 +223,7 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
 
   // Spine1, Spine2, Spine3 = spine bones después de hips
   const remainingSpines = spineBonesInModel.filter(s => s !== hipBone);
+
   const spineNames = ['mixamorigSpine', 'mixamorigSpine1', 'mixamorigSpine2'];
   spineNames.forEach((mixName, i) => {
     if (i < remainingSpines.length) {
@@ -211,14 +234,18 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
   });
 
   // Neck y Head desde spine (últimos en la cadena)
-  const neckBone = Array.from(modelBoneNames).find(n =>
-    (n.toLowerCase().includes('neck') || n.toLowerCase().includes('spine.005') || n.toLowerCase().includes('spine005')) &&
-    !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
-  );
-  const headBone = Array.from(modelBoneNames).find(n =>
-    (n.toLowerCase().includes('head') || n.toLowerCase().includes('spine.006') || n.toLowerCase().includes('spine006')) &&
-    !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
-  );
+  // NOTA: NO usar spine.004, 005, 006 si el usuario los usa para el CABELLO!
+  const neckBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-neck') ||
+    Array.from(modelBoneNames).find(n =>
+      n.toLowerCase().includes('neck') &&
+      !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
+    );
+    
+  const headBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-head') ||
+    Array.from(modelBoneNames).find(n =>
+      n.toLowerCase().includes('head') &&
+      !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
+    );
 
   if (neckBone) {
     mapping.set('mixamorigNeck', neckBone);
@@ -312,16 +339,15 @@ export function retargetMixamoClip(
   (window as any).__lastBoneMapping = results;
   (window as any).__lastBoneMappingMap = Object.fromEntries(mapping);
 
-  // === Detectar compatibilidad del modelo ===
-  // Si menos del 40% de huesos mapeados tienen prefijo DEF-, el modelo no es Rigify
-  // y la corrección rest-pose probablemente hará más daño que bien
-  const mappedBones = Array.from(mapping.values());
-  const defBoneCount = mappedBones.filter(b => b.startsWith('DEF-')).length;
-  const isRigifyModel = mappedBones.length > 0 && (defBoneCount / mappedBones.length) > 0.4;
-  const shouldCorrectRestPose = isRigifyModel && sourceRestPoses && targetRestPoses;
+  // === Corrección de Rest Pose ===
+  // Siempre aplicamos la corrección de rest-pose si tenemos las poses de reposo del source (Mixamo) y del target,
+  // independientemente de si el modelo usa prefijos DEF- o nombres estándar (VRoid, DAZ, etc.).
+  const shouldCorrectRestPose = Boolean(sourceRestPoses && targetRestPoses && sourceRestPoses.size > 0 && targetRestPoses.size > 0);
   
-  if (!isRigifyModel) {
-    console.warn(`⚠️ Modelo no-Rigify (${defBoneCount}/${mappedBones.length} DEF-). Retarget sin corrección rest-pose.`);
+  if (shouldCorrectRestPose) {
+    console.log(`✅ Aplicando corrección matemática de rest-pose para retargeting perfecto.`);
+  } else {
+    console.warn(`⚠️ Faltan rest-poses. Se usará copia directa de rotaciones.`);
   }
 
   const hipsTargetName = mapping.get('mixamorigHips');
@@ -355,6 +381,11 @@ export function retargetMixamoClip(
       const targetName = mapping.get(boneName);
       if (!targetName) return null;
 
+      const lowerTarget = targetName.toLowerCase();
+      if (lowerTarget === 'root' || lowerTarget === 'armature' || lowerTarget === 'torso') {
+        return null; // EVITAR que se rote el contenedor global del personaje
+      }
+
       // === ROTACIONES con corrección de rest-pose ===
       if (property === '.quaternion') {
         keptRotations++;
@@ -375,7 +406,6 @@ export function retargetMixamoClip(
               const animQ = new THREE.Quaternion(values[i], values[i+1], values[i+2], values[i+3]);
               const delta = new THREE.Quaternion().multiplyQuaternions(srcRestInv, animQ);
               const corrected = new THREE.Quaternion().multiplyQuaternions(tgtRest, delta);
-
               values[i]   = corrected.x;
               values[i+1] = corrected.y;
               values[i+2] = corrected.z;
@@ -389,11 +419,13 @@ export function retargetMixamoClip(
 
       // Descartar TODOS los position tracks (incluido hips)
       // El root motion causa stretching severo en modelos con diferentes proporciones
-
-      // Descartar position/scale de otros huesos
       return null;
     })
     .filter((track): track is THREE.KeyframeTrack => track !== null);
+
+  // INYECCIÓN RIGIFY: Mapear Hips correctamente a root o torso resuelve la mayoría de desconexiones.
+  // No intentaremos combinar las pistas matemáticamente porque los quaternions ya están corregidos
+  // por los rest poses locales y su multiplicación resultaría en ejes cruzados.
 
   console.log(`🎬 Retarget: ${keptRotations} rotaciones (${correctedRotations} corregidas) + ${keptPosition} posición raíz de ${clip.tracks.length} totales`);
   return retargeted;

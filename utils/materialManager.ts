@@ -72,7 +72,8 @@ export class MaterialManager {
             const hasColorMap = !!mat.map; // Tiene textura de color pintada
 
             if (ref.category === 'skin') {
-                // Piel: Solo ajustar si NO tiene mapas de calidad ya asignados
+                // Piel: Forzar DoubleSide para que el interior del cuello no se vea negro ni transparente si la malla se flexiona
+                mat.side = THREE.DoubleSide;
                 if (!mat.roughnessMap && mat.roughness < 0.3) mat.roughness = 0.45;
                 if (!mat.metalnessMap && mat.metalness > 0.3) mat.metalness = 0.1;
 
@@ -81,11 +82,12 @@ export class MaterialManager {
                     mat.color.setHex(0xffe0bd);
                 }
                 mat.needsUpdate = true;
-                console.log('🧍 Skin material optimizado:', ref.mesh.name);
+                console.log('🧍 Skin material optimizado (DoubleSide):', ref.mesh.name);
             }
 
             // Cabello: Solo ajustar si no tiene mapa de roughness propio
             if (ref.category === 'hair') {
+                mat.side = THREE.DoubleSide;
                 if (!mat.roughnessMap) mat.roughness = Math.min(mat.roughness, 0.4);
                 if (!mat.metalnessMap) mat.metalness = Math.max(mat.metalness, 0.1);
                 mat.needsUpdate = true;
@@ -101,8 +103,9 @@ export class MaterialManager {
                 console.log('👁️ Eye material optimizado (Toned down):', ref.mesh.name);
             }
 
-            // ROPA: RESPETAR texturas originales siempre
+            // ROPA: RESPETAR texturas originales siempre y asegurar DoubleSide
             if (ref.category === 'outfit' || ref.category === 'underwear') {
+                mat.side = THREE.DoubleSide;
                 if (!hasColorMap) {
                     // Sin textura → darle color para que no sea blanco fantasma
                     if (mat.color.r > 0.95 && mat.color.g > 0.95 && mat.color.b > 0.95) {

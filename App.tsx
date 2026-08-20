@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -15,6 +15,8 @@ import AvatarStudio from './screens/AvatarStudio';
 import { AppState, MemoryRetention, ConversationStyle, PersonEntry } from './types';
 import AvatarViewer3D from './components/AvatarViewer3D';
 import { loadAllMemory } from './services/MemoryService';
+// 🤖 Gym — lazy loaded para aislar dependencias (rapier WASM)
+const GymLauncher = lazy(() => import('./gym/GymLauncher'));
 
 const STORAGE_KEY = 'nova_app_state';
 
@@ -156,6 +158,7 @@ const AppContent: React.FC<{
               state={state}
               addMessage={addMessage}
               setBoldMode={setBoldMode}
+              updateAvatar={updateAvatar}
               updateKnownPeople={(people) => setState(p => ({ ...p, knownPeople: people }))}
               updateUserProfile={(profile) => setState(p => ({ ...p, userProfile: profile }))}
               isMiniMode={isMiniMode}
@@ -205,6 +208,16 @@ const AppContent: React.FC<{
                 allowWebSearch={state.allowWebSearch}
                 setAllowWebSearch={(val) => setState(p => ({ ...p, allowWebSearch: val }))}
               />
+            } />
+            {/* 🤖 Robot Gym — Sim-to-Real Simulation Environment */}
+            <Route path="/gym" element={
+              <Suspense fallback={
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:'#020617', color:'#94a3b8', fontFamily:'monospace', fontSize:'14px' }}>
+                  ⏳ Cargando Robot Gym...
+                </div>
+              }>
+                <GymLauncher />
+              </Suspense>
             } />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
