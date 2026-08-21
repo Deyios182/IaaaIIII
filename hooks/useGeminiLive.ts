@@ -12,6 +12,7 @@ export interface GeminiLiveConfig {
     systemInstruction: string;
     voiceName: string;
     isBold: boolean;
+    allowWebSearch?: boolean;
     tools?: any[];
     onAudioData?: (data: ArrayBuffer) => void;
     onTranscription?: (text: string, type: 'input' | 'output') => void;
@@ -153,7 +154,10 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
                         voiceConfig: { prebuiltVoiceConfig: { voiceName: config.voiceName } }
                     },
                     systemInstruction: config.systemInstruction,
-                    tools: config.tools
+                    tools: [
+                        ...(config.tools || []),
+                        ...(config.allowWebSearch ? [{ googleSearch: {} }] : [])
+                    ]
                 }
             });
 

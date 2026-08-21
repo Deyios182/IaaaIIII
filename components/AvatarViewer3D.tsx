@@ -16,6 +16,7 @@ import { MoodSystem } from '../utils/moodSystem';
 import { InteractionSystem } from '../utils/interactionSystem';
 import { MaterialManager } from '../utils/materialManager';
 import { ProceduralAnimator } from '../utils/proceduralAnimations';
+import { getPropManager } from '../utils/propManager';
 import { isMixamoAnimation, retargetMixamoClip, getModelBoneNames } from '../utils/mixamoRetargeter';
 import { SimplexNoise } from '../utils/perlin';
 import { AvatarInteractionLayer, type InteractionLayerRef } from './AvatarInteractionLayer';
@@ -594,7 +595,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                                 const lower = b.toLowerCase();
                                 return (lower.includes('ass') || lower.includes('glute') || lower.includes('butt')) && !lower.includes('glass') && !lower.includes('class');
                             });
-                            console.log('🔍 HUESOS DE GLÚTEOS CONECTADOS A LA PIEL:', gluteBonesInSkin.length > 0 ? gluteBonesInSkin.join(', ') : '¡NINGUNO!');
+                            // console.log('🔍 HUESOS DE GLÚTEOS CONECTADOS A LA PIEL:', gluteBonesInSkin.length > 0 ? gluteBonesInSkin.join(', ') : '¡NINGUNO!');
                         }
 
                         const matList = Array.isArray(child.material) ? child.material : [child.material];
@@ -1499,7 +1500,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 });
 
                 if (hasPrimaryDescendant) {
-                    console.warn(`⚠️ OMITIENDO SYNC para ${b.name} porque contiene un hueso primario como hijo (evita salir volando).`);
+                    // console.warn(`⚠️ OMITIENDO SYNC para ${b.name} porque contiene un hueso primario como hijo (evita salir volando).`);
                     return false;
                 }
 
@@ -1657,13 +1658,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             // Mixer (necesario para AnimationManager pero ya no lo usamos directamente)
             mixerRef.current = new THREE.AnimationMixer(modelRef.current);
 
-            console.log(`📍 RESUMEN MODELO:`,
-                `Meshes con morphs: ${meshes.length}`,
-                `| VisemeMap: ${Object.keys(newVisemeMap).join(', ') || 'NINGUNO'}`,
-                `| JawBone: ${jawBoneRef.current?.name || 'NO ENCONTRADO'}`,
-                `| Animaciones: ${gltf.animations.map(a => a.name).join(', ') || 'NINGUNA'}`,
-                `| Huesos (${allBones.length}):`, allBones.join(', ')
-            );
+            // console.log(`📍 RESUMEN MODELO:`,
+            //     `Meshes con morphs: ${meshes.length}`,
+            //     `| VisemeMap: ${Object.keys(newVisemeMap).join(', ') || 'NINGUNO'}`,
+            //     `| JawBone: ${jawBoneRef.current?.name || 'NO ENCONTRADO'}`,
+            //     `| Animaciones: ${gltf.animations.map(a => a.name).join(', ') || 'NINGUNA'}`,
+            //     `| Huesos (${allBones.length}):`, allBones.join(', ')
+            // );
 
             // --- CONFIGURACIÓN DE VISIBILIDAD Y MATERIALES POR DEFECTO ---
             modelRef.current.traverse((child: any) => {
@@ -1768,6 +1769,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 };
                 window.addEventListener('aiko-play-procedural', proceduralHandler);
             }
+
+            // 🪄 PROPS MANAGER — Inicializar Sockets de Manos para Accesorios 3D
+            const propMgr = getPropManager();
+            propMgr.initialize(modelRef.current as any, rightHandRef.current || undefined, leftHandRef.current || undefined);
         }
 
         // Guardar la rotación original (Bind Pose) de todos los huesos para poder resetearlos sin deformarlos
@@ -2465,10 +2470,21 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     thumb: [{ x: 35, y: -5 }, { x: 25 }, { x: 15 }]
                 },
                 POINT: { normal: [{ x: 40 }, { x: 35 }, { x: 25 }], thumb: [{ x: 5, y: -10 }, { x: 3 }, { x: 2 }] },
+                GRIP: {
+                    normal: [{ x: 55 }, { x: 50 }, { x: 40 }],
+                    thumb: [{ x: 45, y: -15 }, { x: 35 }, { x: 25 }]
+                },
+                HOLD: {
+                    normal: [{ x: 45 }, { x: 40 }, { x: 30 }],
+                    thumb: [{ x: 30, y: -10 }, { x: 20 }, { x: 15 }]
+                }
             };
             // Para PINCH/POINT el índice se extiende
             const POINT_INDEX: PoseTable[] = [{ x: -5 }, { x: -3 }, { x: -2 }];
             const PINCH_INDEX: PoseTable[] = [{ x: 50 }, { x: 45 }, { x: 35 }];
+
+            // Actualizar dinámicas de Props (humo, vapor, pulso de poción)
+            getPropManager().update(delta, t);
 
             const applyFingerPose = (fingers: typeof fingerBonesRef.current.left) => {
                 fingers.forEach(({ bone, segment, isThumb, fingerName }) => {

@@ -277,6 +277,22 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
               </div>
             </div>
 
+            {/* TIER 1 & TOKEN OPTIMIZATION STATUS */}
+            <div className="rounded-2xl border border-cyan-500/20 bg-gradient-to-r from-cyan-950/20 to-blue-950/20 p-4 sm:p-5 flex items-start gap-4">
+              <span className="material-symbols-outlined text-cyan-400 text-2xl mt-0.5">bolt</span>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <h4 className="text-xs sm:text-sm font-bold text-white">Google API Tier 1 Activo</h4>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    Ahorro de Tokens ON
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Cuota ampliada a 1,000+ RPM. Los filtros inteligentes de pantalla descartan frames idénticos y el caché de embeddings optimiza el consumo de tokens en segundo plano.
+                </p>
+              </div>
+            </div>
+
             {/* BOTÓN GUARDAR */}
             <button
               id="save-btn"

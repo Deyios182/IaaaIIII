@@ -4,7 +4,7 @@
  */
 
 export interface SystemCommand {
-    type: 'openApp' | 'openUrl' | 'searchFiles' | 'setReminder' | 'controlCamera' | 'manageClothing' | 'mouseClick' | 'mouseMove' | 'typeText' | 'pressKey' | 'windowControl' | 'startCall' | 'endCall' | 'none';
+    type: 'openApp' | 'openUrl' | 'searchFiles' | 'setReminder' | 'controlCamera' | 'manageClothing' | 'mouseClick' | 'mouseMove' | 'typeText' | 'pressKey' | 'windowControl' | 'runCommand' | 'runMacro' | 'captureScreen' | 'startCall' | 'endCall' | 'none';
     target?: string;
     message?: string;
     time?: number;
@@ -14,6 +14,8 @@ export interface SystemCommand {
     double?: boolean;
     key?: string;
     windowAction?: 'minimize' | 'maximize' | 'restore' | 'minimize_all';
+    command?: string;
+    macro?: string;
 }
 
 // Detectar si el usuario está pidiendo una acción del sistema
@@ -443,6 +445,46 @@ export async function executeSystemCommand(
                 return { success: true, message: 'Finalizando llamada...' };
             }
 
+            case 'runCommand': {
+                const cmd = command.command || command.target;
+                if (!cmd) return { success: false, message: 'Comando no especificado' };
+                if (electronAPI?.runCommand) {
+                    const result = await electronAPI.runCommand(cmd);
+                    return {
+                        success: result.success,
+                        message: result.success ? `Comando ejecutado exitosamente:\n${result.stdout || 'OK'}` : `Error en comando:\n${result.stderr || result.error}`,
+                        result
+                    };
+                }
+                return { success: false, message: 'Ejecución de terminal solo disponible en la app de escritorio' };
+            }
+
+            case 'runMacro': {
+                const macro = command.macro || command.target;
+                if (!macro) return { success: false, message: 'Macro no especificada' };
+                if (electronAPI?.runMacro) {
+                    const result = await electronAPI.runMacro(macro);
+                    return {
+                        success: result.success,
+                        message: result.message || (result.success ? `Macro '${macro}' ejecutada.` : `Error: ${result.error}`),
+                        result
+                    };
+                }
+                return { success: false, message: 'Macros de sistema solo disponibles en la app de escritorio' };
+            }
+
+            case 'captureScreen': {
+                if (electronAPI?.captureScreenFrame) {
+                    const result = await electronAPI.captureScreenFrame();
+                    return {
+                        success: result.success,
+                        message: result.success ? 'Captura de pantalla obtenida.' : 'Error capturando pantalla',
+                        imageBase64: result.imageBase64
+                    };
+                }
+                return { success: false, message: 'Captura nativa no disponible en navegador web' };
+            }
+
             default:
                 return { success: false, message: 'Comando no reconocido' };
         }
@@ -458,7 +500,8 @@ export function getToolsDescription(): string {
 Puedes ejecutar comandos del sistema cuando el usuario te lo pida:
 - Abrir aplicaciones: "abre Chrome", "lanza Discord", "abre el explorador"
 - Abrir URLs: "abre youtube.com", "ve a google.com"
-- Recordatorios: "recuérdame X en 30 minutos"
+- Terminal y Scripts: "ejecuta git status", "corre npm run build", "haz un ping a google"
+- Macros de Entorno: "activa el entorno de EasyPatagonia", "modo Albion Online"
 - Controlar Mouse: "haz clic", "clic derecho", "mueve el mouse a 500, 300"
 - Controlar Teclado: "escribe Hola Mundo", "presiona enter", "presiona tab", "presiona ctrl+v", "presiona win+d"
 - Controlar Ventanas: "minimiza todo", "minimiza esta ventana", "minimiza chrome", "maximiza discord", "restaura la ventana"
@@ -466,6 +509,8 @@ Puedes ejecutar comandos del sistema cuando el usuario te lo pida:
 Formatos de comando rápido:
 [SYSTEM_CMD: openApp nombre]
 [SYSTEM_CMD: openUrl url]
+[SYSTEM_CMD: runCommand comando_a_ejecutar]
+[SYSTEM_CMD: runMacro easypatagonia]
 [SYSTEM_CMD: typeText texto a escribir]
 [SYSTEM_CMD: pressKey enter] (o tab, esc, backspace, ctrl+c, ctrl+v, win+d)
 [SYSTEM_CMD: mouseClick 500,300] (o right, double)
@@ -474,6 +519,6 @@ Formatos de comando rápido:
 [SYSTEM_CMD: maximizeWindow nombreApp] (o active)
 [SYSTEM_CMD: minimizeAll]
 
-Cuando el usuario te pida realizar una acción física en su computadora, responde confirmando y usa la etiqueta correspondiente.
+Cuando el usuario te pida realizar una acción física o técnica en su computadora, responde confirmando y usa la etiqueta correspondiente.
 `;
 }

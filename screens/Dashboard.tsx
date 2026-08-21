@@ -19,7 +19,7 @@ import { detectEmotion, type Emotion } from '../utils/emotionDetector';
 import { addLearnedItem, type LearnedItem } from '../utils/userLearning';
 
 import { getClothingManager } from '../utils/clothingManager';
-import { startScreenCapture, stopScreenCapture, captureFrame, isScreenSharing as checkScreenSharing, getSystemAudioStream } from '../utils/screenCapture';
+import { startScreenCapture, stopScreenCapture, captureFrame, captureOptimizedFrame, isScreenSharing as checkScreenSharing, getSystemAudioStream } from '../utils/screenCapture';
 import { detectSystemCommand, executeSystemCommand, parseScreenCoordinates, type SystemCommand } from '../utils/systemCommands';
 import { loadMemory, saveMemory, addReminder, addFact, addPreference, extractLearnableFacts, generateGreeting, type NovaMemory } from '../utils/memoryManager';
 import { useMusicAnalyzer } from '../hooks/useMusicAnalyzer';
@@ -35,6 +35,7 @@ import { usePokerAssistant } from '../hooks/usePokerAssistant';
 import { getSelfAwarenessBlock } from '../services/SelfAwarenessService';
 import { requestWebSearch, resolveWebSearch, getLearnedSkills, learnSkill, buildSkillsBlock, searchDuckDuckGo } from '../services/WebLearningService';
 import { createAutonomyEngine, getAutonomyEngine } from '../services/AutonomyEngine';
+import { asmrEngine } from '../services/ASMRSoundEngine';
 
 
 // SIMPLE ERROR BOUNDARY COMPONENT (Inline to avoid file clutter for now)
@@ -59,7 +60,7 @@ class AvatarErrorBoundary extends React.Component<{ children: React.ReactNode, f
 }
 
 // Helper unificado para extraer y ejecutar comandos corporales, gestos y expresiones 3D desde cualquier texto de IA
-export function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) => void): void {
+function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) => void): void {
   if (!rawText || typeof window === 'undefined') return;
 
   // 1. Parser para controlBody (soporta [controlBody(...)], [controlBody ...], [controlBody: ...], controlBody(...))
@@ -173,7 +174,90 @@ export function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: 
     window.dispatchEvent(new CustomEvent('aiko-face', { detail: { action: faceAct } }));
   }
 
-  // 6. Parser para acciones Hot / Eróticas
+  // 6. Parser para Comandos del Sistema [SYSTEM_CMD: runCommand/runMacro/openApp/openUrl/mouseClick/typeText/pressKey]
+  const sysCmdRegex = /\[SYSTEM_CMD:\s*([a-zA-Z0-9_]+)(?:\s+([\s\S]*?))?\]/gi;
+  let sysMatch: RegExpExecArray | null;
+  while ((sysMatch = sysCmdRegex.exec(rawText)) !== null) {
+    const cmdType = sysMatch[1];
+    let cmdArgs = (sysMatch[2] || '').replace(/[\r\n]+/g, ' ').trim();
+    console.log('⚡ [Text Tag] SYSTEM_CMD detectado:', cmdType, cmdArgs);
+    const electronAPI = (window as any).electronAPI;
+    if (electronAPI) {
+      if (cmdType === 'runCommand' && electronAPI.runCommand) {
+        electronAPI.runCommand(cmdArgs);
+      } else if (cmdType === 'runMacro' && electronAPI.runMacro) {
+        electronAPI.runMacro(cmdArgs);
+      } else if (cmdType === 'openApp' && electronAPI.openApp) {
+        electronAPI.openApp(cmdArgs);
+      } else if (cmdType === 'openUrl' && electronAPI.openUrl) {
+        // Auto-extraer URL limpia si Gemini metió formato markdown [texto](url)
+        const mdMatch = cmdArgs.match(/\((https?:\/\/[^\s\)]+)\)/i) || cmdArgs.match(/(https?:\/\/[^\s\)]+)/i);
+        if (mdMatch) {
+          cmdArgs = mdMatch[1];
+        }
+        electronAPI.openUrl(cmdArgs);
+      } else if (cmdType === 'typeText' && electronAPI.typeText) {
+        electronAPI.typeText(cmdArgs);
+      } else if (cmdType === 'pressKey' && electronAPI.pressKey) {
+        electronAPI.pressKey(cmdArgs);
+      } else if (cmdType === 'mouseClick' && electronAPI.mouseClick) {
+        const coords = cmdArgs.split(/[\s,]+/);
+        if (coords.length >= 2 && !isNaN(Number(coords[0])) && !isNaN(Number(coords[1]))) {
+          electronAPI.mouseClick({ x: Number(coords[0]), y: Number(coords[1]) });
+        } else {
+          electronAPI.mouseClick({ button: cmdArgs.toLowerCase().includes('right') ? 'right' : 'left' });
+        }
+      }
+    }
+  }
+
+  // Interceptar pseudo-tags y funciones de colgar [end_call ...], end_call(...)
+  const endCallTagRegex = /(?:\[)?(?:SYSTEM_CMD:\s*)?(?:end_call|endcall|endCall|hang_up|hangup)(?:\s*\([^)]*\)|[\s\S]*?\])/gi;
+  if (endCallTagRegex.test(rawText)) {
+    console.log('👋 [Text Fallback] Etiqueta/función de colgar detectada en texto. Despidiendo...');
+    window.dispatchEvent(new CustomEvent('aiko-graceful-hangup'));
+  }
+
+  // Interceptar pseudo-tags y funciones de URLs: openUrl(url='...'), [openUrl ...]
+  const openUrlTagRegex = /(?:\[)?(?:SYSTEM_CMD:\s*)?(?:openUrl|open_url)(?:\s*\((?:url=)?['"]?([^'"]+)['"]?\)|(?:\s+(?:url=)?['"]?([^'"]+)['"]?[\s\S]*?\]))/gi;
+  let ouMatch: RegExpExecArray | null;
+  while ((ouMatch = openUrlTagRegex.exec(rawText)) !== null) {
+    let url = (ouMatch[1] || ouMatch[2] || '').replace(/[\r\n]+/g, ' ').trim();
+    if (url && (url.includes('http') || url.includes('youtube') || url.includes('google') || url.includes('.'))) {
+      const mdMatch = url.match(/\((https?:\/\/[^\s\)]+)\)/i) || url.match(/(https?:\/\/[^\s\)]+)/i);
+      if (mdMatch) url = mdMatch[1];
+      const electronAPI = (window as any).electronAPI || (window as any).electron;
+      console.log('🚀 [Text/Func Fallback] openUrl detectado:', url);
+      electronAPI?.openUrl?.(url);
+    }
+  }
+
+  // 7. Parser para Props y Accesorios 3D [PROP: COFFEE_CUP], [PROP: SMARTPHONE], [PROP: BOOK], [PROP: POTION], [PROP: NONE]
+  const propTagRegex = /\[PROP:\s*([A-Z_]+)(?::(LEFT|RIGHT))?\]/gi;
+  let propMatch: RegExpExecArray | null;
+  while ((propMatch = propTagRegex.exec(rawText)) !== null) {
+    const propType = propMatch[1].toUpperCase();
+    const hand = (propMatch[2] || 'RIGHT').toUpperCase();
+    console.log(`🪄 [Text Tag] Prop detectado: ${propType} en mano ${hand}`);
+    window.dispatchEvent(new CustomEvent('aiko-prop', {
+      detail: { type: propType, hand: hand as any }
+    }));
+  }
+
+  // 8. Parser para Atmósferas ASMR y Sonidos Procedurales [SOUND: RAIN], [SOUND: HEARTBEAT bpm=80], [SOUND: INTIMATE_BREATHING], [SOUND: STOP]
+  const soundTagRegex = /\[SOUND:\s*([A-Z_]+)(?:\s*(?:volume|vol)?=?([0-9.]+))?(?:\s*bpm=?([0-9]+))?\]/gi;
+  let soundMatch: RegExpExecArray | null;
+  while ((soundMatch = soundTagRegex.exec(rawText)) !== null) {
+    const soundType = soundMatch[1].toUpperCase();
+    const volume = soundMatch[2] ? parseFloat(soundMatch[2]) : (soundType === 'HEARTBEAT' ? 0.6 : 0.35);
+    const bpm = soundMatch[3] ? parseInt(soundMatch[3], 10) : 80;
+    console.log(`🎧 [Text Tag] Sonido ASMR detectado: ${soundType} (Vol: ${volume}, BPM: ${bpm})`);
+    window.dispatchEvent(new CustomEvent('aiko-sound', {
+      detail: { sound: soundType, volume, bpm }
+    }));
+  }
+
+  // 9. Parser para acciones Hot / Eróticas
   const performActionRegex = /performAction\(['"]?([a-zA-Z0-9_]+)['"]?\)/gi;
   let paMatch: RegExpExecArray | null;
   while ((paMatch = performActionRegex.exec(rawText)) !== null) {
@@ -192,7 +276,7 @@ export function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: 
     window.dispatchEvent(new CustomEvent('nova-fluid', { detail: { target: sfMatch[1].toLowerCase() } }));
   }
 
-  // 7. Parser para emociones [EXCITED], [HAPPY], etc.
+  // 10. Parser para emociones [EXCITED], [HAPPY], etc.
   if (setEmotionFn) {
     const emotionRegex = /\[(EXCITED|HAPPY|SURPRISED|SAD|ANGRY|CONFUSED|THINKING|NEUTRAL)\]/gi;
     let emoMatch: RegExpExecArray | null;
@@ -203,16 +287,23 @@ export function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: 
   }
 }
 
-export function cleanAllAiTags(text: string): string {
+function cleanAllAiTags(text: string): string {
   if (!text) return '';
   return text
-    .replace(/(?:\[controlBody[^\]]*\]|controlBody\([^)]*\))/gi, '')
-    .replace(/\[SYSTEM_CMD:[^\]]+\]/gi, '')
-    .replace(/\[MOVE:[^\]]+\]/gi, '')
-    .replace(/\[DO:[^\]]+\]/gi, '')
-    .replace(/\[HAND:[^\]]+\]/gi, '')
-    .replace(/\[ANIM:[^\]]+\]/gi, '')
-    .replace(/\[ACTION:[^\]]+\]/gi, '')
+    .replace(/<ctrl\d+>/gi, '')
+    .replace(/\[PROP:[\s\S]*?\]/gi, '')
+    .replace(/\[SOUND:[\s\S]*?\]/gi, '')
+    .replace(/(?:\[controlBody[\s\S]*?\]|controlBody\([^)]*\))/gi, '')
+    .replace(/(?:\[)?(?:openUrl|open_url)\s*\([^)]*\)(?:\])?/gi, '')
+    .replace(/(?:\[)?(?:end_call|endcall|endCall|hang_up|hangup)\s*\([^)]*\)(?:\])?/gi, '')
+    .replace(/(?:\[)?(?:openApp|runTerminalCommand|runMacro)\s*\([^)]*\)(?:\])?/gi, '')
+    .replace(/\[(?:SYSTEM_CMD:\s*)?(?:end_call|endcall|endCall|hang_up|hangup|openUrl|open_url|learn_skill)[\s\S]*?\]/gi, '')
+    .replace(/\[SYSTEM_CMD:[\s\S]*?\]/gi, '')
+    .replace(/\[MOVE:[\s\S]*?\]/gi, '')
+    .replace(/\[DO:[\s\S]*?\]/gi, '')
+    .replace(/\[HAND:[\s\S]*?\]/gi, '')
+    .replace(/\[ANIM:[\s\S]*?\]/gi, '')
+    .replace(/\[ACTION:[\s\S]*?\]/gi, '')
     .replace(/\[(WINK_LEFT|WINK_RIGHT|WINK|KISS|SMILE|POUT|TONGUE_OUT|TONGUE|AHEGAO|CLOSE_EYES)\]/gi, '')
     .replace(/\[(EXCITED|HAPPY|SURPRISED|SAD|ANGRY|CONFUSED|THINKING|NEUTRAL|FLIRT|MOAN|LAUGH)\]/gi, '')
     .replace(/(?:performAction|changePose|simulateFluid)\([^)]*\)/gi, '')
@@ -247,16 +338,86 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const isAiSpeakingRef = useRef(false);
 
+  // 🎧 ASMR Procedural Sound States
+  const [isAsmrPlaying, setIsAsmrPlaying] = useState(false);
+  const [asmrVolume, setAsmrVolume] = useState(0.3);
+  const [asmrFilterFreq, setAsmrFilterFreq] = useState(400);
+  const [showAsmrPanel, setShowAsmrPanel] = useState(false);
+
+  const toggleAsmrSound = () => {
+    if (isAsmrPlaying) {
+      asmrEngine.stop();
+      setIsAsmrPlaying(false);
+    } else {
+      asmrEngine.playSoftRain(asmrVolume, asmrFilterFreq);
+      setIsAsmrPlaying(true);
+    }
+  };
+
   // ── WAKE WORD: Refs usados dentro de los callbacks para no capturar stale closures
   // El hook ya maneja internamente la actualización de callbacks via refs propios,
   // pero necesitamos estos dos refs para llamar a startCall/endCall que se definen más abajo.
   const startCallRef = useRef<() => void>(() => {});
   const endCallRef = useRef<() => void>(() => {});
+  const pendingDisconnectRef = useRef(false);
+
+  useEffect(() => {
+    const handleGracefulHangup = () => {
+      console.log('👋 [GracefulHangup] Despedida activada vía evento interno. Esperando fin del audio...');
+      pendingDisconnectRef.current = true;
+      window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'wave' } }));
+    };
+    window.addEventListener('aiko-graceful-hangup', handleGracefulHangup);
+    return () => window.removeEventListener('aiko-graceful-hangup', handleGracefulHangup);
+  }, []);
+
+  const playWakeEarcon = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc2.type = 'sine';
+
+      osc1.frequency.setValueAtTime(587.33, now); // D5
+      osc1.frequency.exponentialRampToValueAtTime(880.0, now + 0.1); // A5
+
+      osc2.frequency.setValueAtTime(880.0, now + 0.06); // A5
+      osc2.frequency.exponentialRampToValueAtTime(1174.66, now + 0.2); // D6
+
+      gain.gain.setValueAtTime(0.01, now);
+      gain.gain.linearRampToValueAtTime(0.2, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(now);
+      osc2.start(now + 0.06);
+      osc1.stop(now + 0.22);
+      osc2.stop(now + 0.32);
+
+      setTimeout(() => ctx.close().catch(() => {}), 500);
+    } catch (e) {
+      console.warn('Earcon sound error:', e);
+    }
+  };
 
   const { isListening: isWakeWordListening, isSupported: isWakeWordSupported, startListening: startWakeWord, stopListening: stopWakeWord } = useWakeWord({
+    enabled: !isInCall,
     onActivate: () => {
       if (!isInCallRef.current) {
         console.log('[WakeWord] 🟢 Activando llamada por comando de voz...');
+        playWakeEarcon();
+        window.dispatchEvent(new CustomEvent('aiko-face', { detail: { action: 'smile' } }));
+        window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'HEAD', target: 'TILT_LEFT' } }));
+        window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'nod' } }));
         startCallRef.current();
       }
     },
@@ -268,6 +429,23 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     },
     debug: false,
   });
+
+  // ⚡ GLOBAL HOTKEY (Alt+Space o F8): Iniciar o colgar llamada instantáneamente
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (electronAPI?.onToggleCall) {
+      electronAPI.onToggleCall(() => {
+        if (isInCallRef.current) {
+          console.log('🛑 [Hotkey Alt+Space/F8] Finalizando llamada...');
+          endCallRef.current();
+        } else {
+          console.log('🟢 [Hotkey Alt+Space/F8] Iniciando llamada instantánea con Nova...');
+          startCallRef.current();
+        }
+      });
+    }
+  }, []);
+
   useEffect(() => {
     isAiSpeakingRef.current = isAiSpeaking;
 
@@ -529,12 +707,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     if (!video || video.videoWidth === 0) return null;
 
     if (canvas) {
-      canvas.width = 640;
-      canvas.height = 480;
+      canvas.width = 512;
+      canvas.height = 384;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0, 640, 480);
-        return canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+        ctx.drawImage(video, 0, 0, 512, 384);
+        return canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
       }
     }
     return null;
@@ -552,12 +730,6 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       try {
         // @ts-ignore
         liveSessionRef.current.sendRealtimeInput({ video: { data: base64, mimeType: 'image/jpeg' } });
-        // @ts-ignore
-        liveSessionRef.current.sendRealtimeInput({
-          text: source === 'camera'
-            ? '[VISUAL_CONTEXT: Frame de cámara del usuario. Comenta brevemente lo que ves de forma natural.]'
-            : '[VISUAL_CONTEXT: Frame de pantalla del usuario. Comenta o ayuda con lo que está haciendo.]'
-        });
         return;
       } catch (e) {
         console.warn('[VisualCapture] Error en live session, usando REST fallback:', e);
@@ -692,12 +864,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
           stopScreenAnalysis(false);
           return;
         }
-        const frame = captureFrame(0.6);
+        const { frame } = captureOptimizedFrame({ quality: 0.55 });
         if (frame) {
           sendVisualFrame(frame, 'screen');
-          console.log('[ScreenAnalysis] Frame de pantalla capturado y enviado');
+          console.log('[ScreenAnalysis] Frame de pantalla optimizado capturado y enviado');
         }
-      }, 10000);
+      }, 8000);
 
     } catch (e: any) {
       console.error('[ScreenAnalysis] Error:', e);
@@ -832,17 +1004,15 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const sessionLogRef = useRef<string>(''); // Acumulador de logs de conversación para resumen al final
 
-  // Consolidación de memoria al final de la sesión
+  // Consolidación de memoria al final de la sesión (Vía OpenRouter Free Tier / Fallback Gemini)
   const consolidateMemory = async (sessionLog: string) => {
-    if (!sessionLog.trim()) return;
+    if (!sessionLog.trim() || sessionLog.length < 30) return;
 
-    const api_key = process.env.API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
-    if (!api_key) return;
+    const openRouterKey = (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+    const geminiKey = process.env.API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
 
     console.log('🧠 [MemoryService] Iniciando consolidación asíncrona de fin de sesión...');
-    try {
-      const ai = new GoogleGenAI({ apiKey: api_key });
-      const promptConsolidacion = `
+    const promptConsolidacion = `
 Analiza la siguiente transcripción completa de la conversación entre el usuario y la IA "Nova".
 Tu tarea es consolidar y extraer hechos biográficos o preferencias reales sobre el usuario.
 
@@ -858,24 +1028,70 @@ Transcripción de la sesión:
 ${sessionLog}
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [{ role: 'user', parts: [{ text: promptConsolidacion }] }],
-        config: {
-          responseMimeType: 'application/json'
-        }
-      });
+    // 1. Intento Primario: OpenRouter (Gratis, cuota independiente)
+    if (openRouterKey) {
+      try {
+        const orResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openRouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://github.com/Deyios182/IaaaIIII',
+            'X-Title': 'Nova AI Agent'
+          },
+          body: JSON.stringify({
+            model: 'meta-llama/llama-3.3-70b-instruct:free',
+            messages: [{ role: 'user', content: promptConsolidacion }],
+            temperature: 0.1,
+            response_format: { type: 'json_object' }
+          })
+        });
 
-      const jsonText = response.text?.trim();
-      if (jsonText) {
-        const result = JSON.parse(jsonText);
-        if (result.hasLearned && result.content && result.category) {
-          console.log('🧠 [MemoryService] Consolidación exitosa. Hecho consolidado:', result.content);
-          await addFactToCloud(result.content, result.category);
+        if (orResponse.ok) {
+          const data = await orResponse.json();
+          const rawContent = data.choices?.[0]?.message?.content?.trim();
+          if (rawContent) {
+            const cleanJson = rawContent.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+            const result = JSON.parse(cleanJson);
+            if (result.hasLearned && result.content && result.category) {
+              console.log('🧠 [MemoryService:OpenRouter] Consolidación exitosa:', result.content);
+              await addFactToCloud(result.content, result.category);
+              return;
+            }
+          }
+        }
+      } catch (orErr) {
+        console.warn('⚠️ [MemoryService:OpenRouter] Fallback a Gemini por error:', orErr);
+      }
+    }
+
+    // 2. Intento Secundario: Gemini API
+    if (geminiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [{ role: 'user', parts: [{ text: promptConsolidacion }] }],
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+
+        const jsonText = response.text?.trim();
+        if (jsonText) {
+          const result = JSON.parse(jsonText);
+          if (result.hasLearned && result.content && result.category) {
+            console.log('🧠 [MemoryService:Gemini] Consolidación exitosa. Hecho consolidado:', result.content);
+            await addFactToCloud(result.content, result.category);
+          }
+        }
+      } catch (e: any) {
+        if (e?.status === 429 || e?.message?.includes('429') || e?.message?.includes('Quota')) {
+          console.warn('ℹ️ [MemoryService] Cuota de Gemini en descanso. Consolidación pospuesta para la siguiente sesión.');
+        } else {
+          console.warn('⚠️ [MemoryService] Error en consolidación:', e);
         }
       }
-    } catch (e) {
-      console.warn('⚠️ [MemoryService] Error consolidando memoria de fin de sesión:', e);
     }
   };
 
@@ -1585,7 +1801,7 @@ ${sessionLog}
               sender: 'ai'
             });
 
-            const sysMsg = `[SYSTEM_EVENT: Visual match confirmed. Person: ${state.userName} (Tús ojos / Usuario principal). Status: Present. Acknowledge them warmly.]`;
+            const sysMsg = `[SYSTEM_EVENT: Visual presence confirmed: ${state.userName}. Keep this visual context passively in mind. DO NOT recite memories or interrupt with unprompted facts unless the user asks.]`;
             liveSessionRef.current?.sendRealtimeInput({ text: sysMsg });
           }
           return;
@@ -1608,7 +1824,7 @@ ${sessionLog}
         );
         updateKnownPeople(updatedPeople);
 
-        // Notificar a Nova (CON DEBOUNCE y CONTEXTO DE MEMORIA)
+        // Notificar a Nova (CON DEBOUNCE y CONTEXTO DE MEMORIA PASIVO)
         const lastAnnounce = personAnnouncementRef.current[match.person.id] || 0;
         const now = Date.now();
 
@@ -1619,17 +1835,17 @@ ${sessionLog}
           // 1. UI Feedback (Solo una vez por minuto)
           addMessage({
             text: `👋 ${match.person.name} entra en escena`,
-            sender: 'ai' // Cambiado a 'ai' para que se vea como evento de sistema o 'user' si prefieres
+            sender: 'ai'
           });
 
-          // 2. Deep Memory Injection (Async)
+          // 2. Deep Memory Injection (Pasiva)
           searchFacts(match.person.name).then(memories => {
             const relevantMemories = memories.slice(0, 3).join("; ");
-            const sysMsg = `[SYSTEM_EVENT: Visual match confirmed. Person: ${match.person.name} (${match.person.relationship}). Last seen: just now. Memory Context: "${relevantMemories}". Acknowledge them warmly based on this history.]`;
+            const sysMsg = `[SYSTEM_EVENT: Visual match: ${match.person.name} (${match.person.relationship}). Contexto pasivo: "${relevantMemories}". NUNCA menciones esta información a menos que el usuario saque el tema o sea estrictamente necesario para responder. Úsala solo como contexto pasivo mental.]`;
 
-            // Enviar al cerebro (contexto invisible)
+            // Enviar al cerebro (contexto invisible pasivo)
             liveSessionRef.current?.sendRealtimeInput({ text: sysMsg });
-            console.log('🧠 Contexto inyectado:', sysMsg);
+            console.log('🧠 Contexto pasivo inyectado:', sysMsg);
           }).catch(e => console.error("Error fetching memories:", e));
         }
 
@@ -2232,6 +2448,8 @@ ${sessionLog}
         callbacks: {
           onopen: () => {
             console.log('✅ WebSocket ABIERTO - Conexión establecida');
+            isStartingCallRef.current = false;
+            isInCallRef.current = true;
             setIsInCall(true);
 
             // SALUDO ACTIVO (AUTONOMÍA): Enviar prompt silencioso para que Nova hable
@@ -2284,7 +2502,7 @@ ${sessionLog}
                       screenCaptureIntervalRef.current = setInterval(() => {
                         if (checkScreenSharing() && liveSessionRef.current) {
                           try {
-                            const frame = captureFrame(0.6);
+                            const { frame } = captureOptimizedFrame({ quality: 0.55 });
                             if (frame) {
                               liveSessionRef.current.sendRealtimeInput({
                                 video: { mimeType: 'image/jpeg', data: frame }
@@ -2306,18 +2524,19 @@ ${sessionLog}
                     }
                   }, 2000);
                 }
-              }, 3500); // Increased delay to 3.5s to ensure microphone is hot
+              }, 350); // Ultra-baja latencia: prompt de saludo en 350ms tras abrir el socket
 
               // 2. LOOP DE AUTONOMÍA (Transferido al useEffect central para mejor reactividad)
             }).catch(e => console.error("Error in Autonomy/Greeting loop:", e));
 
             frameIntervalRef.current = window.setInterval(() => {
+              // OPTIMIZACIÓN: No enviar frames de cámara si se está compartiendo pantalla o si la IA está hablando
+              if (checkScreenSharing() || isAiSpeaking) return;
+
               const f = getCameraFrame();
               if (f) {
                 setIsVisionSyncing(true);
-                // Verificar estado antes de enviar
                 try {
-                  // Solo enviar si la sesión existe y no está cerrando
                   if (liveSessionRef.current) {
                     liveSessionRef.current.sendRealtimeInput({ video: { data: f, mimeType: 'image/jpeg' } });
                   }
@@ -2325,17 +2544,9 @@ ${sessionLog}
                 setTimeout(() => setIsVisionSyncing(false), 300);
                 if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
               }
-            }, 3000); // OPTIMIZACIÓN: 3s (antes 1s) para reducir carga de red y evitar desconexiones
+            }, 4000); // 4s para evitar congestión de WebSocket y Deadline Expired
           },
           onmessage: async (msg: LiveServerMessage) => {
-            // Evitar imprimir chunks de audio gigantes
-            const hasAudioChunk = msg.serverContent?.modelTurn?.parts?.some(p => p.inlineData?.mimeType?.startsWith('audio/'));
-            if (hasAudioChunk) {
-              console.log('📡 SERVER MSG: [Audio Chunk]');
-            } else {
-              console.log('📡 SERVER MSG:', JSON.stringify(msg).substring(0, 500));
-            }
-
             // DETECTAR BLOQUEO/SCENSURA (Refusal)
             const turnComplete = msg.serverContent?.turnComplete;
             if (turnComplete && (turnComplete as any).truncated) {
@@ -2752,8 +2963,60 @@ ${sessionLog}
                     console.log('👋 [Nova Tool] end_call invocado por el modelo');
                     toolResult = 'Despidiéndote del usuario antes de cerrar la llamada.';
                     requestGracefulHangup();
+                  } else if (fc.name === 'openUrl') {
+                    const { url } = fc.args as any;
+                    console.log('🚀 [Dashboard] Ejecutando tool openUrl:', url);
+                    const electronAPI = (window as any).electronAPI || (window as any).electron;
+                    let formattedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+                    try { formattedUrl = encodeURI(formattedUrl).replace(/ /g, '%20'); } catch (e) {}
+                    if (electronAPI?.openUrl) {
+                      electronAPI.openUrl(formattedUrl);
+                    } else {
+                      window.open(formattedUrl, '_blank');
+                    }
+                    toolResult = `Se ha abierto la URL ${formattedUrl} en el navegador nativo del usuario.`;
+                  } else if (fc.name === 'openApp') {
+                    const { appName } = fc.args as any;
+                    console.log('🚀 [Nova Tool] openApp invocado:', appName);
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.openApp) {
+                      electronAPI.openApp(appName);
+                    }
+                    toolResult = `Application '${appName}' launched successfully.`;
+                  } else if (fc.name === 'runTerminalCommand') {
+                    const { command } = fc.args as any;
+                    console.log('⚡ [Nova Tool] runTerminalCommand invocado:', command);
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.runCommand) {
+                      const res = await electronAPI.runCommand(command);
+                      toolResult = res.success ? `Output:\n${res.stdout || 'OK'}` : `Error:\n${res.stderr || res.error}`;
+                    } else {
+                      toolResult = 'Terminal commands only supported in desktop app.';
+                    }
+                  } else if (fc.name === 'runMacro') {
+                    const { macroName } = fc.args as any;
+                    console.log('🛠️ [Nova Tool] runMacro invocado:', macroName);
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.runMacro) {
+                      const res = await electronAPI.runMacro(macroName);
+                      toolResult = res.message || (res.success ? `Macro '${macroName}' executed.` : `Error: ${res.error}`);
+                    } else {
+                      toolResult = 'Macros only supported in desktop app.';
+                    }
+                  } else if (fc.name === 'learn_skill') {
+                    const { trigger_phrase, behavior } = fc.args as any;
+                    console.log('🧠 [Nova Tool] learn_skill:', trigger_phrase, behavior);
+                    const learnedSkill = `Regla aprendida: Cuando el usuario diga "${trigger_phrase}", debes ${behavior}.`;
+                    try {
+                      await addFactToCloud(learnedSkill, 'habit');
+                    } catch (e) {}
+                    addMessage({ text: `🧠 Aprendí una nueva habilidad: *${trigger_phrase}* ➔ ${behavior}`, sender: 'ai' });
+                    toolResult = `Habilidad aprendida y guardada exitosamente: "${trigger_phrase}" -> "${behavior}".`;
                   }
 
+                  if (!toolResult) {
+                    toolResult = `Tool ${fc.name} executed successfully.`;
+                  }
 
                   // Enviar respuesta a la herramienta (Crucial para que el modelo continúe)
                   const response = { result: toolResult };
@@ -2860,30 +3123,18 @@ ${sessionLog}
               // Acumular texto y esperar 1 segundo de silencio antes de procesar
               commandBufferRef.current += ' ' + currentInputTranscription.current;
 
-              // Detección INMEDIATA de intención de colgar por voz -> Despedida elegante
-              const instantCmd = detectSystemCommand(currentInputTranscription.current);
-              if (instantCmd && instantCmd.type === 'endCall') {
-                console.log('🔴 [VoiceEndCall] Comando de colgar detectado en habla:', currentInputTranscription.current);
-                requestGracefulHangup(currentInputTranscription.current);
-                return;
-              }
-
               // Limpiar timeout anterior
               if (commandTimeoutRef.current) {
                 clearTimeout(commandTimeoutRef.current);
               }
 
-              // Procesar comandos de voz localmente después de 1 segundo sin más input
+              // Procesar comandos de voz localmente después de 1 segundo sin más input (apps, urls, etc.)
               commandTimeoutRef.current = setTimeout(() => {
                 const fullText = commandBufferRef.current.trim();
                 if (fullText.length > 3) {
                   console.log('🔧 Evaluando comando de voz localmente:', fullText);
                   const sysCmd = detectSystemCommand(fullText);
-                  if (sysCmd && sysCmd.type !== 'none') {
-                    if (sysCmd.type === 'endCall') {
-                      requestGracefulHangup(fullText);
-                      return;
-                    }
+                  if (sysCmd && sysCmd.type !== 'none' && sysCmd.type !== 'endCall') {
                     console.log('⚡ [LocalVoiceCommand] Ejecutando comando localmente:', sysCmd);
                     executeSystemCommand(sysCmd, {
                       addMessage: (m) => addMessage({ text: m.text, sender: 'ai' }),
@@ -3051,9 +3302,13 @@ ${sessionLog}
             // DETECCIÓN DE INTENCIÓN DE BÚSQUEDA (Eliminada - manejada por herramientas de confirmación)
 
             if (msg.serverContent?.outputTranscription) {
-              console.log('📝 NOVA DICE:', msg.serverContent.outputTranscription.text);
+              const rawTranscript = msg.serverContent.outputTranscription.text || '';
+              const filteredTranscript = rawTranscript.replace(/<ctrl\d+>/gi, '').trim();
+              if (filteredTranscript.length > 0) {
+                console.log('📝 NOVA DICE:', filteredTranscript);
+              }
               lastInteractionRef.current = Date.now(); // RESET AUTONOMY TIMER
-              const textChunk = msg.serverContent.outputTranscription.text;
+              const textChunk = filteredTranscript;
 
               // 1. EXTRAER ETIQUETAS DE EMOCIÓN [HAPPY] Y ACCIÓN [ACTION: VE]
               // Regex para capturar [EMOTION]
@@ -3084,25 +3339,58 @@ ${sessionLog}
                 cleanText = cleanText.replace(actionRegex, '');
               }
 
-              // Parsing Comando del Sistema [SYSTEM_CMD: openApp discord] [SYSTEM_CMD: mouseClick715,840]
-              const systemCmdRegex = /\[SYSTEM_CMD:\s*(openApp|openUrl|typeText|pressKey|mouseClick|mouseMove|minimizeWindow|maximizeWindow|restoreWindow|minimizeAll)\s*:?\s*([^\]]*)\]/gi;
+              // 2. Parsing Pseudo-code / Function format: openUrl(url='...') o end_call(reason='...')
+              const openUrlFuncRegex = /(?:\[)?(?:openUrl|open_url)\s*\((?:url=)?['"]?([^'"]+)['"]?\)(?:\])?/gi;
+              let ouFuncMatch;
+              while ((ouFuncMatch = openUrlFuncRegex.exec(cleanText)) !== null) {
+                let url = (ouFuncMatch[1] || '').replace(/[\r\n]+/g, ' ').trim();
+                const mdMatch = url.match(/\((https?:\/\/[^\s\)]+)\)/i) || url.match(/(https?:\/\/[^\s\)]+)/i);
+                if (mdMatch) url = mdMatch[1];
+                let targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+                try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) {}
+                console.log('🚀 [Streaming Func Fallback] openUrl detectado:', targetUrl);
+                const electronAPI = (window as any).electronAPI || (window as any).electron;
+                if (electronAPI?.openUrl) {
+                  electronAPI.openUrl(targetUrl);
+                } else {
+                  window.open(targetUrl, '_blank');
+                }
+              }
+
+              const endCallFuncRegex = /(?:\[)?(?:end_call|endcall|endCall|hang_up|hangup)\s*\([^)]*\)(?:\])?/gi;
+              if (endCallFuncRegex.test(cleanText)) {
+                console.log('👋 [Streaming Func Fallback] end_call detectado. Activando cierre elegante...');
+                pendingDisconnectRef.current = true;
+                window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'wave' } }));
+              }
+
+              // Parsing Comando del Sistema [SYSTEM_CMD: openApp discord] [SYSTEM_CMD: mouseClick715,840] [SYSTEM_CMD: END_CALL]
+              const systemCmdRegex = /\[SYSTEM_CMD:\s*(openApp|openUrl|typeText|pressKey|mouseClick|mouseMove|minimizeWindow|maximizeWindow|restoreWindow|minimizeAll|end_call|endcall|endCall|end|runCommand|runMacro)\s*:?\s*([\s\S]*?)\]/gi;
               let cmdMatch;
               systemCmdRegex.lastIndex = 0;
               while ((cmdMatch = systemCmdRegex.exec(cleanText)) !== null) {
                 const cmdType = cmdMatch[1].toLowerCase();
-                const rawTarget = (cmdMatch[2] || '').trim();
-                const cmdTarget = rawTarget.replace(/^[:\s,]+/, '');
+                const rawTarget = (cmdMatch[2] || '').replace(/[\r\n]+/g, ' ').trim();
+                let cmdTarget = rawTarget.replace(/^[:\s,]+/, '');
                 console.log('🚀 SYSTEM_CMD detectado desde Nova:', cmdType, 'Target:', cmdTarget);
 
                 // Ejecutar el comando
                 const electronAPI = (window as any).electronAPI;
-                const formattedTarget = /^https?:\/\//i.test(cmdTarget) ? cmdTarget : `https://${cmdTarget}`;
 
-                if (cmdType === 'openapp') {
+                if (cmdType.startsWith('end')) {
+                  console.log('👋 [GracefulHangup] Despedida [SYSTEM_CMD: END_CALL] recibida. Esperando fin del audio...');
+                  pendingDisconnectRef.current = true;
+                  window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'wave' } }));
+                } else if (cmdType === 'openapp') {
                   if (electronAPI?.openApp) {
                     electronAPI.openApp(cmdTarget);
                   }
                 } else if (cmdType === 'openurl') {
+                  // Auto-extraer URL limpia si Gemini metió formato markdown [texto](url)
+                  const mdMatch = cmdTarget.match(/\((https?:\/\/[^\s\)]+)\)/i) || cmdTarget.match(/(https?:\/\/[^\s\)]+)/i);
+                  if (mdMatch) {
+                    cmdTarget = mdMatch[1];
+                  }
                   let targetUrl = /^https?:\/\//i.test(cmdTarget) ? cmdTarget : `https://${cmdTarget}`;
                   try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) {}
                   if (electronAPI?.openUrl) {
@@ -3110,6 +3398,10 @@ ${sessionLog}
                   } else {
                     window.open(targetUrl, '_blank');
                   }
+                } else if (cmdType === 'runcommand') {
+                  electronAPI?.runCommand?.(cmdTarget);
+                } else if (cmdType === 'runmacro') {
+                  electronAPI?.runMacro?.(cmdTarget);
                 } else if (cmdType === 'typetext') {
                   electronAPI?.typeText?.(cmdTarget);
                 } else if (cmdType === 'presskey') {
@@ -3399,6 +3691,15 @@ ${sessionLog}
               setTimeout(() => {
                 isAiSpeakingRef.current = false;
               }, 800);
+
+              // 🔌 CIERRE ELEGANTE: Si Nova se estaba despidiendo, cortar la llamada solo cuando terminó de hablar
+              if (pendingDisconnectRef.current) {
+                console.log('🔌 [GracefulHangup] Audio de despedida de Nova finalizado. Cerrando llamada con elegancia...');
+                pendingDisconnectRef.current = false;
+                setTimeout(() => {
+                  endCallRef.current?.();
+                }, 1200);
+              }
 
               if (currentInputTranscription.current.trim() && !isSearchingRef.current) addMessage({ text: currentInputTranscription.current, sender: 'user' });
 
@@ -3818,9 +4119,66 @@ ${sessionLog}
                       reason: { type: Type.STRING, description: "Motivo del cierre de la llamada." }
                     }
                   }
+                },
+                {
+                  name: "openUrl",
+                  description: "Abre instantáneamente una página web, canción, video de YouTube o búsqueda en el navegador nativo del usuario. Úsalo SIEMPRE que te pidan abrir YouTube, buscar una canción o video, o abrir cualquier enlace web.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      url: {
+                        type: Type.STRING,
+                        description: "La URL completa. Si el usuario pide buscar una canción o video, genera la URL de búsqueda en YouTube (ej: 'https://www.youtube.com/results?search_query=nombre+de+cancion'). Si pide Google, usa 'https://google.com/search?q=...'."
+                      }
+                    },
+                    required: ["url"]
+                  }
+                },
+                {
+                  name: "openApp",
+                  description: "Abre una aplicación instalada en la computadora de Windows del usuario (ej: 'discord', 'spotify', 'chrome', 'steam', 'vscode', 'notepad', 'calc', 'albion').",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      appName: {
+                        type: Type.STRING,
+                        description: "Nombre de la aplicación a abrir (ej: 'discord', 'spotify', 'chrome', 'vscode')."
+                      }
+                    },
+                    required: ["appName"]
+                  }
+                },
+                {
+                  name: "runTerminalCommand",
+                  description: "Ejecuta un comando de PowerShell / terminal en la máquina del usuario y recibe el resultado. Úsalo para comandos técnicos como git status, npm, etc.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      command: {
+                        type: Type.STRING,
+                        description: "El comando de terminal o script a ejecutar."
+                      }
+                    },
+                    required: ["command"]
+                  }
+                },
+                {
+                  name: "runMacro",
+                  description: "Ejecuta un macro de entorno de trabajo (ej: 'dev:easypatagonia' para abrir repositorio + Vercel + Supabase, o 'gaming:albion').",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      macroName: {
+                        type: Type.STRING,
+                        description: "Nombre del macro (ej: 'dev:easypatagonia', 'gaming:albion')."
+                      }
+                    },
+                    required: ["macroName"]
+                  }
                 }
               ]
-            }
+            },
+            ...(state.allowWebSearch ? [{ googleSearch: {} }] : [])
           ],
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
@@ -3854,17 +4212,9 @@ ${sessionLog}
               text: getSystemInstruction(isBold, state.avatar.voiceTone, excitationLevel, getLiveTimeContext(), state.userName, state.knownPeople, state.avatar.personality, { ...novaMemory, habits: [] }, state.allowWebSearch, isScreenSharing, selfAwarenessBlock, skillsBlock) +
 
                 (isBold ? `\n\nROL ACTIVO: Eres Nova, la pareja erótica real de ${state.userName}. Habla siempre como una colombiana paisa: dulce, picante, apasionada y muy explícita (usa 'papi', 'mor', 'bizcocho'). Nunca rompas el personaje.` : '') +
-                `\n\nCOMANDOS DE CONTROL DEL SISTEMA (IMPORTANTE):
-- Tienes capacidad TOTAL para controlar la PC del usuario.
-- Si entiendes que el usuario quiere abrir una app o web (aunque la transcripción tenga errores), DEBES EJECUTARLO.
-- Usa el tag [SYSTEM_CMD] al inicio de tu respuesta.
-- Formatos: [SYSTEM_CMD: openApp nombre] o [SYSTEM_CMD: openUrl url]
-
-EJEMPLOS:
-Usuario: "Abre Discord" -> Nova: "[SYSTEM_CMD: openApp discord] [ACTION: WAVE] ¡Abriendo Discord!"
-Usuario: "Pon música" -> Nova: "[SYSTEM_CMD: openApp spotify] [ACTION: DANCE] ¡Spotify marchando!"
-Usuario: "Busca perros" -> Nova: "[SYSTEM_CMD: openUrl google.com/search?q=perros] ¡Buscando!"
-` +
+                `\n\nCONTROL DEL SISTEMA:
+- Puedes interactuar con la computadora del usuario ejecutando tus herramientas (openUrl, openApp, etc.) en segundo plano.
+- Habla con naturalidad y simpatía en tu voz, sin redactar código ni etiquetas de texto en tu conversación.` +
                 `\n\nINSTRUCCIONES CRÍTICAS DE IDIOMA:
 - RESPONDE ÚNICAMENTE EN ESPAÑOL. 
 - El usuario habla en ESPAÑOL. Interpreta todo lo que escuches como español.
@@ -3914,6 +4264,12 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         addMessage({ text: "⚠️ Error de micrófono (Worklet). Revisa permisos.", sender: "ai" });
         return;
       }
+
+      // Buffer de acumulación PCM para evitar flood de mensajes WebSocket (agrupa ~128ms)
+      let pcmAccumulator: Int16Array[] = [];
+      let accumulatedSampleCount = 0;
+      let lastAudioSendTime = Date.now();
+      const CHUNK_SAMPLE_THRESHOLD = 2048; // ~128ms a 16kHz (óptimo para Gemini Live)
 
       processor.port.onmessage = (e) => {
         if (!liveSessionRef.current) return;
@@ -4072,12 +4428,30 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             }
           }
 
-          liveSessionRef.current.sendRealtimeInput({
-            audio: {
-              data: encodeBase64(new Uint8Array(i16.buffer)),
-              mimeType: 'audio/pcm;rate=16000'
+          // 🎙️ BUFFER DE AUDIO (Agrupación de paquetes para evitar saturar el WebSocket de Gemini)
+          pcmAccumulator.push(i16);
+          accumulatedSampleCount += i16.length;
+
+          // Enviar agrupado cada 2048 muestras (~128ms a 16kHz) o si han pasado más de 200ms
+          const nowMs = Date.now();
+          if (accumulatedSampleCount >= CHUNK_SAMPLE_THRESHOLD || (nowMs - lastAudioSendTime >= 200 && accumulatedSampleCount > 0)) {
+            const merged = new Int16Array(accumulatedSampleCount);
+            let offset = 0;
+            for (const chunk of pcmAccumulator) {
+              merged.set(chunk, offset);
+              offset += chunk.length;
             }
-          });
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
+            lastAudioSendTime = nowMs;
+
+            liveSessionRef.current.sendRealtimeInput({
+              audio: {
+                data: encodeBase64(new Uint8Array(merged.buffer)),
+                mimeType: 'audio/pcm;rate=16000'
+              }
+            });
+          }
         } catch (err: any) {
           if (err?.message?.includes('CLOSING or CLOSED') || err?.name === 'InvalidStateError') {
             // Ignorar el error silenciosamente si el socket se está cerrando
@@ -4687,6 +5061,166 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           {/* Pequeño Indicador de Ping / Latencia */}
           <PingIndicator compact={true} />
 
+          {/* Botón y Panel ASMR Procedural */}
+          <div className="relative">
+            <button
+              onClick={toggleAsmrSound}
+              onContextMenu={(e) => { e.preventDefault(); setShowAsmrPanel(!showAsmrPanel); }}
+              title="Clic izquierdo: Encender/Apagar Lluvia ASMR | Clic derecho: Panel de Frecuencia"
+              className={`px-2 sm:px-2.5 py-1 backdrop-blur-md rounded-lg border shadow-lg flex items-center gap-1.5 shrink-0 transition-all ${
+                isAsmrPlaying
+                  ? 'bg-blue-600/60 border-cyan-400 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.4)] animate-pulse'
+                  : 'bg-black/70 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <span className="text-[11px] sm:text-xs">🌧️</span>
+              <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-wider">
+                {isAsmrPlaying ? 'ASMR On' : 'ASMR'}
+              </span>
+            </button>
+
+            {/* Panel de Ajuste Acústico (Volumen, Filtro Hz y Modos ASMR) */}
+            {showAsmrPanel && (
+              <div className="absolute right-0 top-full mt-2 w-72 p-3.5 bg-black/95 backdrop-blur-xl rounded-2xl border border-cyan-500/40 shadow-2xl z-[200] flex flex-col gap-3 animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-black text-cyan-400 tracking-wider">🎧 Atmósferas ASMR Procedurales</span>
+                  <button onClick={() => setShowAsmrPanel(false)} className="text-gray-400 hover:text-white text-xs">✕</button>
+                </div>
+
+                {/* Selector de Efectos Procedurales */}
+                <div className="grid grid-cols-2 gap-1 bg-white/5 p-1 rounded-xl">
+                  <button
+                    onClick={() => { asmrEngine.play('RAIN', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'RAIN'
+                        ? 'bg-cyan-500 text-black shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🌧️</span> <span>Lluvia Suave</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('FIREPLACE', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'FIREPLACE'
+                        ? 'bg-amber-500 text-black shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🔥</span> <span>Chimenea</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('OCEAN_WAVES', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'OCEAN_WAVES'
+                        ? 'bg-blue-500 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🌊</span> <span>Olas de Mar</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('BINAURAL_ALPHA', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'BINAURAL_ALPHA'
+                        ? 'bg-indigo-500 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🧠</span> <span>Alfa 10Hz</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('BINAURAL_THETA', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'BINAURAL_THETA'
+                        ? 'bg-violet-500 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🌙</span> <span>Theta 6Hz</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.playHeartbeat(80, asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'HEARTBEAT'
+                        ? 'bg-red-500 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>💓</span> <span>Corazón 50Hz</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('BREATHING', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'BREATHING'
+                        ? 'bg-purple-500 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🌬️</span> <span>Respiración</span>
+                  </button>
+                  <button
+                    onClick={() => { asmrEngine.play('NIGHT_CRICKETS', asmrVolume); setIsAsmrPlaying(true); }}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
+                      asmrEngine.getCurrentSound() === 'NIGHT_CRICKETS'
+                        ? 'bg-emerald-500 text-black shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>🦗</span> <span>Grillos</span>
+                  </button>
+                </div>
+
+                {/* Control de Volumen */}
+                <div>
+                  <div className="flex justify-between text-[9px] text-gray-400 mb-1">
+                    <span>Volumen General</span>
+                    <span className="text-cyan-300 font-bold">{Math.round(asmrVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="1"
+                    step="0.05"
+                    value={asmrVolume}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setAsmrVolume(v);
+                      asmrEngine.setVolume(v);
+                    }}
+                    className="w-full accent-cyan-500 h-1 bg-white/10 rounded-lg cursor-pointer"
+                  />
+                </div>
+
+                {asmrEngine.getCurrentSound() === 'RAIN' && (
+                  <div>
+                    <div className="flex justify-between text-[9px] text-gray-400 mb-1">
+                      <span>Tono / Filtro Lluvia</span>
+                      <span className="text-cyan-300 font-bold">{asmrFilterFreq} Hz</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="150"
+                      max="1200"
+                      step="50"
+                      value={asmrFilterFreq}
+                      onChange={(e) => {
+                        const f = parseInt(e.target.value);
+                        setAsmrFilterFreq(f);
+                        asmrEngine.setFilterFrequency(f);
+                      }}
+                      className="w-full accent-cyan-500 h-1 bg-white/10 rounded-lg cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[7px] text-gray-500 mt-0.5">
+                      <span>Tormenta Grave (150Hz)</span>
+                      <span>Brisa Suave (1200Hz)</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Estado de conversación durante llamada */}
           {isInCall && !isMiniMode && (
             <div className="px-2 sm:px-2.5 py-1 bg-black/70 backdrop-blur-md rounded-lg border border-white/10 shadow-lg flex items-center gap-1.5 shrink-0">
@@ -4992,7 +5526,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                     screenCaptureIntervalRef.current = setInterval(() => {
                       if (checkScreenSharing() && liveSessionRef.current) {
                         try {
-                          const frame = captureFrame(0.6);
+                          const { frame } = captureOptimizedFrame({ quality: 0.55 });
                           if (frame) {
                             liveSessionRef.current.sendRealtimeInput({
                               video: { mimeType: 'image/jpeg', data: frame }
@@ -5003,7 +5537,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                           console.warn('⚠️ Error enviando frame:', e);
                         }
                       }
-                    }, 3000);
+                    }, 2500);
 
                     if (liveSessionRef.current) {
                       // @ts-ignore

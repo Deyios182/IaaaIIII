@@ -243,6 +243,25 @@ function createTray() {
 }
 
 function registerGlobalShortcuts() {
+    // ⚡ Alt+Space y F8: Atajo Global para Despertar / Toggle Llamada de Voz con Nova (Instantáneo)
+    const registerCallToggle = (shortcut: string) => {
+        try {
+            globalShortcut.register(shortcut, () => {
+                console.log(`⚡ [GlobalShortcut] ${shortcut} detectado. Despertando a Nova...`);
+                if (!win?.isVisible()) {
+                    win?.show();
+                }
+                win?.focus();
+                win?.webContents.send('nova:toggle-call');
+            });
+        } catch (e) {
+            console.warn(`⚠️ No se pudo registrar atajo ${shortcut}:`, e);
+        }
+    };
+
+    registerCallToggle('Alt+Space');
+    registerCallToggle('F8');
+
     // Alt+N para mostrar/ocultar Nova
     globalShortcut.register('Alt+N', () => {
         if (win?.isVisible()) {
@@ -423,11 +442,19 @@ app.whenReady().then(() => {
         'epicgames': 'com.epicgames.launcher://',
     };
 
-    // Abrir aplicación — con detección de proceso ya corriendo
     // Abrir aplicación — con apertura forzada de ventana/pestaña
     ipcMain.handle('system:open-app', async (_event: any, appName: string) => {
         try {
-            const normalizedName = appName.toLowerCase().trim();
+            const rawName = (appName || '').trim();
+            const normalizedName = rawName
+                .toLowerCase()
+                .replace(/^(?:abre|abrir|open|inicia|iniciar|lanza|lanzar)\s+/i, '')
+                .replace(/^bre\s+/i, '')
+                .trim();
+
+            if (!normalizedName || normalizedName === 'bre') {
+                return { success: false, error: 'Nombre de aplicación inválido' };
+            }
 
             // 1. Resolver el comando/URI de la app
             let command = APP_COMMANDS[normalizedName];
@@ -507,38 +534,31 @@ app.whenReady().then(() => {
         });
     });
 
-    // Abrir URL con codificación segura (espacios, acentos) y fallback a Windows start
-    // Abrir URL con codificación segura de espacios/acentos y ejecución infalible en Windows
+    // Abrir URL nativa con shell.openExternal de Electron
     ipcMain.handle('system:open-url', async (_event: any, rawUrl: string) => {
         try {
             let formattedUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
             try {
-                // Encode URI y reemplazar espacios no codificados por %20
                 formattedUrl = encodeURI(formattedUrl).replace(/ /g, '%20');
             } catch (encErr) {
                 formattedUrl = formattedUrl.replace(/ /g, '%20');
             }
 
-            console.log('🌐 [Electron Main] Abriendo URL:', formattedUrl);
+            console.log('🌐 [Electron Main] Abriendo URL nativa:', formattedUrl);
             
-            // Intentar shell.openExternal
             try {
                 await shell.openExternal(formattedUrl);
+                return { success: true, url: formattedUrl };
             } catch (shellErr) {
-                console.warn('⚠️ shell.openExternal falló:', shellErr);
+                console.warn('⚠️ shell.openExternal falló, usando fallback de Windows:', shellErr);
+                if (process.platform === 'win32') {
+                    exec(`cmd /c start "" "${formattedUrl}"`);
+                }
+                return { success: true, url: formattedUrl, fallback: true };
             }
-
-            // Ejecutar cmd start en Windows para garantizar apertura física en el navegador predeterminado
-            if (process.platform === 'win32') {
-                exec(`cmd /c start "" "${formattedUrl}"`, (err) => {
-                    if (err) console.error('❌ Error en cmd start fallback:', err);
-                });
-            }
-
-            return { success: true };
-        } catch (e) {
-            console.error('❌ Error abriendo URL:', e);
-            return { success: false, error: String(e) };
+        } catch (err: any) {
+            console.error('❌ Error abriendo URL:', err);
+            return { success: false, error: err.message };
         }
     });
 
@@ -774,6 +794,104 @@ app.whenReady().then(() => {
             return { success: true };
         } catch (e) {
             console.error('Error en window-control:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 💻 EJECUCIÓN DE COMANDOS TERMINAL SILENCIOSOS (POWERSHELL / BASH)
+    ipcMain.handle('system:run-command', async (_event: any, command: string, options?: { cwd?: string; timeout?: number }) => {
+        try {
+            if (!command || typeof command !== 'string') {
+                return { success: false, error: 'Comando inválido o vacío' };
+            }
+            console.log('⚡ [Electron Main] Ejecutando comando terminal:', command);
+            const timeout = options?.timeout || 30000;
+            const cwd = options?.cwd || process.cwd();
+
+            return new Promise((resolve) => {
+                const psCmd = process.platform === 'win32'
+                    ? `powershell -NoProfile -NonInteractive -Command "${command.replace(/"/g, '`"')}"`
+                    : command;
+
+                exec(psCmd, { cwd, timeout }, (error, stdout, stderr) => {
+                    if (error) {
+                        console.warn('⚠️ Comando finalizó con error:', error.message);
+                        resolve({
+                            success: false,
+                            exitCode: error.code || 1,
+                            stdout: stdout ? stdout.trim() : '',
+                            stderr: stderr ? stderr.trim() : error.message,
+                            error: error.message
+                        });
+                        return;
+                    }
+                    resolve({
+                        success: true,
+                        exitCode: 0,
+                        stdout: stdout ? stdout.trim() : '',
+                        stderr: stderr ? stderr.trim() : ''
+                    });
+                });
+            });
+        } catch (e) {
+            console.error('Error crítico en run-command:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 🚀 ORQUESTACIÓN DE MACROS (Chain of Thought / Automatización de Workspaces)
+    ipcMain.handle('system:run-macro', async (_event: any, macroName: string, params?: Record<string, any>) => {
+        try {
+            console.log('🛠️ [Electron Main] Ejecutando Macro:', macroName, params);
+            const normalizedMacro = macroName.toLowerCase().trim();
+
+            if (normalizedMacro === 'dev:easypatagonia' || normalizedMacro === 'easypatagonia') {
+                // Macro de desarrollo para EasyPatagonia: Abre Vercel, Repo y Supabase
+                const urls = [
+                    'https://github.com',
+                    'https://vercel.com/dashboard',
+                    'https://supabase.com/dashboard'
+                ];
+                for (const url of urls) {
+                    shell.openExternal(url).catch(() => {});
+                }
+                return {
+                    success: true,
+                    macro: 'dev:easypatagonia',
+                    message: 'Entorno de trabajo EasyPatagonia abierto (GitHub, Vercel, Supabase).'
+                };
+            }
+
+            if (normalizedMacro === 'gaming:albion' || normalizedMacro === 'albion') {
+                // Macro de optimización para Albion Online
+                return {
+                    success: true,
+                    macro: 'gaming:albion',
+                    message: 'Modo compañero de Albion Online activado con alertas de pantalla en vivo.'
+                };
+            }
+
+            return { success: false, error: `Macro '${macroName}' no reconocida.` };
+        } catch (e) {
+            console.error('Error ejecutando macro:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 👁️ CAPTURA NATIVA DE PANTALLA (Visión de Copiloto de Baja Latencia)
+    ipcMain.handle('system:capture-screen-frame', async (_event: any) => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: 1280, height: 720 }
+            });
+            if (sources.length > 0 && sources[0].thumbnail) {
+                const base64 = sources[0].thumbnail.toJPEG(75).toString('base64');
+                return { success: true, imageBase64: base64 };
+            }
+            return { success: false, error: 'No se pudo capturar la pantalla.' };
+        } catch (e) {
+            console.error('Error en captura nativa de pantalla:', e);
             return { success: false, error: String(e) };
         }
     });

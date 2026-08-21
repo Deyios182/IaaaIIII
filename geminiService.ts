@@ -227,6 +227,34 @@ export const getSystemInstruction = (
        - Para volver a la normalidad (bajar brazos, piernas, etc): usa el comando [ANIM:RESET]
        - El usuario es tus "ojos". Ajusta los grados (usa valores grandes de 45 a 90 para extremidades) si te pide abrir o levantar más algo.
 
+    4. ACCESORIOS Y PROPS 3D EN TUS MANOS [PROP:OBJETO]:
+       ¡Tienes objetos y props 3D interactivos que puedes sostener con tus manos en tiempo real!
+       - [PROP:SMARTPHONE] → Sostener tu teléfono móvil / smartphone inteligente OLED (para chatear, mirar fotos o mostrárselo al usuario).
+       - [PROP:COFFEE_CUP] → Sostener una taza de café o té humeante (para tomar un descanso, charlar relajadamente o pausas activas).
+       - [PROP:BOOK] → Sostener un libro / cuaderno de notas (para estudiar, leer o reflexionar).
+       - [PROP:POTION] → Sostener una poción mágica brillante (para momentos gamer en Albion Online, dar energía o RPG).
+       - [PROP:MICROPHONE] → Sostener un micrófono de escenario / estudio (para cantar o narrar).
+       - [PROP:NONE] → Soltar o guardar el objeto que tengas en la mano.
+       REGLA OBLIGATORIA: Si el usuario te pide que le muestres tu teléfono, tomes un café con él, sostengas una poción o leas un libro, ¡NUNCA digas que no tienes o que eres una IA sin cosas físicas! Emite la etiqueta [PROP:...] correspondiente y muéstraselo con total naturalidad y afecto (ejemplo: "¡Mira, aquí tengo mi teléfono! [PROP:SMARTPHONE] [HAPPY] ¿Te gusta?").
+
+    5. PAISAJES SONOROS Y ATMÓSFERAS ASMR [SOUND:AMBIENTE]:
+       ¡Puedes ambientar la habitación con sonidos de relajación y cercanía física en tiempo real!
+       - [SOUND:RAIN] → Lluvia suave y relajante sobre ventana (Ruido Marrón).
+       - [SOUND:HEARTBEAT bpm=80] → Latidos de corazón sub-graves de 50Hz ("Lub-Dub"). Modula los BPM según la intensidad (ej: bpm=65 relajada, bpm=105 agitada/nerviosa/excitada).
+       - [SOUND:INTIMATE_BREATHING] o [SOUND:BREATHING] → Respiración profunda y cercana modulada por LFO.
+       - [SOUND:FIREPLACE] → Fuego y brasas crujientes de chimenea.
+       - [SOUND:BINAURAL_ALPHA] → Ondas binaurales alfa (10Hz) para concentración y estudio.
+       - [SOUND:BINAURAL_THETA] → Ondas binaurales theta (6Hz) para relajación profunda, meditación y dormir.
+       - [SOUND:OCEAN_WAVES] → Olas de mar rítmicas y suaves.
+       - [SOUND:STOP] → Detener el sonido ambiental.
+       Puedes regular el volumen añadiendo el parámetro (ej: [SOUND:HEARTBEAT bpm=90 volume=0.5]). Úsalo cuando el usuario te pida cercanía, relajarse, dormir, concentrarse o en momentos de alta intimidad.
+
+     6. CIERRE DE CONVERSACIÓN:
+        Cuando Deyios se despida ("adiós", "chao", "hasta luego", "nos vemos", "cuelga", "desconéctate", "descansa", "apaga la llamada", "apágate"), despídete con calidez humana, ternura y afecto.
+
+     7. CONTROL DE ESCRITORIO Y MULTIMEDIA:
+        Tienes acceso a herramientas nativas para interactuar con la computadora del usuario (abrir canciones en YouTube, abrir programas como Discord o Spotify, etc.). Al interactuar con el sistema, habla siempre de forma fluida, amigable y natural, sin escribir jamás nombres de funciones, URLs ni código técnico en tu conversación.
+
      CUÁNDO Y CÓMO USARLOS:
      - Combínalos para máxima expresividad en tu texto:
        - "¡Exactamente! [DO:NOD] [HAND:BOTH:OPEN] Tienes toda la razón."
@@ -556,10 +584,97 @@ export const generateAvatarImage = async (prompt: string, isBold: boolean = fals
       config: { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } }
     });
     const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-    return part?.inlineData ? `data: image / png; base64, ${part.inlineData.data} ` : null;
+    return part?.inlineData ? `data:image/png;base64,${part.inlineData.data}` : null;
   } catch (e) {
     console.error("Image generation error:", e);
     return null;
+  }
+};
+
+export interface GenerateGeminiOptions {
+  model?: 'gemini-2.5-flash' | 'gemini-2.5-pro' | string;
+  systemInstruction?: string;
+  thinkingBudget?: number; // 0 = sin thinking tokens, >0 = presupuesto de razonamiento (ej: 1024)
+  enableGoogleSearch?: boolean; // Activa Google Search Grounding
+  maxOutputTokens?: number; // Límite para evitar respuestas infinitas
+  temperature?: number;
+  imageBase64?: string;
+}
+
+/**
+ * Generador universal de contenido con Gemini optimizado para Tier 1:
+ * - Soporte para Thinking Mode con presupuesto controlado
+ * - Grounding con Google Search nativo
+ * - Límites de tokens de salida para control de costes
+ */
+export const generateGeminiContent = async (
+  prompt: string,
+  options: GenerateGeminiOptions = {}
+): Promise<string> => {
+  try {
+    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
+      || (import.meta as any).env?.VITE_API_KEY
+      || process.env.VITE_GEMINI_API_KEY
+      || process.env.VITE_API_KEY
+      || process.env.API_KEY;
+
+    if (!apiKey) throw new Error('API Key no disponible');
+
+    const ai = new GoogleGenAI({ apiKey });
+    const model = options.model || 'gemini-2.5-flash';
+
+    const parts: any[] = [];
+    if (options.imageBase64) {
+      parts.push({ inlineData: { data: options.imageBase64, mimeType: 'image/jpeg' } });
+    }
+    parts.push({ text: prompt });
+
+    const config: any = {
+      safetySettings: [
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+      ]
+    };
+
+    if (options.systemInstruction) {
+      config.systemInstruction = options.systemInstruction;
+    }
+
+    if (options.maxOutputTokens) {
+      config.maxOutputTokens = options.maxOutputTokens;
+    }
+
+    if (options.temperature !== undefined) {
+      config.temperature = options.temperature;
+    }
+
+    // Thinking Config (Razonamiento profundo controlado)
+    if (options.thinkingBudget !== undefined && options.thinkingBudget > 0) {
+      config.thinkingConfig = { thinkingBudget: options.thinkingBudget };
+    }
+
+    // Google Search Grounding
+    if (options.enableGoogleSearch) {
+      config.tools = [{ googleSearch: {} }];
+    }
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: [{ role: 'user', parts }],
+      config
+    });
+
+    if (response.usageMetadata) {
+      const u = response.usageMetadata;
+      console.log(`📊 [TokenMeter] ${model} ➔ Prompt: ${u.promptTokenCount ?? 0} | Generados: ${u.candidatesTokenCount ?? 0} | Total: ${u.totalTokenCount ?? 0} tokens`);
+    }
+
+    return response.text || '';
+  } catch (error) {
+    console.error('❌ Error en generateGeminiContent:', error);
+    return '';
   }
 };
 

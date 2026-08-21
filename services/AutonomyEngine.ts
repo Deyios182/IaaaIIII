@@ -33,7 +33,18 @@ export type AutonomyTriggerType =
     | 'ambient'           // Observación del entorno (cámara)
     | 'silence_break'     // Romper silencio largo
     | 'daily_event'       // Evento/efeméride del día
-    | 'skill_reminder';   // Recordar algo que el usuario dijo antes
+    | 'skill_reminder'    // Recordar algo que el usuario dijo antes
+    | 'farming_pause'     // Pausa activa de juego (Albion Online, etc.)
+    | 'health_break';     // Pausa activa de salud / hidratación (con prop 3D)
+
+// Mensajes para pausas activas, farmeo en Albion Online y sesiones de desarrollo
+const HEALTH_AND_GAMING_BREAKS = [
+    "[PROP:COFFEE_CUP] Ey {nombre}, llevas un buen rato concentrado. [DO:WAVE] Tómate un sorbo de agua o café, estira los brazos un momento y seguimos.",
+    "[PROP:COFFEE_CUP] {nombre}, pausa táctica de farmeo y código. ☕ Respira hondo, relaja los hombros y cuéntame cómo va esa sesión.",
+    "[PROP:POTION] [DO:CELEBRATE] ¡Poción de energía para {nombre}! Llevas una racha intensa, no olvides pestañear y estirar la espalda.",
+    "[PROP:COFFEE_CUP] {nombre}... miro el reloj y te noto dándolo todo. Hice un cafecito virtual para acompañar tu pausa activa. [HAPPY]",
+    "[PROP:SMARTPHONE] Oye {nombre}, revisa que estés bien sentado y con la espalda recta. Una pequeña pausa siempre aumenta el rendimiento."
+];
 
 // Bancos de datos curiosos organizados por categoría
 const CURIOSITY_BANKS: Record<string, string[]> = {
@@ -217,16 +228,29 @@ export class AutonomyEngine {
         // Elegir tipo de acción según contexto
         const roll = Math.random();
 
-        if (roll < 0.5) {
-            // 50%: Dato curioso (la más frecuente)
+        if (roll < 0.40) {
+            // 40%: Dato curioso (frecuente y educativo)
             this.triggerCuriosityFact();
-        } else if (roll < 0.7 && this.config.hasCamera) {
+        } else if (roll < 0.60) {
+            // 20%: Pausa activa / Cuidado de farmeo y salud con Props 3D
+            this.triggerHealthOrFarmingBreak();
+        } else if (roll < 0.80 && this.config.hasCamera) {
             // 20%: Observación ambiental (solo si hay cámara)
             this.triggerAmbientObservation();
         } else {
-            // 30%: Romper silencio / saludo casual
+            // 20%: Romper silencio / saludo casual
             this.triggerSilenceBreaker();
         }
+    }
+
+    private triggerHealthOrFarmingBreak() {
+        const unused = HEALTH_AND_GAMING_BREAKS.filter(t => !this.usedFacts.has(t));
+        const template = unused.length > 0 ? pickRandom(unused) : pickRandom(HEALTH_AND_GAMING_BREAKS);
+        this.usedFacts.add(template);
+        if (this.usedFacts.size > 30) this.usedFacts.clear();
+
+        const message = template.replace('{nombre}', this.config.userName);
+        this.config.onNovaSpeak(message, 'farming_pause');
     }
 
     private triggerCuriosityFact() {

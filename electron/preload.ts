@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('mini-mode-changed', (_event, isMini) => callback(isMini));
     },
 
+    // ⚡ GLOBAL HOTKEY - Iniciar / Toggle Llamada de Voz (Alt+Space o F8)
+    onToggleCall: (callback) => {
+        ipcRenderer.on('nova:toggle-call', () => callback());
+    },
+
     // SYSTEM COMMANDS - Abrir apps, URLs, notificaciones
     openApp: (appName) => ipcRenderer.invoke('system:open-app', appName),
     openUrl: (url) => ipcRenderer.invoke('system:open-url', url),
@@ -32,6 +37,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     typeText: (text) => ipcRenderer.invoke('system:type-text', text),
     pressKey: (key) => ipcRenderer.invoke('system:press-key', key),
     controlWindow: (action, target) => ipcRenderer.invoke('system:window-control', { action, target }),
+
+    // ⚡ TERMINAL Y MACROS DE DESARROLLO / TRABAJO
+    runCommand: (command, options) => ipcRenderer.invoke('system:run-command', command, options),
+    runMacro: (macroName, params) => ipcRenderer.invoke('system:run-macro', macroName, params),
+    captureScreenFrame: () => ipcRenderer.invoke('system:capture-screen-frame'),
 
     // Información de la plataforma
     platform: process.platform,

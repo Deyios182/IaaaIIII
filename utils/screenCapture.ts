@@ -128,6 +128,52 @@ function setupVideoCapture(options: ScreenCaptureOptions): void {
     }
 }
 
+// Canvas pequeño para cálculo rápido de diferencias (diff) y ahorro de tokens
+let diffCanvas: HTMLCanvasElement | null = null;
+let diffContext: CanvasRenderingContext2D | null = null;
+let previousSampleData: Uint8ClampedArray | null = null;
+let lastSentTimestamp: number = 0;
+const DIFF_SAMPLE_SIZE = 32; // 32x32 pixels para calcular cambio visual rápido
+
+function checkVisualChange(video: HTMLVideoElement, threshold: number = 0.03): boolean {
+    if (!diffCanvas) {
+        diffCanvas = document.createElement('canvas');
+        diffCanvas.width = DIFF_SAMPLE_SIZE;
+        diffCanvas.height = DIFF_SAMPLE_SIZE;
+        diffContext = diffCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (!diffContext) return true;
+
+    diffContext.drawImage(video, 0, 0, DIFF_SAMPLE_SIZE, DIFF_SAMPLE_SIZE);
+    const imgData = diffContext.getImageData(0, 0, DIFF_SAMPLE_SIZE, DIFF_SAMPLE_SIZE);
+    const currentData = imgData.data;
+
+    if (!previousSampleData) {
+        previousSampleData = new Uint8ClampedArray(currentData);
+        return true; // Primer frame siempre se envía
+    }
+
+    let diffCount = 0;
+    const totalPixels = DIFF_SAMPLE_SIZE * DIFF_SAMPLE_SIZE;
+    // Muestreo por canal RGB
+    for (let i = 0; i < currentData.length; i += 4) {
+        const rDiff = Math.abs(currentData[i] - previousSampleData[i]);
+        const gDiff = Math.abs(currentData[i + 1] - previousSampleData[i + 1]);
+        const bDiff = Math.abs(currentData[i + 2] - previousSampleData[i + 2]);
+        if (rDiff + gDiff + bDiff > 45) {
+            diffCount++;
+        }
+    }
+
+    const changeRatio = diffCount / totalPixels;
+    const hasChanged = changeRatio >= threshold;
+
+    if (hasChanged) {
+        previousSampleData.set(currentData);
+    }
+    return hasChanged;
+}
+
 export function stopScreenCapture(): void {
     if (screenStream) {
         screenStream.getTracks().forEach(track => track.stop());
@@ -140,10 +186,59 @@ export function stopScreenCapture(): void {
     }
     captureCanvas = null;
     captureContext = null;
+    previousSampleData = null;
+    lastSentTimestamp = 0;
     console.log('🖥️ Captura de pantalla detenida');
 }
 
-export function captureFrame(quality: number = 0.7): string | null {
+export interface OptimizedCaptureOptions {
+    quality?: number;
+    force?: boolean;
+    changeThreshold?: number;
+    heartbeatIntervalMs?: number; // Forzar envío cada X ms si está estático (ej: 25s)
+}
+
+/**
+ * Captura un frame optimizado para tokens.
+ * Solo envía la imagen si hay un cambio significativo en pantalla o si pasó el tiempo de heartbeat.
+ */
+export function captureOptimizedFrame(options: OptimizedCaptureOptions = {}): { frame: string | null; changed: boolean } {
+    if (!videoElement || !captureCanvas || !captureContext) {
+        return { frame: null, changed: false };
+    }
+
+    const quality = options.quality ?? 0.55;
+    const force = options.force ?? false;
+    const threshold = options.changeThreshold ?? 0.03;
+    const heartbeat = options.heartbeatIntervalMs ?? 25000;
+    const now = Date.now();
+
+    const isHeartbeat = (now - lastSentTimestamp) >= heartbeat;
+    const changed = checkVisualChange(videoElement, threshold);
+
+    if (!force && !changed && !isHeartbeat) {
+        // Pantalla estática: evitamos gastar tokens (~258 tokens por frame)
+        return { frame: null, changed: false };
+    }
+
+    // Dibujar frame actual en canvas
+    captureContext.drawImage(
+        videoElement,
+        0, 0,
+        captureCanvas.width,
+        captureCanvas.height
+    );
+
+    const dataUrl = captureCanvas.toDataURL('image/jpeg', quality);
+    lastSentTimestamp = now;
+
+    return {
+        frame: dataUrl.split(',')[1],
+        changed: changed || isHeartbeat
+    };
+}
+
+export function captureFrame(quality: number = 0.6): string | null {
     if (!videoElement || !captureCanvas || !captureContext) {
         return null;
     }
@@ -158,8 +253,6 @@ export function captureFrame(quality: number = 0.7): string | null {
 
     // Convertir a base64 JPEG
     const dataUrl = captureCanvas.toDataURL('image/jpeg', quality);
-
-    // Remover el prefijo "data:image/jpeg;base64," para obtener solo el base64
     return dataUrl.split(',')[1];
 }
 
@@ -182,12 +275,13 @@ export function hasSystemAudio(): boolean {
     return screenStream !== null && screenStream.getAudioTracks().length > 0;
 }
 
-// Captura automática cada N segundos
+// Captura automática inteligente (ahorra tokens cuando no hay cambios)
 let captureInterval: NodeJS.Timeout | null = null;
 
 export function startAutoCapture(
     callback: (frame: string) => void,
-    intervalMs: number = 3000
+    intervalMs: number = 2000,
+    options?: OptimizedCaptureOptions
 ): void {
     if (captureInterval) {
         clearInterval(captureInterval);
@@ -195,7 +289,7 @@ export function startAutoCapture(
 
     captureInterval = setInterval(() => {
         if (isScreenSharing()) {
-            const frame = captureFrame();
+            const { frame } = captureOptimizedFrame(options);
             if (frame) {
                 callback(frame);
             }
@@ -209,3 +303,4 @@ export function stopAutoCapture(): void {
         captureInterval = null;
     }
 }
+
