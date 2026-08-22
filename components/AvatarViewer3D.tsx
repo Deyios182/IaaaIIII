@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, Suspense, useState } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Environment, Html, useProgress } from '@react-three/drei';
 import { EffectComposer, Bloom, ToneMapping, Vignette } from '@react-three/postprocessing';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
@@ -3627,11 +3627,15 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 }
 
 function FallbackAvatar() {
+    const { progress } = useProgress();
     return (
-        <mesh position={[0, 0, 0]}>
-            <sphereGeometry args={[0.5, 32, 32]} />
-            <meshStandardMaterial color="#555" wireframe />
-        </mesh>
+        <Html center>
+            <div className="flex flex-col items-center justify-center p-5 bg-[#0a0a14]/90 backdrop-blur-xl rounded-2xl border border-primary/40 shadow-[0_0_30px_rgba(19,19,236,0.3)] text-center min-w-[220px]">
+                <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mb-3 shadow-lg"></div>
+                <span className="text-sm font-bold text-white tracking-wide">Cargando a Nova...</span>
+                <span className="text-xs text-cyan-400 font-semibold mt-1.5">{progress > 0 ? `${progress.toFixed(0)}%` : 'Descargando modelo 3D...'}</span>
+            </div>
+        </Html>
     );
 }
 

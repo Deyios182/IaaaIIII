@@ -25,10 +25,19 @@ export interface WakeWordReturn {
     stopListening: () => void;
 }
 
+const getLogTimestamp = (): string => {
+    const d = new Date();
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    return `[${h}:${m}:${s}.${ms}]`;
+};
+
 let cachedVoskModelPromise: Promise<any> | null = null;
 const getOrLoadVoskModel = () => {
     if (!cachedVoskModelPromise) {
-        console.log('⏳ [WakeWord Vosk] Cargando modelo acústico local en WebAssembly...');
+        console.log(`${getLogTimestamp()} ⏳ [WakeWord Vosk] Cargando modelo acústico local en WebAssembly...`);
         cachedVoskModelPromise = createModel('/vosk-model-es.zip');
     }
     return cachedVoskModelPromise;
@@ -73,7 +82,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                     const now = Date.now();
                     if (now - lastTriggerTime < 5000) return;
                     lastTriggerTime = now;
-                    console.log(`⚡ [WakeWord Vosk] ¡Match acústico! Disparando activación...`);
+                    console.log(`%c⚡ ${getLogTimestamp()} [WakeWord Vosk] ¡Match acústico! Disparando llamada (0 ms)...`, 'color: #38bdf8; font-weight: bold; background: #082f49; padding: 2px 6px; border-radius: 4px;');
                     callbackRef.current.onActivate?.();
                 };
 
@@ -82,7 +91,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                     const transcript = (message.result?.text || '').toLowerCase().trim();
                     if (!transcript) return;
                     setLastDetectedPhrase(transcript);
-                    console.log(`🎙️ [WakeWord Vosk] Transcripción: "${transcript}"`);
+                    console.log(`🎙️ ${getLogTimestamp()} [WakeWord Vosk] Transcripción: "${transcript}"`);
 
                     if (
                         transcript.includes('nova') ||

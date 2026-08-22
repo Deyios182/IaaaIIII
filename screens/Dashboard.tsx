@@ -38,6 +38,16 @@ import { createAutonomyEngine, getAutonomyEngine } from '../services/AutonomyEng
 import { asmrEngine } from '../services/ASMRSoundEngine';
 
 
+// ⏱️ Formateador de Fecha, Hora y Milisegundos [HH:mm:ss.SSS] para Profiling de Latencia
+export function getLogTimestamp(): string {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `[${h}:${m}:${s}.${ms}]`;
+}
+
 // SIMPLE ERROR BOUNDARY COMPONENT (Inline to avoid file clutter for now)
 class AvatarErrorBoundary extends React.Component<{ children: React.ReactNode, fallback: React.ReactNode, onError?: () => void }, { hasError: boolean }> {
   constructor(props: any) {
@@ -291,22 +301,9 @@ function cleanAllAiTags(text: string): string {
   if (!text) return '';
   return text
     .replace(/<ctrl\d+>/gi, '')
-    .replace(/\[PROP:[\s\S]*?\]/gi, '')
-    .replace(/\[SOUND:[\s\S]*?\]/gi, '')
-    .replace(/(?:\[controlBody[\s\S]*?\]|controlBody\([^)]*\))/gi, '')
-    .replace(/(?:\[)?(?:openUrl|open_url)\s*\([^)]*\)(?:\])?/gi, '')
-    .replace(/(?:\[)?(?:end_call|endcall|endCall|hang_up|hangup)\s*\([^)]*\)(?:\])?/gi, '')
-    .replace(/(?:\[)?(?:openApp|runTerminalCommand|runMacro)\s*\([^)]*\)(?:\])?/gi, '')
-    .replace(/\[(?:SYSTEM_CMD:\s*)?(?:end_call|endcall|endCall|hang_up|hangup|openUrl|open_url|learn_skill)[\s\S]*?\]/gi, '')
-    .replace(/\[SYSTEM_CMD:[\s\S]*?\]/gi, '')
-    .replace(/\[MOVE:[\s\S]*?\]/gi, '')
-    .replace(/\[DO:[\s\S]*?\]/gi, '')
-    .replace(/\[HAND:[\s\S]*?\]/gi, '')
-    .replace(/\[ANIM:[\s\S]*?\]/gi, '')
-    .replace(/\[ACTION:[\s\S]*?\]/gi, '')
-    .replace(/\[(WINK_LEFT|WINK_RIGHT|WINK|KISS|SMILE|POUT|TONGUE_OUT|TONGUE|AHEGAO|CLOSE_EYES)\]/gi, '')
-    .replace(/\[(EXCITED|HAPPY|SURPRISED|SAD|ANGRY|CONFUSED|THINKING|NEUTRAL|FLIRT|MOAN|LAUGH)\]/gi, '')
-    .replace(/(?:performAction|changePose|simulateFluid)\([^)]*\)/gi, '')
+    .replace(/(?:\[)?(?:openUrl|open_url|end_call|endcall|endCall|hang_up|hangup|openApp|runTerminalCommand|runMacro|performAction|changePose|simulateFluid|changeIntimatePose|controlBody)\s*\([^)]*\)(?:\])?/gi, '')
+    .replace(/\[[\s\S]*?\]/g, '')
+    .replace(/\*.*?\*/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -567,6 +564,13 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [isSearching, setIsSearching] = useState(false); // Estado para indicar búsqueda
   const isSearchingRef = useRef(false); // Ref para bloqueo síncrono inmediato
   const isStartingCallRef = useRef(false); // Prevenir AbortError en play()
+
+  // ⏱️ LATENCY PROFILING REFS (High-Precision Voice Pipeline Metrics)
+  const userSpeechStartRef = useRef<number>(0);
+  const userSpeechEndRef = useRef<number>(0);
+  const lastChunkSentRef = useRef<number>(0);
+  const firstAudioReceivedRef = useRef<boolean>(false);
+  const latencyStatsRef = useRef<{ ttfa: number; cloudTime: number }>({ ttfa: 0, cloudTime: 0 });
 
   const [excitationLevel, setExcitationLevel] = useState(30); // Empieza bajo para crecer gradualmente
   const [isScreenSharing, setIsScreenSharing] = useState(false); // Nueva: Compartir pantalla
@@ -1574,17 +1578,21 @@ ${sessionLog}
     });
   }, []);
 
-  // 🆕 Ejecutar reconocimiento facial (Frenado por estado y limitado a 15s para proteger cuota)
+  // 🆕 Ejecutar reconocimiento facial en segundo plano asíncrono (sin competir con el audio de Gemini)
   useEffect(() => {
     if (!isInCall) return;
     const interval = setInterval(() => {
-      // Solo reconoce rostros si la IA no está pensando, procesando herramientas o bloqueada por cuota
-      if (agentState === AgentState.IDLE && !isQuotaExceeded) {
-        detectFaceAndRecognize();
+      const isVoiceActive = isAiSpeakingRef.current || (Date.now() - lastUserInteractionRef.current < 3000);
+      if (agentState === AgentState.IDLE && !isQuotaExceeded && !isVoiceActive) {
+        if (typeof window !== 'undefined' && (window as any).requestIdleCallback) {
+          (window as any).requestIdleCallback(() => detectFaceAndRecognize(), { timeout: 2000 });
+        } else {
+          setTimeout(() => detectFaceAndRecognize(), 0);
+        }
       } else if (isQuotaExceeded) {
         console.log("💤 Reconocimiento pausado (Cuota de API Excedida / Modo Circuit Breaker)");
       }
-    }, 15000); // 15 segundos
+    }, 20000); // 20 segundos
     return () => clearInterval(interval);
   }, [isInCall, agentState, isQuotaExceeded]);
 
@@ -3012,6 +3020,12 @@ ${sessionLog}
                     } catch (e) {}
                     addMessage({ text: `🧠 Aprendí una nueva habilidad: *${trigger_phrase}* ➔ ${behavior}`, sender: 'ai' });
                     toolResult = `Habilidad aprendida y guardada exitosamente: "${trigger_phrase}" -> "${behavior}".`;
+                  } else if (fc.name === 'changeIntimatePose') {
+                    const { pose } = fc.args as any;
+                    console.log(`💃 [Sistema Nervioso] Nova solicitó cambiar a pose: ${pose}`);
+                    window.dispatchEvent(new CustomEvent('nova-pose', { detail: { pose: (pose || '').toLowerCase() } }));
+                    window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: (pose || '').toLowerCase() } }));
+                    toolResult = `Animación o pose '${pose}' ejecutada correctamente en el motor 3D.`;
                   }
 
                   if (!toolResult) {
@@ -3068,7 +3082,13 @@ ${sessionLog}
               const hasRealWord = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]{2,}/.test(text);
 
               if (hasRealWord && !ignoredPatterns.test(text) && !text.includes('<noise>') && text.toLowerCase() !== 'neutral') {
-                console.log('👂 INPUT TRANSCRIPTION (Vocal válida):', text);
+                const now = performance.now();
+                if (userSpeechStartRef.current === 0) {
+                  userSpeechStartRef.current = now;
+                }
+                userSpeechEndRef.current = now;
+                firstAudioReceivedRef.current = false;
+                console.log(`👂 ${getLogTimestamp()} INPUT TRANSCRIPTION:`, text);
                 lastInteractionRef.current = Date.now(); // RESET AUTONOMY TIMER
                 if (isAiSpeakingRef.current) {
                   stopAiAudio(true); // Ducking suave estilo Copilot
@@ -3083,7 +3103,7 @@ ${sessionLog}
                   lastUserQuery.current = currentInputTranscription.current; // Guardar backup solo si tiene contenido real
                 }
               } else {
-                console.log('🔇 Ignorando ruido/alucinación (solo input):', text);
+                console.log(`🔇 ${getLogTimestamp()} Ignorando ruido/alucinación (solo input):`, text);
               }
             }
 
@@ -3305,7 +3325,7 @@ ${sessionLog}
               const rawTranscript = msg.serverContent.outputTranscription.text || '';
               const filteredTranscript = rawTranscript.replace(/<ctrl\d+>/gi, '').trim();
               if (filteredTranscript.length > 0) {
-                console.log('📝 NOVA DICE:', filteredTranscript);
+                console.log(`📝 ${getLogTimestamp()} NOVA DICE:`, filteredTranscript);
               }
               lastInteractionRef.current = Date.now(); // RESET AUTONOMY TIMER
               const textChunk = filteredTranscript;
@@ -3673,14 +3693,22 @@ ${sessionLog}
             if (audioPart && !isSearchingRef.current && !isSinging) {
               const audioData = audioPart.inlineData.data;
 
-              // **SILENCIAR MICRÓFONO** -> Ahora manejado por useEffect([isAiSpeaking])
-              // if (audioMixerRef.current) {
-              //   audioMixerRef.current.gain.value = 0; 
-              // }
+              // ⏱️ LATENCY PROFILING (Time To First Audio - TTFA)
+              if (!firstAudioReceivedRef.current) {
+                firstAudioReceivedRef.current = true;
+                const now = performance.now();
+                const ttfaFromSpeechEnd = userSpeechEndRef.current > 0 ? Math.round(now - userSpeechEndRef.current) : 0;
+                const cloudLatency = lastChunkSentRef.current > 0 ? Math.round(now - lastChunkSentRef.current) : 0;
+                latencyStatsRef.current = { ttfa: ttfaFromSpeechEnd, cloudTime: cloudLatency };
+                console.log(
+                  `%c⏱️ ${getLogTimestamp()} [LATENCIA TTFA] ⚡ Primer audio recibido en ${ttfaFromSpeechEnd} ms (Nube Gemini: ${cloudLatency} ms)`,
+                  'color: #00ffcc; font-weight: bold; font-size: 11px; background: #002b28; padding: 2px 6px; border-radius: 4px;'
+                );
+              }
 
               // Solo log para chunks grandes (inicio de respuesta) para reducir spam
               if (audioData.length > 10000) {
-                console.log('🔊 REPRODUCIENDO AUDIO DE NOVA (tamaño:', audioData.length, 'bytes)');
+                console.log(`🔊 ${getLogTimestamp()} REPRODUCIENDO AUDIO DE NOVA (${audioData.length} bytes)`);
               }
               isAiSpeakingRef.current = true;
               playAiVoice(audioData);
@@ -3688,13 +3716,20 @@ ${sessionLog}
 
             // Cuando Nova termina de hablar, reactivamos el micrófono tras un pequeño buffer
             if (msg.serverContent?.turnComplete) {
+              const now = performance.now();
+              const turnDuration = userSpeechEndRef.current > 0 ? Math.round(now - userSpeechEndRef.current) : 0;
+              console.log(
+                `%c📊 ${getLogTimestamp()} [RESUMEN DE TURNO] 🎙️ Duración total de turno: ${turnDuration} ms | TTFA: ${latencyStatsRef.current.ttfa} ms | Nube Gemini: ${latencyStatsRef.current.cloudTime} ms`,
+                'color: #ffaa00; font-weight: bold; font-size: 11px; background: #2b1d00; padding: 2px 6px; border-radius: 4px;'
+              );
+
               setTimeout(() => {
                 isAiSpeakingRef.current = false;
               }, 800);
 
               // 🔌 CIERRE ELEGANTE: Si Nova se estaba despidiendo, cortar la llamada solo cuando terminó de hablar
               if (pendingDisconnectRef.current) {
-                console.log('🔌 [GracefulHangup] Audio de despedida de Nova finalizado. Cerrando llamada con elegancia...');
+                console.log(`🔌 ${getLogTimestamp()} [GracefulHangup] Audio de despedida de Nova finalizado. Cerrando llamada con elegancia...`);
                 pendingDisconnectRef.current = false;
                 setTimeout(() => {
                   endCallRef.current?.();
@@ -4175,6 +4210,21 @@ ${sessionLog}
                     },
                     required: ["macroName"]
                   }
+                },
+                {
+                  name: "changeIntimatePose",
+                  description: "Cambia la pose o expresión facial del avatar 3D durante la intimidad física. ÚSALA SIEMPRE en lugar de escribir acciones entre corchetes o asteriscos.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      pose: {
+                        type: Type.STRING,
+                        enum: ["doggy", "ahegao", "flirt", "dance", "kneel", "lean_forward"],
+                        description: "El nombre exacto de la pose o expresión íntima a ejecutar."
+                      }
+                    },
+                    required: ["pose"]
+                  }
                 }
               ]
             },
@@ -4428,30 +4478,18 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             }
           }
 
-          // 🎙️ BUFFER DE AUDIO (Agrupación de paquetes para evitar saturar el WebSocket de Gemini)
-          pcmAccumulator.push(i16);
-          accumulatedSampleCount += i16.length;
-
-          // Enviar agrupado cada 2048 muestras (~128ms a 16kHz) o si han pasado más de 200ms
-          const nowMs = Date.now();
-          if (accumulatedSampleCount >= CHUNK_SAMPLE_THRESHOLD || (nowMs - lastAudioSendTime >= 200 && accumulatedSampleCount > 0)) {
-            const merged = new Int16Array(accumulatedSampleCount);
-            let offset = 0;
-            for (const chunk of pcmAccumulator) {
-              merged.set(chunk, offset);
-              offset += chunk.length;
-            }
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
-            lastAudioSendTime = nowMs;
-
-            liveSessionRef.current.sendRealtimeInput({
-              audio: {
-                data: encodeBase64(new Uint8Array(merged.buffer)),
-                mimeType: 'audio/pcm;rate=16000'
-              }
-            });
+          // 🎙️ TRANSMISIÓN DE AUDIO EN TIEMPO REAL (Ultra Low Latency ~32ms por paquete)
+          if (volumePercent > 5) {
+            userSpeechEndRef.current = performance.now();
           }
+
+          lastChunkSentRef.current = performance.now();
+          liveSessionRef.current.sendRealtimeInput({
+            audio: {
+              data: encodeBase64(new Uint8Array(i16.buffer)),
+              mimeType: 'audio/pcm;rate=16000'
+            }
+          });
         } catch (err: any) {
           if (err?.message?.includes('CLOSING or CLOSED') || err?.name === 'InvalidStateError') {
             // Ignorar el error silenciosamente si el socket se está cerrando
