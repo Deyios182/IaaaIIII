@@ -28,8 +28,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openUrl: (url) => ipcRenderer.invoke('system:open-url', url),
     showNotification: (title, body) => ipcRenderer.invoke('system:notification', title, body),
     searchFiles: (query) => ipcRenderer.invoke('system:search-files', query),
-    // 🆕 Detectar apps corriendo (para SelfAwareness de Nova)
+    // 🆕 Detectar apps corriendo y juegos instalados
     getRunningApps: () => ipcRenderer.invoke('system:get-running-apps'),
+    getInstalledGames: () => ipcRenderer.invoke('system:get-installed-games'),
 
     // 🆕 AUTOMATIZACIÓN DE TECLADO Y MOUSE Y VENTANAS
     mouseClick: (options) => ipcRenderer.invoke('system:mouse-click', options),

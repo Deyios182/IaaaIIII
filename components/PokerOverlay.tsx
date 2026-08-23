@@ -25,15 +25,7 @@ export const PokerOverlay: React.FC<PokerOverlayProps> = ({
     onToggle
 }) => {
     if (!isActive) {
-        // Botón flotante para activar
-        return (
-            <button
-                onClick={onToggle}
-                className="fixed bottom-4 right-4 z-[300] px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-full shadow-lg hover:scale-105 transition-transform"
-            >
-                🎴 Poker Assistant
-            </button>
-        );
+        return null;
     }
 
     return (

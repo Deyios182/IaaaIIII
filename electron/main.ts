@@ -442,7 +442,10 @@ app.whenReady().then(() => {
         'epicgames': 'com.epicgames.launcher://',
     };
 
-    // Abrir aplicación — con apertura forzada de ventana/pestaña
+    // Mapa en memoria de videojuegos detectados y su ruta/URI de lanzamiento
+    const INSTALLED_GAMES_LAUNCHERS: Record<string, string> = {};
+
+    // Abrir aplicación — con soporte para juegos de Steam, Epic, accesos directos y apps de Windows
     ipcMain.handle('system:open-app', async (_event: any, appName: string) => {
         try {
             const rawName = (appName || '').trim();
@@ -456,10 +459,24 @@ app.whenReady().then(() => {
                 return { success: false, error: 'Nombre de aplicación inválido' };
             }
 
-            // 1. Resolver el comando/URI de la app
-            let command = APP_COMMANDS[normalizedName];
+            // 1. Resolver si es un videojuego detectado previamente (Steam / Accesos directos / Standalone)
+            const gameLauncher = INSTALLED_GAMES_LAUNCHERS[normalizedName] ||
+                Object.entries(INSTALLED_GAMES_LAUNCHERS).find(([k]) => k.includes(normalizedName) || normalizedName.includes(k))?.[1];
 
-            // 2. Si hay comando o alias conocido, abrir directamente (crea ventana/pestaña nueva)
+            if (gameLauncher) {
+                console.log('🎮 [GameLauncher] Lanzando juego detectado:', normalizedName, '→', gameLauncher);
+                if (gameLauncher.startsWith('steam://') || gameLauncher.includes('://')) {
+                    await shell.openExternal(gameLauncher);
+                } else if (gameLauncher.endsWith('.lnk') || gameLauncher.endsWith('.url')) {
+                    await shell.openPath(gameLauncher);
+                } else {
+                    exec(`start "" "${gameLauncher}"`);
+                }
+                return { success: true, alreadyOpen: false, appName };
+            }
+
+            // 2. Si hay comando o alias conocido, abrir directamente
+            let command = APP_COMMANDS[normalizedName];
             if (command) {
                 console.log('🚀 Abriendo app (Alias):', normalizedName, '→', command);
                 if (command.includes('://')) {
@@ -532,6 +549,121 @@ app.whenReady().then(() => {
                 resolve([...new Set(apps)]);
             });
         });
+    });
+
+    // 🎮 Escanear videojuegos instalados en la máquina (Steam, Epic, Riot, Accesos directos)
+    ipcMain.handle('system:get-installed-games', async () => {
+        const games: string[] = [];
+
+        try {
+            // 1. Escanear Steam (appmanifest_*.acf en bibliotecas)
+            const steamPaths = [
+                'C:\\Program Files (x86)\\Steam\\steamapps',
+                'C:\\Program Files\\Steam\\steamapps',
+                'D:\\SteamLibrary\\steamapps',
+                'E:\\SteamLibrary\\steamapps',
+                'F:\\SteamLibrary\\steamapps',
+                'D:\\Steam\\steamapps',
+                'E:\\Steam\\steamapps'
+            ];
+
+            for (const sPath of steamPaths) {
+                if (fs.existsSync(sPath)) {
+                    try {
+                        const files = fs.readdirSync(sPath);
+                        for (const f of files) {
+                            if (f.startsWith('appmanifest_') && f.endsWith('.acf')) {
+                                const content = fs.readFileSync(path.join(sPath, f), 'utf8');
+                                const matchName = content.match(/"name"\s+"([^"]+)"/i);
+                                const matchAppId = content.match(/"appid"\s+"([^"]+)"/i);
+                                if (matchName && matchName[1] && !matchName[1].includes('Steamworks') && !matchName[1].includes('Proton')) {
+                                    const gName = matchName[1];
+                                    games.push(gName);
+                                    if (matchAppId && matchAppId[1]) {
+                                        INSTALLED_GAMES_LAUNCHERS[gName.toLowerCase()] = `steam://rungameid/${matchAppId[1]}`;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            // 2. Escanear Epic Games Launcher Manifests
+            const epicManifestsPath = 'C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests';
+            if (fs.existsSync(epicManifestsPath)) {
+                try {
+                    const files = fs.readdirSync(epicManifestsPath);
+                    for (const f of files) {
+                        if (f.endsWith('.item')) {
+                            const data = JSON.parse(fs.readFileSync(path.join(epicManifestsPath, f), 'utf8'));
+                            if (data.DisplayName) {
+                                games.push(data.DisplayName);
+                                if (data.AppName) {
+                                    INSTALLED_GAMES_LAUNCHERS[data.DisplayName.toLowerCase()] = `com.epicgames.launcher://apps/${data.AppName}?action=launch&silent=true`;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) { }
+            }
+
+            // 3. Escanear accesos directos en el Escritorio (Desktop)
+            const userHome = process.env.USERPROFILE || '';
+            const desktopPaths = [
+                path.join(userHome, 'Desktop'),
+                path.join(userHome, 'OneDrive', 'Escritorio'),
+                path.join(userHome, 'OneDrive', 'Desktop'),
+                'C:\\Users\\Public\\Desktop'
+            ];
+
+            const knownGameKeywords = [
+                'albion', 'league', 'valorant', 'minecraft', 'roblox', 'genshin', 'honkai',
+                'fortnite', 'counter-strike', 'cs2', 'dota', 'apex', 'overwatch', 'cyberpunk',
+                'gta', 'witcher', 'elden ring', 'dark souls', 'world of warcraft', 'wow',
+                'diablo', 'starcraft', 'fallout', 'skyrim', 'rust', 'tarkov', 'palworld', 'demonologist'
+            ];
+
+            for (const dPath of desktopPaths) {
+                if (fs.existsSync(dPath)) {
+                    try {
+                        const files = fs.readdirSync(dPath);
+                        for (const f of files) {
+                            const clean = f.replace(/\.(lnk|url)$/i, '').trim();
+                            const lower = clean.toLowerCase();
+                            if (knownGameKeywords.some(k => lower.includes(k))) {
+                                games.push(clean);
+                                INSTALLED_GAMES_LAUNCHERS[lower] = path.join(dPath, f);
+                            }
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            // 4. Juegos stand-alone conocidos en Program Files
+            const standaloneChecks = [
+                { path: 'C:\\Riot Games\\League of Legends', name: 'League of Legends' },
+                { path: 'C:\\Riot Games\\VALORANT', name: 'VALORANT' },
+                { path: 'C:\\Program Files (x86)\\AlbionOnline', name: 'Albion Online' },
+                { path: 'C:\\Program Files\\AlbionOnline', name: 'Albion Online' },
+                { path: path.join(userHome, 'AppData', 'Roaming', '.minecraft'), name: 'Minecraft' }
+            ];
+
+            for (const item of standaloneChecks) {
+                if (fs.existsSync(item.path)) {
+                    games.push(item.name);
+                    INSTALLED_GAMES_LAUNCHERS[item.name.toLowerCase()] = item.path;
+                }
+            }
+
+        } catch (err) {
+            console.error('Error escaneando juegos:', err);
+        }
+
+        // Deduplicar lista limpia
+        const uniqueGames = [...new Set(games.filter(Boolean))];
+        console.log(`🎮 [GameDetector] ${uniqueGames.length} juegos detectados en el sistema:`, uniqueGames);
+        return uniqueGames;
     });
 
     // Abrir URL nativa con shell.openExternal de Electron

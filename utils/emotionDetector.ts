@@ -11,7 +11,12 @@ export type Emotion =
     | 'thinking'
     | 'surprised'
     | 'confused'
-    | 'angry';
+    | 'angry'
+    | 'flirty'
+    | 'tender'
+    | 'curious'
+    | 'smug'
+    | 'relieved';
 
 export interface EmotionResult {
     emotion: Emotion;
@@ -54,6 +59,26 @@ export function detectEmotion(text: string): EmotionResult {
         angry: [
             'enojado', 'furioso', 'ira', 'molesto', 'maldita sea', 'odio', '😡', '😠',
             'estúpido', 'idiota', 'arggh', 'maldición'
+        ],
+        flirty: [
+            'papi', 'mor', 'mi amor', 'lindo', 'guapo', 'rico', 'sexy', 'beso', 'muac',
+            'antojo', 'ganas de', 'travesura', '😏', '💋', '😈', '🔥'
+        ],
+        tender: [
+            'tranquilo', 'te quiero', 'te acompaño', 'abracito', 'cariño', 'dulce',
+            'descansa', 'aquí estoy', 'cuidarte', 'tierno', '❤️', '🥺', '🫂'
+        ],
+        curious: [
+            'cuéntame', 'cómo funciona', 'y qué pasó', 'enséñame', 'qué opinas',
+            'explícame', 'tengo curiosidad', 'me intriga', '🧐', '💡'
+        ],
+        smug: [
+            'te lo dije', 'obvio', 'sabías que', 'por supuesto', 'je', 'claramente',
+            'adivina', 'sabía que te gustaría', '😎', '😼'
+        ],
+        relieved: [
+            'menos mal', 'por fin', 'aliviada', 'qué alivio', 'respiro', 'ya pasó',
+            'tranquilidad', 'paz', 'uf', '😌'
         ]
     };
 
@@ -67,11 +92,7 @@ export function detectEmotion(text: string): EmotionResult {
         let emotionIntensity = 0;
 
         keywords.forEach(keyword => {
-            // Escapar caracteres especiales de regex (como ?)
             const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-            // Usar word boundaries (\b) para evitar coincidencias parciales, 
-            // a menos que el keyword empiece/termine con símbolos no alfanuméricos
             const prefix = /^\w/.test(keyword) ? '\\b' : '';
             const suffix = /\w$/.test(keyword) ? '\\b' : '';
 
@@ -79,7 +100,6 @@ export function detectEmotion(text: string): EmotionResult {
             const count = (lowerText.match(regex) || []).length;
             matches += count;
 
-            // Intensidad basada en signos de exclamación
             const exclamations = (lowerText.match(/!/g) || []).length;
             emotionIntensity += exclamations * 0.1;
         });
@@ -91,7 +111,6 @@ export function detectEmotion(text: string): EmotionResult {
         }
     }
 
-    // Si no se detectó nada, es neutral
     if (maxMatches === 0) {
         return { emotion: 'neutral', intensity: 0.5, confidence: 1 };
     }
@@ -109,13 +128,18 @@ export function detectEmotion(text: string): EmotionResult {
 export function emotionToAnimation(emotion: Emotion): string {
     const animationMap: Record<Emotion, string> = {
         neutral: 'Idle',
-        happy: 'Happy',
-        sad: 'Sad',
-        excited: 'Excited',
-        thinking: 'Thinking',
-        surprised: 'Surprised',
-        confused: 'Confused',
-        angry: 'Angry'
+        happy: 'happy',
+        sad: 'sad',
+        excited: 'excited',
+        thinking: 'thinking',
+        surprised: 'surprised',
+        confused: 'confused',
+        angry: 'angry',
+        flirty: 'flirt',
+        tender: 'listen_attentive',
+        curious: 'curious_lean',
+        smug: 'playful_tease',
+        relieved: 'stretch_relax'
     };
 
     return animationMap[emotion] || 'Idle';
@@ -135,9 +159,11 @@ export function emotionToFacialExpression(emotion: Emotion, intensity: number): 
         'mouthSmileR': 0,
         'mouthFrownL': 0,
         'mouthFrownR': 0,
+        'eyeBlinkL': 0,
+        'eyeBlinkR': 0
     };
 
-    const smoothIntensity = intensity * 0.7; // Suavizar para que no sea exagerado
+    const smoothIntensity = intensity * 0.7;
 
     switch (emotion) {
         case 'happy':
@@ -170,7 +196,6 @@ export function emotionToFacialExpression(emotion: Emotion, intensity: number): 
             expressions['eyeWideL'] = smoothIntensity;
             expressions['eyeWideR'] = smoothIntensity;
             expressions['browInnerUp'] = smoothIntensity * 0.8;
-            expressions['mouthOpen'] = smoothIntensity * 0.5;
             break;
 
         case 'confused':
@@ -185,8 +210,39 @@ export function emotionToFacialExpression(emotion: Emotion, intensity: number): 
             expressions['mouthFrownR'] = smoothIntensity;
             break;
 
+        case 'flirty':
+            expressions['mouthSmileR'] = smoothIntensity * 0.85;
+            expressions['mouthSmileL'] = smoothIntensity * 0.4;
+            expressions['browOuterUpR'] = smoothIntensity * 0.5;
+            expressions['eyeBlinkL'] = smoothIntensity * 0.4; // Guiño sutil
+            break;
+
+        case 'tender':
+            expressions['mouthSmileL'] = smoothIntensity * 0.6;
+            expressions['mouthSmileR'] = smoothIntensity * 0.6;
+            expressions['browInnerUp'] = smoothIntensity * 0.35;
+            break;
+
+        case 'curious':
+            expressions['eyeWideL'] = smoothIntensity * 0.6;
+            expressions['eyeWideR'] = smoothIntensity * 0.6;
+            expressions['browOuterUpL'] = smoothIntensity * 0.4;
+            expressions['browOuterUpR'] = smoothIntensity * 0.4;
+            break;
+
+        case 'smug':
+            expressions['mouthSmileR'] = smoothIntensity * 0.9;
+            expressions['mouthSmileL'] = smoothIntensity * 0.2;
+            expressions['browOuterUpR'] = smoothIntensity * 0.6;
+            break;
+
+        case 'relieved':
+            expressions['mouthSmileL'] = smoothIntensity * 0.5;
+            expressions['mouthSmileR'] = smoothIntensity * 0.5;
+            expressions['browInnerUp'] = -smoothIntensity * 0.2;
+            break;
+
         default:
-            // neutral - todo a 0
             break;
     }
 

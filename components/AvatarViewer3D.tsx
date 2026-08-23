@@ -24,6 +24,120 @@ import { InteractionToolbar, type InteractionTool } from './InteractionToolbar';
 import { HandTrackingOverlay } from './HandTrackingOverlay';
 import { UserAvatar3D } from './UserAvatar3D';
 
+import { NovaPersonalityMode } from '../types';
+
+const MODE_3D_LIGHTS: Record<NovaPersonalityMode, {
+    ambientColor: string;
+    ambientIntensity: number;
+    dirLightColor: string;
+    dirLightIntensity: number;
+    pointLightColor: string;
+    pointLightIntensity: number;
+    rimLightColor: string;
+    containerBg: string;
+}> = {
+    companion: {
+        ambientColor: '#ffffff',
+        ambientIntensity: 1.2,
+        dirLightColor: '#e0f2fe',
+        dirLightIntensity: 0.9,
+        pointLightColor: '#38bdf8',
+        pointLightIntensity: 0.6,
+        rimLightColor: '#3b82f6',
+        containerBg: 'from-slate-950 via-blue-950/30 to-slate-900'
+    },
+    nympho: {
+        ambientColor: '#ffe4e6',
+        ambientIntensity: 1.1,
+        dirLightColor: '#fda4af',
+        dirLightIntensity: 1.1,
+        pointLightColor: '#f43f5e',
+        pointLightIntensity: 0.8,
+        rimLightColor: '#fb7185',
+        containerBg: 'from-slate-950 via-rose-950/40 to-slate-900'
+    },
+    grok: {
+        ambientColor: '#f3e8ff',
+        ambientIntensity: 1.1,
+        dirLightColor: '#c084fc',
+        dirLightIntensity: 1.0,
+        pointLightColor: '#a855f7',
+        pointLightIntensity: 0.8,
+        rimLightColor: '#e879f9',
+        containerBg: 'from-slate-950 via-purple-950/40 to-slate-900'
+    },
+    gamer: {
+        ambientColor: '#d1fae5',
+        ambientIntensity: 1.1,
+        dirLightColor: '#34d399',
+        dirLightIntensity: 1.0,
+        pointLightColor: '#10b981',
+        pointLightIntensity: 0.8,
+        rimLightColor: '#6ee7b7',
+        containerBg: 'from-slate-950 via-emerald-950/40 to-slate-900'
+    },
+    chilean: {
+        ambientColor: '#fee2e2',
+        ambientIntensity: 1.2,
+        dirLightColor: '#f87171',
+        dirLightIntensity: 0.9,
+        pointLightColor: '#ef4444',
+        pointLightIntensity: 0.7,
+        rimLightColor: '#60a5fa',
+        containerBg: 'from-slate-950 via-red-950/30 to-slate-900'
+    },
+    hacker: {
+        ambientColor: '#cffafe',
+        ambientIntensity: 1.0,
+        dirLightColor: '#22d3ee',
+        dirLightIntensity: 1.0,
+        pointLightColor: '#06b6d4',
+        pointLightIntensity: 0.9,
+        rimLightColor: '#38bdf8',
+        containerBg: 'from-slate-950 via-cyan-950/40 to-slate-900'
+    },
+    tsundere: {
+        ambientColor: '#fef3c7',
+        ambientIntensity: 1.2,
+        dirLightColor: '#fbbf24',
+        dirLightIntensity: 1.0,
+        pointLightColor: '#f59e0b',
+        pointLightIntensity: 0.7,
+        rimLightColor: '#fb923c',
+        containerBg: 'from-slate-950 via-amber-950/40 to-slate-900'
+    },
+    zen: {
+        ambientColor: '#ccfbf1',
+        ambientIntensity: 1.2,
+        dirLightColor: '#2dd4bf',
+        dirLightIntensity: 0.8,
+        pointLightColor: '#14b8a6',
+        pointLightIntensity: 0.6,
+        rimLightColor: '#5eead4',
+        containerBg: 'from-slate-950 via-teal-950/30 to-slate-900'
+    },
+    waifu: {
+        ambientColor: '#fce7f3',
+        ambientIntensity: 1.3,
+        dirLightColor: '#f472b6',
+        dirLightIntensity: 0.9,
+        pointLightColor: '#ec4899',
+        pointLightIntensity: 0.8,
+        rimLightColor: '#fbcfe8',
+        containerBg: 'from-slate-950 via-pink-950/40 to-slate-900'
+    },
+    latenight: {
+        ambientColor: '#e0e7ff',
+        ambientIntensity: 0.8,
+        dirLightColor: '#818cf8',
+        dirLightIntensity: 0.7,
+        pointLightColor: '#6366f1',
+        pointLightIntensity: 0.6,
+        rimLightColor: '#a5b4fc',
+        containerBg: 'from-slate-950 via-indigo-950/50 to-slate-900'
+    }
+};
+
 interface AvatarViewer3DProps {
     avatar?: any; // El estado del avatar desde App.tsx
     modelUrl?: string; // Permitir modelUrl directo para retrocompatibilidad
@@ -37,6 +151,7 @@ interface AvatarViewer3DProps {
     isHotMode?: boolean;
     hairColor?: string;
     audioAnalyser?: AnalyserNode | null;
+    personalityMode?: NovaPersonalityMode;
 }
 
 // Simulación de Ruido Perlin simple (Legacy removed - using SimplexNoise class)
@@ -377,6 +492,20 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         }
     }, [isHotMode]);
 
+    // 🫁 Sincronización Fisiológica con Motor ASMR y Latidos (BPM)
+    const activeBpmRef = useRef<number>(72);
+    useEffect(() => {
+        const handleBpmUpdate = (e: any) => {
+            if (e.detail?.bpm) {
+                activeBpmRef.current = e.detail.bpm;
+            }
+        };
+        window.addEventListener('nova-bpm-update', handleBpmUpdate);
+        return () => {
+            window.removeEventListener('nova-bpm-update', handleBpmUpdate);
+        };
+    }, []);
+
     const [morphTargetMeshes, setMorphTargetMeshes] = useState<THREE.Mesh[]>([]);
 
     // Refs para stickers de emociones
@@ -407,6 +536,11 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         if (mixerRef.current) {
             mixerRef.current.stopAllAction();
             mixerRef.current = null;
+        }
+
+        // Dispose IK controller & event listeners
+        if (ikControllerRef.current) {
+            ikControllerRef.current.dispose();
         }
 
         // Dispose lip sync
@@ -2194,29 +2328,49 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // === Si hay animación externa (Mixamo), proceduralAnimator o idle ===
         // El parpadeo y lipsync se procesan de forma unificada más abajo en el render loop
 
-        // --- SACCADIC EYE MOVEMENTS (MICRO-MOVIMIENTOS OCULARES BIOLÓGICOS) ---
+        // --- GAZE PSICOLÓGICO Y SACCADIC EYE MOVEMENTS COGNITIVOS ---
         if (ikControllerRef.current?.isInitialized()) {
             saccadeTimer.current += delta;
-            if (saccadeTimer.current > nextSaccadeTime.current) {
-                // Saccades humanos: predominantemente horizontales (relación 3:1 o 4:1)
-                // Rango muy sutil (~3.5cm horizontal, ~1cm vertical)
-                const rangeX = 0.035;
-                const rangeY = 0.010;
-                const microOffset = new THREE.Vector3(
-                    (Math.random() - 0.5) * rangeX * 2, // X: Escaneo horizontal
-                    (Math.random() - 0.5) * rangeY * 2, // Y: Micro-fijación vertical
-                    0
-                );
 
+            const currentAction = proceduralAnimatorRef.current?.getCurrentAction() || action;
+            const isThinking = currentAction === 'thinking' || currentAction === 'confused';
+            const isFlirtOrShy = currentAction === 'flirt' || currentAction === 'shy' || currentAction === 'playful_tease' || currentAction === 'picara';
+            const isIntimate = isHotMode || currentAction === 'listen_attentive' || currentAction === 'blow_kiss' || currentAction === 'beso';
+
+            if (saccadeTimer.current > nextSaccadeTime.current) {
+                let rangeX = 0.035;
+                let rangeY = 0.010;
+                let offsetX = (Math.random() - 0.5) * rangeX * 2;
+                let offsetY = (Math.random() - 0.5) * rangeY * 2;
+
+                if (isThinking) {
+                    // 🧠 THINKING GAZE: Desvío cognitivo hacia arriba a la izquierda (acceso de memoria / reflexión)
+                    offsetX = -0.18 + (Math.random() - 0.5) * 0.04;
+                    offsetY = 0.12 + (Math.random() - 0.5) * 0.03;
+                } else if (isFlirtOrShy) {
+                    // 🙈 SHY/FLIRT GAZE: Mirada hacia abajo-derecha momentánea y luego reconexión con el usuario
+                    const glanceDown = Math.random() < 0.6;
+                    offsetX = glanceDown ? 0.12 : (Math.random() - 0.5) * 0.02;
+                    offsetY = glanceDown ? -0.10 : (Math.random() - 0.5) * 0.01;
+                } else if (isIntimate) {
+                    // 💖 TENDER / INTIMATE GAZE: Mirada fija penetrante a los ojos (micro-sacadas ultracortas de alta intensidad)
+                    rangeX = 0.010;
+                    rangeY = 0.004;
+                    offsetX = (Math.random() - 0.5) * rangeX * 2;
+                    offsetY = (Math.random() - 0.5) * rangeY * 2;
+                }
+
+                const microOffset = new THREE.Vector3(offsetX, offsetY, 0);
                 ikControllerRef.current.setMicroOffset(microOffset);
 
                 saccadeTimer.current = 0;
-                // Intervalo biológico: micro-fijaciones entre 1.8s y 4.5s con probabilidad de doble fijación
                 const isDoubleFixation = Math.random() < 0.15;
-                nextSaccadeTime.current = isDoubleFixation ? 0.35 + Math.random() * 0.4 : 1.8 + Math.random() * 2.7;
+                nextSaccadeTime.current = isThinking 
+                    ? 0.8 + Math.random() * 0.6 
+                    : (isDoubleFixation ? 0.35 + Math.random() * 0.4 : 1.8 + Math.random() * 2.7);
             }
 
-            // Seguir dinámicamente la cámara 3D para que el avatar te mire a los ojos al mover la cámara
+            // Seguir dinámicamente la posición de la cámara 3D (para que el avatar te mire a los ojos y siga la cámara al rotar/mover la vista)
             ikControllerRef.current.setLookTarget(state.camera.position, true);
 
             // Inyectar el estado del baile actual (calculado en el frame anterior o actual)
@@ -2298,8 +2452,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                 });
             }
 
-            // A. RESPIRACIÓN REALISTA ASIMÉTRICA (Inhalación activa, meseta y exhalación relajada lenta)
-            const breathSpeed = (isHotMode ? 2.4 : 1.0) * moodInfluence.breathingSpeed * 0.28;
+            // A. RESPIRACIÓN REALISTA ASIMÉTRICA SINCRONIZADA CON BPM (IK + ASMR)
+            const targetBpm = activeBpmRef.current || (isHotMode ? 105 : 68);
+            const bpmSpeedMultiplier = (targetBpm / 60) * 0.28;
+            const breathSpeed = bpmSpeedMultiplier * moodInfluence.breathingSpeed;
             const breathCycle = ((t * breathSpeed) % 1.0 + 1.0) % 1.0;
             let inhaleNorm = 0;
             if (breathCycle < 0.38) {
@@ -2316,12 +2472,13 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             }
             const inhale = (inhaleNorm - 0.5) * 2.0; // -1 a 1
 
-            // Movimiento vertical sutil (Pecho sube al inhalar)
+            // Expansión dinámica del pecho proporcional a la agitación/BPM
+            const breathAmplitude = targetBpm > 90 ? 0.0075 : 0.0045;
             let baseY = -0.5; // El offset base necesario para este modelo (evita flotar)
             if (currentBasePoseRef.current === 'sit') baseY = -0.9;
             if (currentBasePoseRef.current === 'lie') baseY = -1.5;
 
-            const targetY = baseY + (inhale * 0.0045 * moodInfluence.expressionIntensity * proceduralLayerWeight);
+            const targetY = baseY + (inhale * breathAmplitude * moodInfluence.expressionIntensity * proceduralLayerWeight);
             modelRef.current.position.y = THREE.MathUtils.lerp(modelRef.current.position.y, targetY, 0.08);
 
             // B. MICRO-BALANCEO (REMOVED)
@@ -2614,15 +2771,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         }
 
         // --- 3. EXPRESIVIDAD: OJOS Y MIRADA ---
-        // Al no tener morphs de sonrisa, usamos los OJOS para expresar emoción (anime style).
-
-        // Mouse Tracking
-        const mouse = state.pointer;
-        lookTarget.current.lerp(mouse, 0.1);
-
+        // Expresividad de ojos controlada por emociones e IK de cámara (sin tracking 2D del ratón)
         let targetPupilScale = 0;
-        let eyeDirectionX = lookTarget.current.x * -0.5;
-        let eyeDirectionY = lookTarget.current.y * 0.5;
+        let eyeDirectionX = 0;
+        let eyeDirectionY = 0;
 
         switch (emotion) {
             case 'happy':
@@ -3718,8 +3870,11 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     viewMode = 'default',
     isHotMode = false,
     hairColor = '#e2b464',
-    audioAnalyser = null
+    audioAnalyser = null,
+    personalityMode
 }) => {
+    const effectiveMode: NovaPersonalityMode = personalityMode || avatar?.personalityMode || (isHotMode ? 'nympho' : 'companion');
+    const modeLights = MODE_3D_LIGHTS[effectiveMode] || MODE_3D_LIGHTS.companion;
     // Referencia para manipular OrbitControls
     const controlsRef = useRef<any>(null);
 
@@ -3764,7 +3919,7 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     };
 
     return (
-        <div className={`w-full h-full relative rounded-2xl overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800 ${getCursorClass()}`}>
+        <div className={`w-full h-full relative rounded-2xl overflow-hidden bg-gradient-to-br ${modeLights.containerBg} ${getCursorClass()}`}>
 
             <InteractionToolbar
                 isBoldMode={isHotMode || false}
@@ -3841,16 +3996,18 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                     />
                 )}
 
-                {/* ILUMINACIÓN SUAVE ESTILO ANIME: Mayor luz ambiente para reducir sombras duras */}
-                <ambientLight intensity={1.2} color="#ffffff" />
+                {/* ILUMINACIÓN DINÁMICA SEGÚN EL MODO DE PERSONALIDAD ACTIVO */}
+                <ambientLight intensity={modeLights.ambientIntensity} color={modeLights.ambientColor} />
                 <directionalLight
                     position={[2, 5, 5]}
-                    intensity={0.8}
-                    color="#fff0e0"
+                    intensity={modeLights.dirLightIntensity}
+                    color={modeLights.dirLightColor}
                     castShadow
                 />
-                {/* Fill light suave para resaltar detalles sin quemar */}
-                <pointLight position={[-1.5, 1.5, 3]} intensity={0.5} color="#ffd4a0" />
+                {/* Fill light adaptada al modo */}
+                <pointLight position={[-1.5, 1.5, 3]} intensity={modeLights.pointLightIntensity} color={modeLights.pointLightColor} />
+                {/* Luz Rim de realce trasero */}
+                <pointLight position={[0, 2.5, -2]} intensity={0.4} color={modeLights.rimLightColor} />
 
                 {/* Environment neutro para reflejos mínimos */}
                 <Environment preset="studio" environmentIntensity={0.2} />

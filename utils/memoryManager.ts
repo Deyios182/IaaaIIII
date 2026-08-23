@@ -72,7 +72,19 @@ export function loadMemory(): NovaMemory {
     try {
         const stored = localStorage.getItem(MEMORY_KEY);
         if (stored) {
-            const memory = JSON.parse(stored) as NovaMemory;
+            const parsed = JSON.parse(stored);
+            const memory: NovaMemory = {
+                ...getDefaultMemory(),
+                ...parsed,
+                facts: Array.isArray(parsed?.facts) ? parsed.facts : [],
+                likes: Array.isArray(parsed?.likes) ? parsed.likes : [],
+                dislikes: Array.isArray(parsed?.dislikes) ? parsed.dislikes : [],
+                interests: Array.isArray(parsed?.interests) ? parsed.interests : [],
+                reminders: Array.isArray(parsed?.reminders) ? parsed.reminders : [],
+                conversations: Array.isArray(parsed?.conversations) ? parsed.conversations : [],
+                activeHours: Array.isArray(parsed?.activeHours) ? parsed.activeHours : [],
+                commonTopics: Array.isArray(parsed?.commonTopics) ? parsed.commonTopics : []
+            };
             console.log('🧠 Memoria cargada:', memory.facts.length, 'hechos,', memory.reminders.length, 'recordatorios');
             return memory;
         }

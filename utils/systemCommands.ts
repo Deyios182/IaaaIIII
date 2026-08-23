@@ -4,7 +4,7 @@
  */
 
 export interface SystemCommand {
-    type: 'openApp' | 'openUrl' | 'searchFiles' | 'setReminder' | 'controlCamera' | 'manageClothing' | 'mouseClick' | 'mouseMove' | 'typeText' | 'pressKey' | 'windowControl' | 'runCommand' | 'runMacro' | 'captureScreen' | 'startCall' | 'endCall' | 'none';
+    type: 'openApp' | 'openUrl' | 'searchFiles' | 'setReminder' | 'controlCamera' | 'manageClothing' | 'switchMode' | 'toggleAvatar' | 'mouseClick' | 'mouseMove' | 'typeText' | 'pressKey' | 'windowControl' | 'runCommand' | 'runMacro' | 'captureScreen' | 'startCall' | 'endCall' | 'none';
     target?: string;
     message?: string;
     time?: number;
@@ -21,6 +21,37 @@ export interface SystemCommand {
 // Detectar si el usuario está pidiendo una acción del sistema
 export function detectSystemCommand(text: string): SystemCommand {
     const lowerText = text.toLowerCase().trim();
+
+    // 👤 Control de Visibilidad del Avatar 3D
+    const hideAvatarRegex = /(?:apaga|desactiva|quita|oculta|esconde)\s+(?:el\s+|tu\s+)?avatar|modo\s+(?:solo\s+voz|solo\s+audio|minimalista)/i;
+    const showAvatarRegex = /(?:activa|enciende|muestra|pon|saca)\s+(?:el\s+|tu\s+)?avatar|modo\s+3d/i;
+    if (hideAvatarRegex.test(lowerText)) {
+        return { type: 'toggleAvatar', target: 'hide' };
+    }
+    if (showAvatarRegex.test(lowerText)) {
+        return { type: 'toggleAvatar', target: 'show' };
+    }
+
+    // 🎭 Conmutación de Modo de Personalidad por Voz
+    const modePatterns: Array<{ regex: RegExp; mode: string }> = [
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+grok|grok|grog|sarc[aá]stica|sarcasmo)/i, mode: 'grok' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+gamer|player\s*2|albion|mazmorras|modo\s+juegos?|modo\s+vicio|geimer)/i, mode: 'gamer' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+chilen[ao]|partner\s+chilen[ao]|habla\s+como\s+chilena|chile|chileno)/i, mode: 'chilean' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+hacker|jaquer|arquitecta|modo\s+c[oó]digo|modo\s+programaci[oó]n|modo\s+desarrollo)/i, mode: 'hacker' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+tsundere|sundere|tundere|mandona|dominante)/i, mode: 'tsundere' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+zen|sen|confidente|psic[oó]loga|relajante)/i, mode: 'zen' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+waifu|waif|wifi|guaifu|guayfu|anime|kawaii|senpai)/i, mode: 'waifu' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+late\s*night|madrugada|lofi|lo-fi|modo\s+noche|susurros|leit\s*nait)/i, mode: 'latenight' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+ninf[oó]mana|ninfo|er[oó]tico|modo\s+bold|modo\s+hot|ponte\s+caliente)/i, mode: 'nympho' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+normal|compañera|amiga|default|vuelve\s+a\s+la\s+normalidad)/i, mode: 'companion' },
+        { regex: /(?:cambia|cambiado|cambiar|siguiente|otro)\s+(?:el\s+|de\s+)?modo/i, mode: 'cycle' },
+    ];
+
+    for (const mp of modePatterns) {
+        if (mp.regex.test(lowerText)) {
+            return { type: 'switchMode', target: mp.mode };
+        }
+    }
 
     // 0. Comandos de Llamada (Iniciar / Cerrar llamada por voz)
     const endCallRegex = /(?:termina|terminar|finaliza|finalizar|cierra|cerrar|corta|cortar|desactiva|desactivar|apaga|apagar|cuelga|colgar|det[eé]n|detener|para|parar|cancela|cancelar)\s+(?:la\s+)?(?:llamada|videollamada|video|conexi[oó]n)/i;
@@ -483,6 +514,12 @@ export async function executeSystemCommand(
                     };
                 }
                 return { success: false, message: 'Captura nativa no disponible en navegador web' };
+            }
+
+            case 'switchMode': {
+                const mode = command.target || 'companion';
+                window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: { mode } }));
+                return { success: true, message: `Modo de personalidad cambiado a: ${mode}` };
             }
 
             default:

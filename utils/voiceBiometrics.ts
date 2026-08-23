@@ -155,3 +155,99 @@ export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16
     };
 }
 
+/**
+ * ⏱️ Biometría de Cadencia y Prosodia Vocal
+ * Mide PPM (Palabras por minuto), duración de pausas y variabilidad tonal
+ * para generar una radiografía emocional instantánea del usuario.
+ */
+export interface UserCadenceMetrics {
+    wordsPerMinute: number;
+    speechRatio: number; // 0-1 (tiempo hablando vs pausas)
+    averagePauseDurationMs: number;
+    pitchAvgHz: number;
+    pitchVariance: number;
+    emotionalState: 'STRESSED' | 'RELAXED' | 'EXCITED' | 'TIRED' | 'FOCUSED';
+    confidence: number;
+    summary: string;
+}
+
+export class VoiceCadenceAnalyzer {
+    private wordCount = 0;
+    private lastSpeechTime = 0;
+    private totalSpeechTimeMs = 0;
+    private totalPauseTimeMs = 0;
+    private pauses: number[] = [];
+    private pitches: number[] = [];
+
+    public registerSpeechTurn(text: string, durationMs: number, pitchHz?: number): UserCadenceMetrics {
+        const words = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+        this.wordCount += words;
+        const now = Date.now();
+
+        if (this.lastSpeechTime > 0) {
+            const pause = now - this.lastSpeechTime;
+            if (pause > 300 && pause < 15000) {
+                this.pauses.push(pause);
+                this.totalPauseTimeMs += pause;
+            }
+        }
+        this.lastSpeechTime = now;
+        this.totalSpeechTimeMs += durationMs;
+        if (pitchHz && pitchHz >= 70 && pitchHz <= 380) {
+            this.pitches.push(pitchHz);
+        }
+
+        // Calcular PPM (Palabras Por Minuto)
+        const totalMinutes = Math.max(0.08, (this.totalSpeechTimeMs + this.totalPauseTimeMs) / 60000);
+        const wpm = Math.round(this.wordCount / totalMinutes);
+
+        // Ratio de habla vs silencio y pausa promedio
+        const speechRatio = this.totalSpeechTimeMs / Math.max(1, this.totalSpeechTimeMs + this.totalPauseTimeMs);
+        const avgPause = this.pauses.length > 0 ? this.pauses.reduce((a, b) => a + b, 0) / this.pauses.length : 1200;
+
+        // Tono medio y desviación
+        const avgPitch = this.pitches.length > 0 ? this.pitches.reduce((a, b) => a + b, 0) / this.pitches.length : 130;
+        const pitchVariance = this.pitches.length > 1
+            ? Math.sqrt(this.pitches.map(p => Math.pow(p - avgPitch, 2)).reduce((a, b) => a + b, 0) / this.pitches.length)
+            : 15;
+
+        // Radiografía Emocional Biométrica:
+        let emotionalState: UserCadenceMetrics['emotionalState'] = 'FOCUSED';
+        let summary = 'Cadencia equilibrada y enfocada';
+
+        if (wpm > 145 && avgPause < 750) {
+            emotionalState = 'STRESSED';
+            summary = `Habla acelerada (${wpm} PPM) con micro-pausas. Tensión o sobrecarga mental.`;
+        } else if (wpm > 135 && avgPitch > 145) {
+            emotionalState = 'EXCITED';
+            summary = `Tono elevado y ritmo activo (${wpm} PPM). Alto entusiasmo o excitación.`;
+        } else if (wpm < 85 && avgPause > 1700) {
+            emotionalState = 'TIRED';
+            summary = `Cadencia lenta (${wpm} PPM) con pausas prolongadas. Cansancio o necesidad de pausa.`;
+        } else if (avgPause > 1100 && speechRatio < 0.6) {
+            emotionalState = 'RELAXED';
+            summary = `Ritmo fluido y pausado (${wpm} PPM). Estado de tranquilidad.`;
+        }
+
+        return {
+            wordsPerMinute: wpm,
+            speechRatio,
+            averagePauseDurationMs: Math.round(avgPause),
+            pitchAvgHz: Math.round(avgPitch),
+            pitchVariance: Math.round(pitchVariance),
+            emotionalState,
+            confidence: Math.min(0.95, 0.4 + this.wordCount * 0.05),
+            summary
+        };
+    }
+
+    public reset(): void {
+        this.wordCount = 0;
+        this.lastSpeechTime = 0;
+        this.totalSpeechTimeMs = 0;
+        this.totalPauseTimeMs = 0;
+        this.pauses = [];
+        this.pitches = [];
+    }
+}
+

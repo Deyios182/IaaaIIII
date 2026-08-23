@@ -24,6 +24,7 @@ const getDefaultState = (): AppState => ({
   userName: 'Usuario',
   knownPeople: [], // Se llenará dinámicamente al cambiar el nombre
   avatar: {
+    name: 'Grokani',
     baseModel: 'Realista',
     modelUrl: '/models/grokani_lipsync.glb', // ÚNICO modelo estable — no cambiar
     hairStyle: 'Ondulado',
@@ -93,6 +94,7 @@ const loadState = (): AppState => {
       return {
         ...getDefaultState(),
         ...parsed,
+        messages: Array.isArray(parsed.messages) ? parsed.messages.slice(-100) : [],
         avatar: {
           ...getDefaultState().avatar,
           ...parsed.avatar,
@@ -181,7 +183,7 @@ const AppContent: React.FC<{
               }))}
               updateKnownPeople={(people) => setState(p => ({ ...p, knownPeople: people }))}
             />} />
-            <Route path="/history" element={<ChatHistory messages={state.messages} />} />
+            <Route path="/history" element={<ChatHistory messages={state.messages} userName={state.userName} knownPeople={state.knownPeople} />} />
             <Route path="/memories" element={<MemoriesTimeline />} />
             <Route path="/account" element={<AccountSettings
               isPro={state.isPro}

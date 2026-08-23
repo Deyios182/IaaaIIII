@@ -32,6 +32,18 @@ export class ASMRSoundEngine {
     private currentSound: ASMRSoundType = 'STOP';
     private currentVolume: number = 0.35;
     private currentFilterFreq: number = 400;
+    private currentBpm: number = 72;
+
+    public getBpm(): number {
+        return this.currentBpm;
+    }
+
+    public setBpm(bpm: number): void {
+        this.currentBpm = Math.max(40, Math.min(180, bpm));
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('nova-bpm-update', { detail: { bpm: this.currentBpm } }));
+        }
+    }
 
     constructor() {
         if (typeof window !== 'undefined') {
@@ -51,6 +63,9 @@ export class ASMRSoundEngine {
                 const detail = (e as CustomEvent<{ sound: string; volume?: number; bpm?: number }>).detail;
                 if (detail && detail.sound) {
                     const s = detail.sound.toUpperCase();
+                    if (detail.bpm) {
+                        this.setBpm(detail.bpm);
+                    }
                     if (s === 'STOP') {
                         this.stop();
                     } else if (s === 'RAIN' || s === 'SOFT_RAIN') {
@@ -296,6 +311,7 @@ export class ASMRSoundEngine {
         const ctx = this.ensureContext();
         this.stopImmediate();
 
+        this.setBpm(bpm);
         this.currentSound = 'HEARTBEAT';
         this.currentVolume = Math.max(0.01, Math.min(1.0, volume));
 

@@ -90,6 +90,9 @@ export class ProceduralAnimator {
       'surprised': 1.6, 'angry': 2.2, 'happy': 2.6, 'clap': 2.2,
       'point': 2.2, 'bow': 2.6, 'stretch': 3.2, 'confused': 2.2,
       'flirt': 3.2, 'laugh': 2.6, 'shy': 2.6, 'sing': 8.0,
+      'blow_kiss': 3.2, 'beso': 3.2, 'listen_attentive': 3.6, 'escuchar': 3.6,
+      'curious_lean': 3.2, 'curiosa': 3.2, 'stretch_relax': 3.5, 'estirarse': 3.5,
+      'playful_tease': 3.2, 'picara': 3.2,
       'crouch': 3.5, 'agachate': 3.5, 'touch_head': 3.0, 'toca_cabeza': 3.0,
       'touch_chest': 3.0, 'mano_pecho': 3.0, 'hold_foot': 3.5, 'toma_pie': 3.5,
       'hands_on_hips': 3.0, 'manos_caderas': 3.0, 'hug_self': 3.5, 'abrazarse': 3.5,
@@ -640,6 +643,125 @@ export class ProceduralAnimator {
         }
         break;
       }
+
+      case 'blow_kiss':
+      case 'beso': {
+        // Mano a los labios y luego soplar hacia la pantalla con guiño
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          const liftProgress = t < 1.4 ? Math.min(t / 1.4, 1.0) : Math.max(0, 1.0 - (t - 1.4) / 1.8);
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(75) * liftProgress * intensity, lerp);
+          rightArm.rotation.y = THREE.MathUtils.lerp(rightArm.rotation.y, (rest?.y || 0) + deg(-35) * liftProgress * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-25) * liftProgress * intensity, lerp);
+        }
+        if (rightForeArm) {
+          const bendProgress = t < 1.4 ? Math.min(t / 1.4, 1.0) : Math.max(0, 1.0 - (t - 1.4) / 1.8);
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(85) * bendProgress * intensity, lerp * 1.5);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          const headTilt = t < 1.6 ? deg(8) : deg(-4);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + headTilt * intensity, 0.1);
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(t < 1.5 ? -6 : 4) * intensity, 0.1);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + (t < 1.4 ? deg(-4) : deg(6)) * intensity, 0.08);
+        }
+        break;
+      }
+
+      case 'listen_attentive':
+      case 'escuchar': {
+        // Mano cerca del rostro apoyando la barbilla, ligera inclinación de cabeza
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(55) * intensity, lerp);
+          rightArm.rotation.y = THREE.MathUtils.lerp(rightArm.rotation.y, (rest?.y || 0) + deg(-25) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-18) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(70) * intensity, lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          const subtleNod = Math.sin(t * 2.5) * deg(2.5);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(7) * intensity, 0.1);
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + (deg(4) + subtleNod) * intensity, 0.1);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(5) * intensity, 0.08);
+        }
+        break;
+      }
+
+      case 'curious_lean':
+      case 'curiosa': {
+        // Inclinación hacia adelante con interés, mirada despierta
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          const sway = Math.sin(t * 1.8) * deg(1.5);
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(12) * intensity, lerp);
+          spine.rotation.y = THREE.MathUtils.lerp(spine.rotation.y, (rest?.y || 0) + sway * intensity, lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-8) * intensity, lerp);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(6) * intensity, lerp);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, (rest?.x || 0) + deg(-4) * intensity, lerp);
+        }
+        break;
+      }
+
+      case 'stretch_relax':
+      case 'estirarse': {
+        // Estiramiento placentero de brazos y espalda con arqueo
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-8) * intensity, lerp * 0.8);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-10) * intensity, lerp * 0.8);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(80) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-40) * intensity, lerp);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(80) * intensity, lerp);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, (rest?.z || 0) + deg(40) * intensity, lerp);
+        }
+        break;
+      }
+
+      case 'playful_tease':
+      case 'picara': {
+        // Ladeo de cadera, mano en cadera y hombro sutil
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-10) * intensity, lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(9) * intensity, lerp);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(25) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-30) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(45) * intensity, lerp);
+        }
+        break;
+      }
     }
 
     // Sincronizar cuaterniones de todos los huesos modificados para que el renderizado de Three.js
@@ -670,6 +792,7 @@ export class ProceduralAnimator {
       'wave', 'nod', 'shake_head', 'shrug', 'dance', 'excited', 'happy',
       'sad', 'thinking', 'surprised', 'angry', 'confused', 'point', 'bow',
       'stretch', 'flirt', 'laugh', 'shy', 'clap',
+      'blow_kiss', 'listen_attentive', 'curious_lean', 'stretch_relax', 'playful_tease',
       'crouch', 'touch_head', 'touch_chest', 'hold_foot', 'hands_on_hips', 'hug_self'
     ];
   }

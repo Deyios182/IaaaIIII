@@ -521,7 +521,7 @@ export const loadAllMemory = async (): Promise<LoadedMemory> => {
     const [facts, knownPeople, recentMemories, pendingReminders, profileResult] = await Promise.all([
         getFacts(),
         getKnownPeople(),
-        getRecentMemories(20),
+        getRecentMemories(200),
         getPendingReminders(),
         supabase.from('nova_profiles').select('username').eq('id', userId).maybeSingle()
     ]);
@@ -674,6 +674,181 @@ export const syncLocalToCloud = async (localData: {
     console.log('✅ Sync completo!');
 };
 
+// ============ PERSISTENCIA EMOCIONAL A LARGO PLAZO ============
+
+export interface EmotionalLogEntry {
+    id?: string;
+    timestamp: number;
+    emotionalState: string;
+    wpm: number;
+    pitchHz: number;
+    summary: string;
+    notes?: string;
+}
+
+export const saveEmotionalLog = async (entry: Omit<EmotionalLogEntry, 'id'>): Promise<void> => {
+    try {
+        const key = 'nova_emotional_logs';
+        const localLogs: EmotionalLogEntry[] = JSON.parse(localStorage.getItem(key) || '[]');
+        localLogs.unshift({ ...entry, id: `emo_${Date.now()}` });
+        localStorage.setItem(key, JSON.stringify(localLogs.slice(0, 50)));
+        // NO persistir telemetría vocal como recuerdos en Supabase para no saturar la memoria
+    } catch (e) {
+        console.warn('Error guardando log emocional en caché:', e);
+    }
+};
+
+export const getLastEmotionalLog = (): EmotionalLogEntry | null => {
+    try {
+        const localLogs: EmotionalLogEntry[] = JSON.parse(localStorage.getItem('nova_emotional_logs') || '[]');
+        return localLogs[0] || null;
+    } catch {
+        return null;
+    }
+};
+
+/** Borra un recuerdo / conversación específica */
+export const deleteMemory = async (id: string): Promise<boolean> => {
+    try {
+        const cleanId = id.replace(/^mem_/, '');
+        if (isSupabaseConfigured()) {
+            const { error } = await supabase.from('nova_memories').delete().eq('id', cleanId);
+            if (error) logSupabaseError('deleteMemory', error);
+        }
+        return true;
+    } catch (e) {
+        console.error('Error al borrar memoria:', e);
+        return false;
+    }
+};
+
+/** Borra un hecho / dato aprendido específico */
+export const deleteFact = async (id: string): Promise<boolean> => {
+    try {
+        const cleanId = id.replace(/^fact_/, '');
+        if (isSupabaseConfigured()) {
+            const { error } = await supabase.from('nova_facts').delete().eq('id', cleanId);
+            if (error) logSupabaseError('deleteFact', error);
+        }
+        return true;
+    } catch (e) {
+        console.error('Error al borrar hecho:', e);
+        return false;
+    }
+};
+
+/** Borra un recordatorio específico */
+export const deleteReminder = async (id: string): Promise<boolean> => {
+    try {
+        const cleanId = id.replace(/^rem_/, '');
+        if (isSupabaseConfigured()) {
+            const { error } = await supabase.from('nova_reminders').delete().eq('id', cleanId);
+            if (error) logSupabaseError('deleteReminder', error);
+        }
+        return true;
+    } catch (e) {
+        console.error('Error al borrar recordatorio:', e);
+        return false;
+    }
+};
+
+/** Purga todos los registros biométricos residuales de la base de datos */
+export const purgeBiometricJunk = async (): Promise<number> => {
+    try {
+        if (isSupabaseConfigured()) {
+            const userId = await getCurrentUserId();
+            const { data, error } = await supabase
+                .from('nova_memories')
+                .delete()
+                .eq('user_id', userId)
+                .like('user_message', '%[BIOMETRIA_VOCAL]%')
+                .select();
+            if (error) {
+                logSupabaseError('purgeBiometricJunk', error);
+                return 0;
+            }
+            return data ? data.length : 0;
+        }
+        return 0;
+    } catch (e) {
+        console.error('Error al purgar registros biométricos:', e);
+        return 0;
+    }
+};
+/**
+ * Normaliza y deduplica hechos en Supabase.
+ * Mantiene el registro original (más antiguo) y elimina los duplicados idénticos.
+ */
+export const deduplicateFacts = async (): Promise<{ merged: number; remaining: number }> => {
+    try {
+        if (!isSupabaseConfigured()) return { merged: 0, remaining: 0 };
+        const userId = await getCurrentUserId();
+        const { data, error } = await supabase
+            .from('nova_facts')
+            .select('id, content, learned_at')
+            .eq('user_id', userId)
+            .order('learned_at', { ascending: true }); // Los más antiguos primero
+
+        if (error || !data) return { merged: 0, remaining: 0 };
+
+        const normalize = (text: string) => text.toLowerCase().replace(/[.,;:!?¿¡'"\-_\s]/g, '').trim();
+
+        const seen = new Map<string, string>(); // normalizedContent -> originalId
+        const duplicateIds: string[] = [];
+
+        for (const fact of data) {
+            const key = normalize(fact.content);
+            if (seen.has(key)) {
+                if (fact.id) duplicateIds.push(fact.id);
+            } else {
+                seen.set(key, fact.id);
+            }
+        }
+
+        if (duplicateIds.length > 0) {
+            const { error: delError } = await supabase
+                .from('nova_facts')
+                .delete()
+                .in('id', duplicateIds);
+            if (delError) {
+                logSupabaseError('deduplicateFacts', delError);
+            }
+        }
+
+        return {
+            merged: duplicateIds.length,
+            remaining: data.length - duplicateIds.length
+        };
+    } catch (e) {
+        console.error('Error en deduplicateFacts:', e);
+        return { merged: 0, remaining: 0 };
+    }
+};
+
+/**
+ * Purga personas desconocidas sin identificar
+ */
+export const purgeUnknownPeople = async (): Promise<number> => {
+    try {
+        if (!isSupabaseConfigured()) return 0;
+        const userId = await getCurrentUserId();
+        const { data, error } = await supabase
+            .from('nova_known_people')
+            .delete()
+            .eq('user_id', userId)
+            .eq('is_unknown', true)
+            .select();
+        if (error) {
+            logSupabaseError('purgeUnknownPeople', error);
+            return 0;
+        }
+        return data ? data.length : 0;
+    } catch (e) {
+        console.error('Error al purgar personas desconocidas:', e);
+        return 0;
+    }
+};
+
 export default {
     addFact,
     getFacts,
@@ -685,11 +860,19 @@ export default {
     upsertKnownPerson,
     deleteKnownPerson,
     saveMemory,
+    deleteMemory,
+    deleteFact,
+    deleteReminder,
+    purgeBiometricJunk,
+    deduplicateFacts,
+    purgeUnknownPeople,
     saveImportantConversation,
     getRecentMemories,
     loadAllMemory,
     addReminder,
     getPendingReminders,
     completeReminder,
-    syncLocalToCloud
+    syncLocalToCloud,
+    saveEmotionalLog,
+    getLastEmotionalLog
 };

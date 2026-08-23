@@ -244,13 +244,8 @@ export class AutonomyEngine {
     }
 
     private triggerHealthOrFarmingBreak() {
-        const unused = HEALTH_AND_GAMING_BREAKS.filter(t => !this.usedFacts.has(t));
-        const template = unused.length > 0 ? pickRandom(unused) : pickRandom(HEALTH_AND_GAMING_BREAKS);
-        this.usedFacts.add(template);
-        if (this.usedFacts.size > 30) this.usedFacts.clear();
-
-        const message = template.replace('{nombre}', this.config.userName);
-        this.config.onNovaSpeak(message, 'farming_pause');
+        // En lugar de pausas activas genéricas, disparar observación o dato de interés gamer
+        this.triggerCuriosityFact();
     }
 
     private triggerCuriosityFact() {

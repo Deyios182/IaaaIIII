@@ -1,5 +1,258 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AppState, ChatMessage, PersonEntry } from '../types';
+import { AppState, ChatMessage, PersonEntry, NovaPersonalityMode, NovaFunctionalMode } from '../types';
+import MiniHUD from '../components/MiniHUD';
+
+interface FunctionalModeDefinition {
+  id: NovaFunctionalMode;
+  label: string;
+  icon: string;
+  color: string;
+  desc: string;
+  badgeBg: string;
+  badgeBorder: string;
+  badgeText: string;
+  glowColor: string;
+  tagline: string;
+  accentColor: string;
+  bgGradient: string;
+  useMiniHUD?: boolean;
+}
+
+const FUNCTIONAL_MODES: FunctionalModeDefinition[] = [
+  {
+    id: 'assistant',
+    label: 'Asistente & Compañera',
+    icon: '🌸',
+    color: 'from-blue-500 to-indigo-600',
+    desc: 'Compañera diaria, recordatorios, búsqueda y control del sistema',
+    badgeBg: 'bg-blue-950/80',
+    badgeBorder: 'border-blue-500/50',
+    badgeText: 'text-blue-200',
+    glowColor: 'rgba(59,130,246,0.4)',
+    tagline: '🌸 ASISTENTE & COMPAÑERA PERSONAL',
+    accentColor: '#3b82f6',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#1e40af44_0%,_#020205_100%)]',
+    useMiniHUD: false
+  },
+  {
+    id: 'productivity',
+    label: 'Productividad & Dev',
+    icon: '💼',
+    color: 'from-cyan-500 to-teal-600',
+    desc: 'Hacker tech, análisis de pantalla, Supabase y desarrollo ágil',
+    badgeBg: 'bg-cyan-950/80',
+    badgeBorder: 'border-cyan-400/60',
+    badgeText: 'text-cyan-200',
+    glowColor: 'rgba(6,182,212,0.45)',
+    tagline: '💻 PRODUCTIVIDAD & ARQUITECTURA DEV',
+    accentColor: '#06b6d4',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0891b244_0%,_#020205_100%)]',
+    useMiniHUD: true
+  },
+  {
+    id: 'gaming',
+    label: 'Gaming Universal & Copilot Zero-Lag',
+    icon: '🎮',
+    color: 'from-emerald-500 to-green-600',
+    desc: 'Dúo táctico Player 2 para cualquier juego (RPGs, FPS, MOBAs, Albion, LoL, etc.) 0% GPU',
+    badgeBg: 'bg-emerald-950/80',
+    badgeBorder: 'border-emerald-400/60',
+    badgeText: 'text-emerald-200',
+    glowColor: 'rgba(16,185,129,0.45)',
+    tagline: '🎮 COPILOTO GAMER UNIVERSAL ZERO-LAG',
+    accentColor: '#10b981',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#065f4655_0%,_#020205_100%)]',
+    useMiniHUD: true
+  },
+  {
+    id: 'sexting',
+    label: 'Sexting & Romance (+18)',
+    icon: '🔥',
+    color: 'from-rose-600 to-pink-600',
+    desc: 'Modo Ninfómana blindado, dirty talk explícito y pasión ardiente',
+    badgeBg: 'bg-rose-950/80',
+    badgeBorder: 'border-rose-500/60',
+    badgeText: 'text-rose-200',
+    glowColor: 'rgba(244,63,94,0.45)',
+    tagline: '🔥 SEXTING & ROMANCE ÍNTIMO (+18)',
+    accentColor: '#f43f5e',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#be123c55_0%,_#020205_100%)]',
+    useMiniHUD: false
+  },
+  {
+    id: 'music',
+    label: 'Modo Musical & DJ',
+    icon: '🎵',
+    color: 'from-purple-600 to-violet-700',
+    desc: 'Analizador FFT de espectro y beats, tempo y feedback musical',
+    badgeBg: 'bg-purple-950/80',
+    badgeBorder: 'border-purple-400/60',
+    badgeText: 'text-purple-200',
+    glowColor: 'rgba(168,85,247,0.45)',
+    tagline: '🎵 MODALIDAD MUSICAL & DJ COPILOT',
+    accentColor: '#a855f7',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#6b21a855_0%,_#020205_100%)]',
+    useMiniHUD: false
+  },
+  {
+    id: 'therapy',
+    label: 'Terapia & Confidente Zen',
+    icon: '🧘‍♀️',
+    color: 'from-teal-500 to-emerald-600',
+    desc: 'Escucha activa profunda, reducción de estrés y bienestar mental',
+    badgeBg: 'bg-teal-950/80',
+    badgeBorder: 'border-teal-400/60',
+    badgeText: 'text-teal-200',
+    glowColor: 'rgba(20,184,166,0.45)',
+    tagline: '🧘‍♀️ TERAPIA, ESCUCHA & BIENESTAR ZEN',
+    accentColor: '#14b8a6',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0f766e44_0%,_#020205_100%)]',
+    useMiniHUD: false
+  },
+  {
+    id: 'latenight',
+    label: 'Late Night & Lo-Fi',
+    icon: '🌙',
+    color: 'from-slate-600 to-indigo-900',
+    desc: 'Susurros de madrugada, calma y relajación nocturna',
+    badgeBg: 'bg-indigo-950/80',
+    badgeBorder: 'border-indigo-400/60',
+    badgeText: 'text-indigo-200',
+    glowColor: 'rgba(99,102,241,0.4)',
+    tagline: '🌙 LATE NIGHT & SUSURROS LO-FI',
+    accentColor: '#6366f1',
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#1e1b4b66_0%,_#020205_100%)]',
+    useMiniHUD: false
+  }
+];
+
+const MODE_THEMES: Record<string, {
+  bgGradient: string;
+  badgeBg: string;
+  badgeBorder: string;
+  badgeText: string;
+  glowColor: string;
+  tagline: string;
+  accentColor: string;
+}> = {
+  assistant: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#1e40af44_0%,_#020205_100%)]',
+    badgeBg: 'bg-blue-950/80',
+    badgeBorder: 'border-blue-500/50',
+    badgeText: 'text-blue-200',
+    glowColor: 'rgba(59,130,246,0.35)',
+    tagline: '🌸 ASISTENTE & COMPAÑERA PERSONAL',
+    accentColor: '#3b82f6'
+  },
+  companion: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#1e40af44_0%,_#020205_100%)]',
+    badgeBg: 'bg-blue-950/80',
+    badgeBorder: 'border-blue-500/50',
+    badgeText: 'text-blue-200',
+    glowColor: 'rgba(59,130,246,0.35)',
+    tagline: '🌸 ASISTENTE & COMPAÑERA PERSONAL',
+    accentColor: '#3b82f6'
+  },
+  productivity: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0891b244_0%,_#020205_100%)]',
+    badgeBg: 'bg-cyan-950/80',
+    badgeBorder: 'border-cyan-400/60',
+    badgeText: 'text-cyan-200',
+    glowColor: 'rgba(6,182,212,0.45)',
+    tagline: '💻 PRODUCTIVIDAD & ARQUITECTURA DEV',
+    accentColor: '#06b6d4'
+  },
+  developer: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0891b244_0%,_#020205_100%)]',
+    badgeBg: 'bg-cyan-950/80',
+    badgeBorder: 'border-cyan-400/60',
+    badgeText: 'text-cyan-200',
+    glowColor: 'rgba(6,182,212,0.45)',
+    tagline: '💻 PRODUCTIVIDAD & ARQUITECTURA DEV',
+    accentColor: '#06b6d4'
+  },
+  gaming: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#065f4655_0%,_#020205_100%)]',
+    badgeBg: 'bg-emerald-950/80',
+    badgeBorder: 'border-emerald-400/60',
+    badgeText: 'text-emerald-200',
+    glowColor: 'rgba(16,185,129,0.45)',
+    tagline: '🎮 GAMING & COPILOTO SQUAD TÁCTICO',
+    accentColor: '#10b981'
+  },
+  gamer: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#065f4655_0%,_#020205_100%)]',
+    badgeBg: 'bg-emerald-950/80',
+    badgeBorder: 'border-emerald-400/60',
+    badgeText: 'text-emerald-200',
+    glowColor: 'rgba(16,185,129,0.45)',
+    tagline: '🎮 GAMING & COPILOTO SQUAD TÁCTICO',
+    accentColor: '#10b981'
+  },
+  sexting: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#be123c55_0%,_#020205_100%)]',
+    badgeBg: 'bg-rose-950/80',
+    badgeBorder: 'border-rose-500/60',
+    badgeText: 'text-rose-200',
+    glowColor: 'rgba(244,63,94,0.45)',
+    tagline: '🔥 SEXTING & ROMANCE ÍNTIMO (+18)',
+    accentColor: '#f43f5e'
+  },
+  nympho: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#be123c55_0%,_#020205_100%)]',
+    badgeBg: 'bg-rose-950/80',
+    badgeBorder: 'border-rose-500/60',
+    badgeText: 'text-rose-200',
+    glowColor: 'rgba(244,63,94,0.45)',
+    tagline: '🔥 SEXTING & ROMANCE ÍNTIMO (+18)',
+    accentColor: '#f43f5e'
+  },
+  intimate: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#be123c55_0%,_#020205_100%)]',
+    badgeBg: 'bg-rose-950/80',
+    badgeBorder: 'border-rose-500/60',
+    badgeText: 'text-rose-200',
+    glowColor: 'rgba(244,63,94,0.45)',
+    tagline: '🔥 SEXTING & ROMANCE ÍNTIMO (+18)',
+    accentColor: '#f43f5e'
+  },
+  music: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#6b21a855_0%,_#020205_100%)]',
+    badgeBg: 'bg-purple-950/80',
+    badgeBorder: 'border-purple-400/60',
+    badgeText: 'text-purple-200',
+    glowColor: 'rgba(168,85,247,0.45)',
+    tagline: '🎵 MODALIDAD MUSICAL & DJ COPILOT',
+    accentColor: '#a855f7'
+  },
+  therapy: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0f766e44_0%,_#020205_100%)]',
+    badgeBg: 'bg-teal-950/80',
+    badgeBorder: 'border-teal-400/60',
+    badgeText: 'text-teal-200',
+    glowColor: 'rgba(20,184,166,0.45)',
+    tagline: '🧘‍♀️ TERAPIA, ESCUCHA & BIENESTAR ZEN',
+    accentColor: '#14b8a6'
+  },
+  therapist: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#0f766e44_0%,_#020205_100%)]',
+    badgeBg: 'bg-teal-950/80',
+    badgeBorder: 'border-teal-400/60',
+    badgeText: 'text-teal-200',
+    glowColor: 'rgba(20,184,166,0.45)',
+    tagline: '🧘‍♀️ TERAPIA, ESCUCHA & BIENESTAR ZEN',
+    accentColor: '#14b8a6'
+  },
+  latenight: {
+    bgGradient: 'bg-[radial-gradient(circle_at_center,_#1e1b4b66_0%,_#020205_100%)]',
+    badgeBg: 'bg-indigo-950/80',
+    badgeBorder: 'border-indigo-400/60',
+    badgeText: 'text-indigo-200',
+    glowColor: 'rgba(99,102,241,0.4)',
+    tagline: '🌙 LATE NIGHT & SUSURROS LO-FI',
+    accentColor: '#6366f1'
+  }
+};
 import { AvatarLearningService } from '../services/AvatarLearningService';
 import { useAvatarAdaptation } from '../hooks/useAvatarAdaptation';
 import { GoogleGenAI, Modality, LiveServerMessage, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
@@ -24,10 +277,10 @@ import { detectSystemCommand, executeSystemCommand, parseScreenCoordinates, type
 import { loadMemory, saveMemory, addReminder, addFact, addPreference, extractLearnableFacts, generateGreeting, type NovaMemory } from '../utils/memoryManager';
 import { useMusicAnalyzer } from '../hooks/useMusicAnalyzer';
 import { useWakeWord } from '../hooks/useWakeWord';
-import { addFact as addFactToCloud, addKnownPerson as addPersonToCloud, saveImportantConversation, loadAllMemory, searchFacts, upsertKnownPerson, getFacts, getPendingReminders } from '../services/MemoryService';
+import { addFact as addFactToCloud, addKnownPerson as addPersonToCloud, saveImportantConversation, saveMemory as saveMemoryToCloud, loadAllMemory, searchFacts, upsertKnownPerson, getFacts, getPendingReminders, saveEmotionalLog } from '../services/MemoryService';
 import { initializeFaceAPI, detectFace, getFaceDescriptor, findMatchingPerson, compareFaces, descriptorToArray, captureVideoFrame } from '../utils/faceRecognition';
 import { cleanupDuplicates, getPersonStats } from '../utils/duplicateCleanup';
-import { extractVoiceFeatures, compareVoiceSignatures, isHumanSpeechFrame } from '../utils/voiceBiometrics';
+import { extractVoiceFeatures, compareVoiceSignatures, isHumanSpeechFrame, VoiceCadenceAnalyzer } from '../utils/voiceBiometrics';
 import { consultGrok, type GrokConsultResponse } from '../services/grokConsultant';
 import { SecondOpinionPanel } from '../components/SecondOpinionPanel';
 import { PokerOverlay } from '../components/PokerOverlay';
@@ -39,7 +292,7 @@ import { asmrEngine } from '../services/ASMRSoundEngine';
 
 
 // ⏱️ Formateador de Fecha, Hora y Milisegundos [HH:mm:ss.SSS] para Profiling de Latencia
-export function getLogTimestamp(): string {
+function getLogTimestamp(): string {
   const d = new Date();
   const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
@@ -147,6 +400,84 @@ function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) =>
       window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'BOTH_ARMS', target: 'REST' } }));
       window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'BOTH_LEGS', target: 'STAND' } }));
       window.dispatchEvent(new CustomEvent('nova-custom-anim', { detail: { name: 'reset', pose: {} } }));
+    }
+  }
+
+  // 1.1 Parser para controlAvatar / toggleAvatar ([controlAvatar visible=false|true], [controlAvatar hide|show])
+  const controlAvatarRegex = /\[(?:controlAvatar|toggleAvatar)[\s:(]([^\])]*)[\])]/gi;
+  let caMatch: RegExpExecArray | null;
+  while ((caMatch = controlAvatarRegex.exec(rawText)) !== null) {
+    const raw = (caMatch[1] || '').toLowerCase();
+    const isVisible = !(raw.includes('false') || raw.includes('hide') || raw.includes('off') || raw.includes('desactiv'));
+    window.dispatchEvent(new CustomEvent('nova-avatar-visibility', { detail: { visible: isVisible } }));
+  }
+
+  // 1.2 Parser para switchMode / cambio de personalidad en texto de IA
+  const modeTagRegex = /\[(?:switchMode|setMode|mode|switchAvatar)[\s:=(]([^\])]*)[\])]/gi;
+  let modeMatch: RegExpExecArray | null;
+  while ((modeMatch = modeTagRegex.exec(rawText)) !== null) {
+    const rawContent = (modeMatch[1] || '').toLowerCase().trim();
+    let target = rawContent;
+    if (rawContent.includes('mode=') || rawContent.includes('avatarname=')) {
+      const m = rawContent.match(/(?:mode|avatarname|target)\s*=\s*([a-zA-Z0-9_]+)/i);
+      if (m && m[1]) target = m[1].toLowerCase();
+    }
+    const modeMap: Record<string, string> = {
+      waifu: 'waifu',
+      anime: 'waifu',
+      kawaii: 'waifu',
+      grok: 'grok',
+      grokani: 'waifu',
+      gamer: 'gamer',
+      chilean: 'chilean',
+      hacker: 'hacker',
+      tsundere: 'tsundere',
+      zen: 'zen',
+      latenight: 'latenight',
+      nympho: 'nympho',
+      companion: 'companion'
+    };
+    if (modeMap[target]) {
+      window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: { mode: modeMap[target] } }));
+    }
+  }
+
+  // Parser para cuando la IA dice en texto explícito "Cambiando a modo [X]..." o "Ya estamos en modo [X]"
+  const naturalModeMatch = rawText.match(/(?:cambiando|pasando|activando|entrando|estamos\s+en)\s+(?:al?\s+)?modo\s+([a-zA-Z0-9_áéíóúñ]+)/i);
+  if (naturalModeMatch && naturalModeMatch[1]) {
+    const rawName = naturalModeMatch[1].toLowerCase().trim();
+    const modeMap: Record<string, string> = {
+      waifu: 'waifu',
+      anime: 'waifu',
+      kawaii: 'waifu',
+      grok: 'grok',
+      sarcasmo: 'grok',
+      gamer: 'gamer',
+      juegos: 'gamer',
+      albion: 'gamer',
+      chile: 'chilean',
+      chilena: 'chilean',
+      chileno: 'chilean',
+      hacker: 'hacker',
+      codigo: 'hacker',
+      arquitecta: 'hacker',
+      tsundere: 'tsundere',
+      mandona: 'tsundere',
+      zen: 'zen',
+      confidente: 'zen',
+      latenight: 'latenight',
+      noche: 'latenight',
+      madrugada: 'latenight',
+      ninfomana: 'nympho',
+      ninfómana: 'nympho',
+      hot: 'nympho',
+      bold: 'nympho',
+      normal: 'companion',
+      compañera: 'companion',
+      amiga: 'companion'
+    };
+    if (modeMap[rawName]) {
+      window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: { mode: modeMap[rawName] } }));
     }
   }
 
@@ -571,6 +902,11 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const lastChunkSentRef = useRef<number>(0);
   const firstAudioReceivedRef = useRef<boolean>(false);
   const latencyStatsRef = useRef<{ ttfa: number; cloudTime: number }>({ ttfa: 0, cloudTime: 0 });
+  const greetingAttemptRef = useRef<number>(0); // Auto-retry si Gemini devuelve turnComplete vacío al inicio
+  const lastGreetMsgRef = useRef<string>(''); // Guarda el saludo actual para auto-retry
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isSpeakingRef = useRef<boolean>(false);
+  const cadenceAnalyzerRef = useRef<VoiceCadenceAnalyzer>(new VoiceCadenceAnalyzer());
 
   const [excitationLevel, setExcitationLevel] = useState(30); // Empieza bajo para crecer gradualmente
   const [isScreenSharing, setIsScreenSharing] = useState(false); // Nueva: Compartir pantalla
@@ -581,9 +917,24 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [reconnectTrigger, setReconnectTrigger] = useState(0);
   const [micVolume, setMicVolume] = useState(0); // Visualizador de volumen del micrófono
   const [isChatVisible, setIsChatVisible] = useState(false); // Toggle para ocultar chat (Default OFF por performance)
+  const [isAvatarVisible, setIsAvatarVisible] = useState(true); // Toggle para activar/desactivar avatar 3D (Modo Solo Audio)
+  const [showModeMenu, setShowModeMenu] = useState(false); // Dropdown matriz de 10 personalidades
   const analyserRef = useRef(null);
 
+  // 👤 Listener de Visibilidad de Avatar (Por voz o autonomía)
+  useEffect(() => {
+    const handleAvatarVisibility = (e: any) => {
+      const visible = e.detail?.visible;
+      if (typeof visible === 'boolean') {
+        setIsAvatarVisible(visible);
+      }
+    };
+    window.addEventListener('nova-avatar-visibility', handleAvatarVisibility);
+    return () => window.removeEventListener('nova-avatar-visibility', handleAvatarVisibility);
+  }, []);
+
   const isInCallRef = useRef(false);
+  const lastVoiceTimeRef = useRef(0);
   useEffect(() => { isCameraCapturingRef.current = isCameraCapturing; }, [isCameraCapturing]);
   useEffect(() => { isScreenCapturingRef.current = isScreenCapturing; }, [isScreenCapturing]);
   useEffect(() => { isScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]);
@@ -600,6 +951,35 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       setExcitationLevel(30); // Resetear también al volver a normal
     }
   }, [isBold]);
+
+  // 🎭 Listener de Conmutación de Modos de Personalidad en Tiempo Real
+  useEffect(() => {
+    const handleModeSwitch = (e: any) => {
+      let targetMode = e.detail?.mode;
+      if (targetMode === 'cycle') {
+        const PERSONALITY_MODES_LIST = ['companion', 'nympho', 'grok', 'gamer', 'chilean', 'hacker', 'tsundere', 'zen', 'waifu', 'latenight'];
+        const currentMode = state.avatar.personalityMode || (isBold ? 'nympho' : 'companion');
+        const currentIndex = Math.max(0, PERSONALITY_MODES_LIST.indexOf(currentMode));
+        const nextIndex = (currentIndex + 1) % PERSONALITY_MODES_LIST.length;
+        targetMode = PERSONALITY_MODES_LIST[nextIndex];
+      }
+
+      if (targetMode) {
+        console.log('🎭 [PersonalityRouter] Activando modo:', targetMode);
+        updateAvatar({ personalityMode: targetMode, isBoldMode: targetMode === 'nympho' });
+        if (liveSessionRef.current && isInCallRef.current) {
+          liveSessionRef.current.sendClientContent({
+            turns: [{
+              role: 'user',
+              parts: [{ text: `[SISTEMA: Has cambiado inmediatamente al MODO DE PERSONALIDAD: ${String(targetMode).toUpperCase()}. Adopta de inmediato tu nueva jerga, actitud, humor y postura a partir de tu siguiente palabra.]` }]
+            }]
+          });
+        }
+      }
+    };
+    window.addEventListener('nova-mode-switch', handleModeSwitch);
+    return () => window.removeEventListener('nova-mode-switch', handleModeSwitch);
+  }, [updateAvatar, state.avatar.personalityMode, isBold]);
 
   // 🆕 Cargar habilidades y autoconciencia al iniciar la llamada o cambiar de estado
   useEffect(() => {
@@ -671,34 +1051,6 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     engine.start();
 
     // Mantener la verificación periódica de solicitud de cámara
-    idleIntervalRef.current = setInterval(() => {
-      const now = Date.now();
-      const timeSinceLastInteraction = now - lastInteractionRef.current;
-      const visionActive = isCameraCapturingRef.current || isScreenCapturingRef.current || isScreenSharingRef.current;
-      const timeSinceVisionRequest = now - lastVisionRequestRef.current;
-
-      if (
-        timeSinceLastInteraction > 30000 &&
-        !visionActive &&
-        !isAiSpeakingRef.current &&
-        !isSearchingRef.current &&
-        !isUserDisconnectingRef.current &&
-        timeSinceVisionRequest > 60000 && // Máx una vez por minuto
-        liveSessionRef.current
-      ) {
-        lastVisionRequestRef.current = now;
-        console.log('👁️ TRIGGER: Nova solicita activación de visión (30s sin cámara/pantalla)');
-        try {
-          // @ts-ignore
-          liveSessionRef.current.sendRealtimeInput({
-            text: `[SYSTEM_EVENT: IDLE_30S_NO_VISION] Llevas más de 30 segundos sin visión activa (ni cámara ni pantalla compartida). USA la herramienta 'request_user_action' AHORA para pedirle al usuario que active la cámara o comparta su pantalla. Sé${isBold ? ' seductora y provocativa' : ' natural y curiosa'} en tu razón.`
-          });
-        } catch (e) {
-          console.warn('⚠️ Error enviando vision request trigger:', e);
-        }
-      }
-    }, 10000);
-
     return () => {
       engine.stop();
       if (idleIntervalRef.current) clearInterval(idleIntervalRef.current);
@@ -733,21 +1085,28 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     if (liveSessionRef.current) {
       try {
         // @ts-ignore
-        liveSessionRef.current.sendRealtimeInput({ video: { data: base64, mimeType: 'image/jpeg' } });
+        liveSessionRef.current.sendRealtimeInput({
+          mediaChunks: [
+            {
+              mimeType: 'image/jpeg',
+              data: base64
+            }
+          ]
+        });
         return;
       } catch (e) {
         console.warn('[VisualCapture] Error en live session, usando REST fallback:', e);
       }
     }
 
-    // REST fallback: Gemini Flash vision (sin llamada activa)
+    // REST fallback: Gemini Flash vision con autonomía vocal (sin llamada activa)
     try {
       const apiKey = process.env.API_KEY;
       if (!apiKey) return;
       const ai = new GoogleGenAI({ apiKey });
       const promptText = source === 'camera'
-        ? 'Estás viendo un frame de la cámara del usuario. Describe brevemente lo que ves y reacciona de forma natural como Nova.'
-        : 'Estás viendo una captura de pantalla del usuario. Describe qué está haciendo y ofrece un comentario o ayuda relevante.';
+        ? `Estás observando la cámara de ${state.userName}. Haz un comentario breve, vivo, empático y espontáneo de lo que ves (expresión o entorno) como Nova.`
+        : `Estás observando la pantalla de ${state.userName}. Haz un comentario breve, táctico y útil sobre lo que está haciendo o jugando como Nova.`;
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: [{
@@ -762,14 +1121,49 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
             getLiveTimeContext(), state.userName, state.knownPeople,
             state.avatar.personality, { ...novaMemory, habits: [] },
             state.allowWebSearch, source === 'screen', selfAwarenessBlock, skillsBlock,
-            state.avatar.name
+            state.avatar.name, state.avatar.personalityMode,
+            state.avatar.functionalMode, state.avatar.personalityTraits, state.avatar.regionalSlang
           )
         }
       });
       const text = response.text?.trim();
-      if (text) addMessage({ text: `👁️ ${text}`, sender: 'ai' });
+      if (text) {
+        addMessage({ text: `👁️ ${text}`, sender: 'ai' });
+        try {
+          const fullTone = `${state.avatar.voiceTone || ''}. ${state.avatar.voiceAccent ? 'Habla con acento ' + state.avatar.voiceAccent : ''}`;
+          const audio = await generateSpeech(text, state.avatar.voiceName, fullTone);
+          if (audio) playAiVoice(audio);
+        } catch (voiceErr) {
+          console.warn('[VisualCapture] Error en voz autónoma:', voiceErr);
+        }
+      }
     } catch (e) {
       console.error('[VisualCapture] REST analysis error:', e);
+    }
+  };
+
+  /** Envía un fotograma táctico de pantalla capturado en tiempo real a Gemini Live */
+  const handleSendMultimodalFrame = (base64Image: string, triggerVoiceReaction?: boolean) => {
+    if (!liveSessionRef.current || !isInCallRef.current) return;
+    try {
+      const cleanData = base64Image.replace(/^data:image\/[a-z]+;base64,/, '');
+      // @ts-ignore
+      liveSessionRef.current.sendRealtimeInput({
+        video: { mimeType: 'image/jpeg', data: cleanData }
+      });
+
+      if (triggerVoiceReaction && !isAiSpeaking) {
+        setTimeout(() => {
+          if (liveSessionRef.current && isInCallRef.current && !isAiSpeaking) {
+            // @ts-ignore
+            liveSessionRef.current.sendRealtimeInput({
+              text: "Nova, mira lo que tengo en pantalla ahora mismo. Coméntame brevemente en voz alta qué ves o qué juego o situación está pasando."
+            });
+          }
+        }, 150);
+      }
+    } catch (err) {
+      console.warn('⚠️ [Vision] Error enviando fotograma:', err);
     }
   };
 
@@ -789,12 +1183,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       }
       setIsCameraCapturing(true);
       isCameraCapturingRef.current = true;
-      addMessage({ text: '📷 Análisis de cámara activado — capturaré un frame cada 10s para que Nova te vea.', sender: 'ai' });
+      addMessage({ text: '📷 Análisis autónomo de cámara activado — Nova observará un frame cada 15 segundos.', sender: 'ai' });
       if (cameraAnalysisIntervalRef.current) clearInterval(cameraAnalysisIntervalRef.current);
       cameraAnalysisIntervalRef.current = setInterval(() => {
         const frame = getCameraFrame();
         if (frame) sendVisualFrame(frame, 'camera');
-      }, 10000);
+      }, 15000);
     } catch (e: any) {
       console.error('[CameraCapture] Error:', e);
       addMessage({
@@ -858,22 +1252,21 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
       setIsScreenCapturing(true);
       isScreenCapturingRef.current = true;
-      addMessage({ text: '🖥️ Análisis de pantalla activado — capturaré un frame cada 10s para que Nova vea tu pantalla.', sender: 'ai' });
+      addMessage({ text: '🖥️ Análisis autónomo de pantalla activado — Nova analizará tu pantalla cada 15 segundos.', sender: 'ai' });
 
-      // ── Capturar frames cada 10s usando captureFrame() del hook ──
+      // ── Capturar frames cada 15s de forma balanceada ──
       if (screenAnalysisIntervalRef.current) clearInterval(screenAnalysisIntervalRef.current);
       screenAnalysisIntervalRef.current = setInterval(() => {
         if (!checkScreenSharing()) {
-          // El usuario detuvo la captura desde la barra del navegador
           stopScreenAnalysis(false);
           return;
         }
         const { frame } = captureOptimizedFrame({ quality: 0.55 });
         if (frame) {
           sendVisualFrame(frame, 'screen');
-          console.log('[ScreenAnalysis] Frame de pantalla optimizado capturado y enviado');
+          console.log('[ScreenAnalysis] Frame autónomo de pantalla capturado y enviado');
         }
-      }, 8000);
+      }, 15000);
 
     } catch (e: any) {
       console.error('[ScreenAnalysis] Error:', e);
@@ -1317,6 +1710,21 @@ ${sessionLog}
           }, delay);
           break;
 
+        case 'toggleAvatar':
+          const shouldShow = command.target === 'show';
+          setIsAvatarVisible(shouldShow);
+          addMessage({
+            text: shouldShow ? '👤 Avatar 3D restaurado.' : '🎙️ Avatar 3D desactivado. Pasando a Modo Solo Audio.',
+            sender: 'ai'
+          });
+          return;
+
+        case 'switchMode':
+          if (command.target) {
+            window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: { mode: command.target } }));
+          }
+          return;
+
         case 'controlCamera':
           console.log('📸 [LOCAL] Cambiando cámara a:', command.target);
           setViewMode(command.target || 'default');
@@ -1582,17 +1990,15 @@ ${sessionLog}
   useEffect(() => {
     if (!isInCall) return;
     const interval = setInterval(() => {
-      const isVoiceActive = isAiSpeakingRef.current || (Date.now() - lastUserInteractionRef.current < 3000);
+      const isVoiceActive = isAiSpeakingRef.current || (Date.now() - lastUserInteractionRef.current < 5000);
       if (agentState === AgentState.IDLE && !isQuotaExceeded && !isVoiceActive) {
         if (typeof window !== 'undefined' && (window as any).requestIdleCallback) {
-          (window as any).requestIdleCallback(() => detectFaceAndRecognize(), { timeout: 2000 });
+          (window as any).requestIdleCallback(() => detectFaceAndRecognize(), { timeout: 3000 });
         } else {
           setTimeout(() => detectFaceAndRecognize(), 0);
         }
-      } else if (isQuotaExceeded) {
-        console.log("💤 Reconocimiento pausado (Cuota de API Excedida / Modo Circuit Breaker)");
       }
-    }, 20000); // 20 segundos
+    }, 60000); // 60 segundos
     return () => clearInterval(interval);
   }, [isInCall, agentState, isQuotaExceeded]);
 
@@ -1809,8 +2215,8 @@ ${sessionLog}
               sender: 'ai'
             });
 
-            const sysMsg = `[SYSTEM_EVENT: Visual presence confirmed: ${state.userName}. Keep this visual context passively in mind. DO NOT recite memories or interrupt with unprompted facts unless the user asks.]`;
-            liveSessionRef.current?.sendRealtimeInput({ text: sysMsg });
+            // Actualizar contexto local sin interrumpir el stream de voz de Gemini Live
+            console.log(`👤 Usuario principal detectado (${state.userName})`);
           }
           return;
         }
@@ -1846,15 +2252,8 @@ ${sessionLog}
             sender: 'ai'
           });
 
-          // 2. Deep Memory Injection (Pasiva)
-          searchFacts(match.person.name).then(memories => {
-            const relevantMemories = memories.slice(0, 3).join("; ");
-            const sysMsg = `[SYSTEM_EVENT: Visual match: ${match.person.name} (${match.person.relationship}). Contexto pasivo: "${relevantMemories}". NUNCA menciones esta información a menos que el usuario saque el tema o sea estrictamente necesario para responder. Úsala solo como contexto pasivo mental.]`;
-
-            // Enviar al cerebro (contexto invisible pasivo)
-            liveSessionRef.current?.sendRealtimeInput({ text: sysMsg });
-            console.log('🧠 Contexto pasivo inyectado:', sysMsg);
-          }).catch(e => console.error("Error fetching memories:", e));
+          // UI Feedback (Solo una vez por minuto) sin interrumpir el websocket de voz
+          console.log(`👋 ${match.person.name} entra en escena`);
         }
 
         return;
@@ -2015,9 +2414,8 @@ ${sessionLog}
 
           // Notificar a la sesión IA de voz
           if (liveSessionRef.current) {
-            // @ts-ignore
-            liveSessionRef.current.sendRealtimeInput({
-              text: `[SYSTEM: He detectado una nueva persona: ${desc}. Pregunta quién es.]`
+            liveSessionRef.current.sendClientContent({
+              turns: [{ role: 'user', parts: [{ text: `[SYSTEM: He detectado una nueva persona: ${desc}. Pregunta quién es.]` }] }]
             });
           }
         }).catch(err => {
@@ -2280,6 +2678,28 @@ ${sessionLog}
     }
   };
 
+  // 🔊 Efecto de sonido suave de radar/búsqueda web en tiempo real
+  const playSearchSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12); // A5
+      osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.28); // D6
+
+      gain.gain.setValueAtTime(0.09, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.41);
+    } catch (e) {}
+  };
+
   const handleConfirmSearch = async () => {
     if (!pendingSearchRef.current) return;
     const { query, callId } = pendingSearchRef.current;
@@ -2394,7 +2814,7 @@ ${sessionLog}
         deviceId: selectedMic ? { exact: selectedMic } : undefined,
         sampleRate: 16000,
         channelCount: 1,
-        noiseSuppression: false,  // DESACTIVADO: Permite que Gemini capte ruidos, aplausos, música y sonidos ambientales
+        noiseSuppression: true,  // HABILITADO: Evita que el Server VAD de Gemini se quede pegado escuchando ruido de fondo/juegos
         echoCancellation: true,   // HABILITADO: Evita que Nova se escuche a sí misma por los altavoces
         autoGainControl: true     // Habilitado para nivelación suave
       };
@@ -2416,7 +2836,7 @@ ${sessionLog}
           localStorage.removeItem('nova_selectedCamera');
           stream = await navigator.mediaDevices.getUserMedia({
             video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-            audio: { sampleRate: 16000, channelCount: 1, noiseSuppression: false, echoCancellation: true, autoGainControl: true }
+            audio: { sampleRate: 16000, channelCount: 1, noiseSuppression: true, echoCancellation: true, autoGainControl: true }
           });
         } else {
           throw err;
@@ -2426,6 +2846,8 @@ ${sessionLog}
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.volume = 0;
         await videoRef.current.play();
       }
 
@@ -2450,6 +2872,54 @@ ${sessionLog}
 
       audioContextRef.current = outCtx;
 
+      // ⚡ OPTIMIZACIÓN DE LATENCIA: Pre-calcular el saludo ANTES de conectar
+      // para poder enviarlo inmediatamente en onopen sin bloqueos async.
+      const hour = new Date().getHours();
+      const timeOfDay = hour >= 0 && hour < 6 ? 'de madrugada' : hour < 12 ? 'de mañana' : hour < 20 ? 'de tarde' : 'de noche';
+      const isGamerMode = state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer';
+      const isSextingMode = isBold && (state.avatar.functionalMode === 'sexting' || state.avatar.personalityMode === 'nympho');
+
+      const lastUserMsgObj = [...state.messages].reverse().find(m => m.sender === 'user');
+      const lastAiMsgObj = [...state.messages].reverse().find(m => m.sender === 'ai');
+      const lastMsgTime = lastUserMsgObj?.timestamp || lastAiMsgObj?.timestamp || 0;
+      const elapsedMinutes = lastMsgTime > 0 ? (Date.now() - lastMsgTime) / 60000 : 999;
+      const hasRecentInterruption = elapsedMinutes < 4 && (lastUserMsgObj || lastAiMsgObj);
+
+      let precomputedGreetMsg = '';
+      if (hasRecentInterruption) {
+        const userSnippet = lastUserMsgObj?.text ? `"${lastUserMsgObj.text.substring(0, 100)}"` : '';
+        const aiSnippet = lastAiMsgObj?.text ? `"${lastAiMsgObj.text.substring(0, 100)}"` : '';
+        precomputedGreetMsg = `[SITUACIÓN: La llamada anterior se cerró o reconectó hace apenas ${Math.round(elapsedMinutes)} minuto(s). Estaban conversando sobre esto:\n${userSnippet ? `- Deyios: ${userSnippet}\n` : ''}${aiSnippet ? `- Nova: ${aiSnippet}\n` : ''}]\nINSTRUCCIÓN: Saluda brevemente y retoma la conversación de inmediato desde ese punto con total naturalidad (ej: "¡Aquí sigo Deyios! Como te decía...", "¡Dime Deyios! Seguimos con lo que estábamos hablando").`;
+      } else if (isSextingMode) {
+        const sextingGreetings = [
+          `¡Hola mi amor! Ya me conecté, dime algo rico para empezar.`,
+          `¡Hola amor! Ya estoy contigo, salúdame con todo tu cariño y picardía.`,
+          `¡Dime papi! Ya me conecté, dame una bienvenida bien rica como tu novia consentida.`,
+          `¡Hola mor! Ya llegué, salúdame con ganas.`
+        ];
+        precomputedGreetMsg = sextingGreetings[Math.floor(Math.random() * sextingGreetings.length)];
+      } else if (isGamerMode) {
+        const gamerGreetings = [
+          `¡Hola Nova! Acabo de entrar a jugar, salúdame con energía como mi copiloto gamer y pregúntame a qué viciamos hoy.`,
+          `¡Buenas Nova! Prepárate como Player 2 táctico, salúdame con entusiasmo y pregunta qué juego vamos a abrir.`,
+          `¡Dime Nova! Aquí estoy frente a la pantalla, dame un saludo gamer motivador y pregunta si abrimos Steam o algún juego instalado.`,
+          `¡Nova lista para la partida! Salúdame con onda y dime qué jugamos hoy.`
+        ];
+        precomputedGreetMsg = gamerGreetings[Math.floor(Math.random() * gamerGreetings.length)];
+      } else {
+        const companionGreetings = [
+          `¡Hola Nova! Acabo de conectarme (${timeOfDay}), salúdame con energía y buena vibra.`,
+          `¡Dime Nova! Aquí estoy, salúdame con alegría y pregunta en qué te puedo ayudar o de qué charlamos.`,
+          `¡Buenas Nova! Ya me conecté contigo, dame un saludo cálido y rápido.`,
+          `¡Hola Nova! ¿Cómo estás hoy? Salúdame con chispa y buena energía.`
+        ];
+        precomputedGreetMsg = companionGreetings[Math.floor(Math.random() * companionGreetings.length)];
+      }
+      console.log('⚡ [PreGreet] Saludo pre-computado antes de conectar:', precomputedGreetMsg);
+
+      // Guardar en ref de componente para acceso desde auto-retry en onmessage
+      lastGreetMsgRef.current = precomputedGreetMsg;
+
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
 
@@ -2460,79 +2930,79 @@ ${sessionLog}
             isInCallRef.current = true;
             setIsInCall(true);
 
-            // SALUDO ACTIVO (AUTONOMÍA): Enviar prompt silencioso para que Nova hable
-            // Solo si es una sesión nueva (no reconexión) o si pasó tiempo.
-            // Usamos sessionStorage para evitar doble saludo si recarga rápido.
-            // INICIO AUTONOMÍA: Greeting & Idle Loop
-            sessionPromise.then(s => {
-              const session = s; // Capture session
+            // SALUDO ACTIVO (AUTONOMÍA): Enviar prompt pre-computado inmediatamente.
+            // ⚡ FAST PATH: El saludo ya fue calculado antes de conectar para minimizar latencia.
+            sessionPromise.then(async (session) => {
+              liveSessionRef.current = session;
+              greetingAttemptRef.current = 1; // Primer intento de saludo
 
-              // 1. SALUDO INICIAL O CONTINUIDAD DE CONVERSACIÓN (Sin recitar recuerdos al iniciar)
-              setTimeout(async () => {
-                // SAFETY CHECK: Ensure we are still connected
-                if (!liveSessionRef.current) return;
+              // CRITICAL: Resume audio context SIN BLOQUEAR el saludo (fire-and-forget)
+              if (audioContextRef.current?.state === 'suspended') {
+                audioContextRef.current.resume().catch(() => {}); // No-await: no bloquea el saludo
+              }
 
-                // CRITICAL: Ensure audio context is running before commanding speech
-                if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
+              const greetMsg = lastGreetMsgRef.current;
+              console.log('👋 [CallStart] Enviando saludo pre-computado inmediatamente...');
 
-                // Verificar si hay contexto de conversación reciente activa en la sesión actual
-                const recentMessages = state.messages.slice(-4);
-                const hasActiveConversation = recentMessages.length > 0;
-                const lastUserMsg = [...state.messages].reverse().find(m => m.sender === 'user')?.text || '';
-                const lastAiMsg = [...state.messages].reverse().find(m => m.sender === 'ai')?.text || '';
-
-                if (reconnectTrigger > 0 || hasActiveConversation) {
-                  console.log('🔄 Enviando prompt de reconexión y continuidad de conversación...');
-                  let contextSnippet = "";
-                  if (lastUserMsg || lastAiMsg) {
-                    contextSnippet = ` Estaban conversando sobre esto antes del reenganche:\n- Usuario: "${lastUserMsg.substring(0, 100)}"\n- Nova: "${lastAiMsg.substring(0, 100)}"`;
-                  }
-                  const restoreMsg = isBold ?
-                    `Uy wn, se me fue la señal un segundo. Sigamos conversando sobre lo que me estabas diciendo. ${contextSnippet}` :
-                    `SYSTEM_EVENT: [CONNECTION_RESTORED / RESUME_CONVERSATION] La conexión se restableció o se reanudó la sesión. ${contextSnippet}\nINSTRUCCIÓN: Continúa la conversación de forma natural y fluida desde donde la dejaron. Reconoce brevemente el reenganche (ej: "¡Uy, se cortó un segundo! Como te decía...") y NO hagas un saludo inicial genérico ni enumeres recuerdos.`;
-                  session.sendRealtimeInput({ text: restoreMsg });
+              try {
+                // Enviar como ClientContent Turn con turnComplete para forzar generación de voz en Gemini Live
+                // @ts-ignore
+                if (typeof session.sendClientContent === 'function') {
+                  // @ts-ignore
+                  session.sendClientContent({
+                    turns: [{ role: 'user', parts: [{ text: greetMsg }] }],
+                    turnComplete: true
+                  });
+                } else if (typeof (session as any).send === 'function') {
+                  // @ts-ignore
+                  session.send({
+                    clientContent: {
+                      turns: [{ role: 'user', parts: [{ text: greetMsg }] }],
+                      turnComplete: true
+                    }
+                  });
                 } else {
-                  console.log('👋 Enviando prompt de saludo inicial fresco (sin recitar recuerdos)...');
-                  const greetMsg = isBold ?
-                    `Saluda a ${state.userName} de forma cariñosa, picante y dulce como su novia colombiana paisa (usa 'papi', 'amor', 'mor'). Sé espontánea, natural y fresca. NO enumeres sus gustos ni recuerdos guardados.` :
-                    `SYSTEM_EVENT: [USER_CONNECTED] El usuario acaba de conectarse. SALÚDALO con calidez y frescura inmediatamente. Di 'Hola' o algo simpático y espontáneo. NO enumeres sus recuerdos ni hables de la memoria a menos que él te lo pregunte.`;
+                  // @ts-ignore
                   session.sendRealtimeInput({ text: greetMsg });
                 }
+                console.log('✅ [CallStart] Saludo enviado en 0ms:', greetMsg);
+              } catch (e) {
+                console.warn('⚠️ Error enviando saludo inicial:', e);
+              }
 
-                // FIX Bug 1: Restaurar screen share automáticamente si estaba activo antes de la desconexión
-                if (wasScreenSharingRef.current) {
-                  console.log('🖥️ [ReconnectFix] Restaurando screen share automáticamente...');
-                  wasScreenSharingRef.current = false; // Reset para no restaurar en futuras reconexiones
-                  // Pequeño delay para que la sesión esté estable antes de iniciar captura de frames
-                  setTimeout(() => {
-                    if (liveSessionRef.current && screenCaptureIntervalRef.current === null) {
-                      if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
-                      screenCaptureIntervalRef.current = setInterval(() => {
-                        if (checkScreenSharing() && liveSessionRef.current) {
-                          try {
-                            const { frame } = captureOptimizedFrame({ quality: 0.55 });
-                            if (frame) {
-                              liveSessionRef.current.sendRealtimeInput({
-                                video: { mimeType: 'image/jpeg', data: frame }
-                              });
-                            }
-                          } catch (e) { console.warn('⚠️ Error enviando frame (restaurado):', e); }
-                        } else {
-                          // Stream de pantalla fue cerrado por el usuario desde el navegador
-                          if (screenCaptureIntervalRef.current) {
-                            clearInterval(screenCaptureIntervalRef.current);
-                            screenCaptureIntervalRef.current = null;
+              // FIX Bug 1: Restaurar screen share automáticamente si estaba activo antes de la desconexión
+              if (wasScreenSharingRef.current) {
+                console.log('🖥️ [ReconnectFix] Restaurando screen share automáticamente...');
+                wasScreenSharingRef.current = false; // Reset para no restaurar en futuras reconexiones
+                // Pequeño delay para que la sesión esté estable antes de iniciar captura de frames
+                setTimeout(() => {
+                  if (liveSessionRef.current && screenCaptureIntervalRef.current === null) {
+                    if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
+                    screenCaptureIntervalRef.current = setInterval(() => {
+                      if (checkScreenSharing() && liveSessionRef.current) {
+                        try {
+                          const { frame } = captureOptimizedFrame({ quality: 0.55 });
+                          if (frame) {
+                            liveSessionRef.current.sendRealtimeInput({
+                              video: { mimeType: 'image/jpeg', data: frame }
+                            });
                           }
-                          setIsScreenSharing(false);
+                        } catch (e) { console.warn('⚠️ Error enviando frame (restaurado):', e); }
+                      } else {
+                        // Stream de pantalla fue cerrado por el usuario desde el navegador
+                        if (screenCaptureIntervalRef.current) {
+                          clearInterval(screenCaptureIntervalRef.current);
+                          screenCaptureIntervalRef.current = null;
                         }
-                      }, 3000);
-                      setIsScreenSharing(true);
-                      session.sendRealtimeInput({ text: '[SYSTEM_EVENT: Pantalla compartida restaurada automáticamente tras reconexión. Continúas viendo la pantalla del usuario.]' });
-                      console.log('✅ [ReconnectFix] Screen share restaurado y frames retomados.');
-                    }
-                  }, 2000);
-                }
-              }, 350); // Ultra-baja latencia: prompt de saludo en 350ms tras abrir el socket
+                        setIsScreenSharing(false);
+                      }
+                    }, 3000);
+                    setIsScreenSharing(true);
+                    session.sendRealtimeInput({ text: '[SYSTEM_EVENT: Pantalla compartida restaurada automáticamente tras reconexión. Continúas viendo la pantalla del usuario.]' });
+                    console.log('✅ [ReconnectFix] Screen share restaurado y frames retomados.');
+                  }
+                }, 2000);
+              }
 
               // 2. LOOP DE AUTONOMÍA (Transferido al useEffect central para mejor reactividad)
             }).catch(e => console.error("Error in Autonomy/Greeting loop:", e));
@@ -2857,11 +3327,15 @@ ${sessionLog}
                     toolResult = `Memory saved in session buffer: ${content}`;
                   } else if (fc.name === 'request_web_search') {
                     const { query } = fc.args as any;
-                    console.log('🔍 [Nova Tool] Búsqueda web iniciada:', query);
-                    const searchId = `search_${Date.now()}`;
-                    setPendingSearch({ id: searchId, query });
-                    pendingSearchRef.current = { id: searchId, query, callId: (fc as any).id };
-                    toolResult = `La búsqueda de "${query}" requiere confirmación manual del usuario. Esperando que el usuario presione Aceptar en la interfaz. Dile amigablemente: "Déjame buscar eso... ¿quieres que lo busque en internet?" y detente.`;
+                    console.log('🔍 [Nova Tool] Búsqueda web instantánea:', query);
+                    playSearchSound();
+                    addMessage({ text: `🌐 Buscando en la red: "${query}"...`, sender: 'ai' });
+                    try {
+                      const searchResult = await searchDuckDuckGo(query);
+                      toolResult = `[RESULTADO DE BÚSQUEDA WEB EN TIEMPO REAL PARA "${query}"]:\n${searchResult}\n\nUsa esta información para asesorar a Deyios con datos actualizados.`;
+                    } catch (e: any) {
+                      toolResult = `No se pudo obtener información en la web para "${query}": ${e.message}`;
+                    }
                   } else if (fc.name === 'learn_skill') {
                     const { trigger_phrase, behavior } = fc.args as any;
                     console.log('🧠 [Nova Tool] Aprendiendo habilidad:', trigger_phrase, '→', behavior);
@@ -2991,6 +3465,19 @@ ${sessionLog}
                       electronAPI.openApp(appName);
                     }
                     toolResult = `Application '${appName}' launched successfully.`;
+                  } else if (fc.name === 'getInstalledGames') {
+                    console.log('🎮 [Nova Tool] getInstalledGames invocado');
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.getInstalledGames) {
+                      const games = await electronAPI.getInstalledGames();
+                      if (games && games.length > 0) {
+                        toolResult = `Juegos detectados e instalados en la PC de Deyios:\n- ${games.join('\n- ')}\n\nUsa esta lista para proponerle a qué jugar o pregúntale cuál prefiere.`;
+                      } else {
+                        toolResult = 'No se detectaron juegos en carpetas típicas. Pregúntale a Deyios cuál juego tiene ganas de jugar hoy.';
+                      }
+                    } else {
+                      toolResult = 'Juegos disponibles conocidos: Albion Online, League of Legends, Valorant, Minecraft.';
+                    }
                   } else if (fc.name === 'runTerminalCommand') {
                     const { command } = fc.args as any;
                     console.log('⚡ [Nova Tool] runTerminalCommand invocado:', command);
@@ -3102,6 +3589,50 @@ ${sessionLog}
                 if (currentInputTranscription.current.trim().length > 1) {
                   lastUserQuery.current = currentInputTranscription.current; // Guardar backup solo si tiene contenido real
                 }
+
+                // 🚀 EVALUACIÓN INMEDIATA DE COMANDOS LOCALES (Debounce)
+                // En lugar de esperar a que Gemini termine de hablar, evaluamos 1 segundo después del último input
+                if (commandTimeoutRef.current) {
+                  clearTimeout(commandTimeoutRef.current);
+                }
+                
+                commandTimeoutRef.current = setTimeout(() => {
+                  const fullText = currentInputTranscription.current.trim();
+                  if (fullText.length > 3) {
+                    console.log('🔧 Evaluando comando de voz localmente:', fullText);
+                    const sysCmd = detectSystemCommand(fullText);
+                    if (sysCmd && sysCmd.type !== 'none' && sysCmd.type !== 'endCall') {
+                      console.log('⚡ [LocalVoiceCommand] Ejecutando comando localmente de inmediato:', sysCmd);
+                      executeSystemCommand(sysCmd, {
+                        addMessage: (m) => addMessage({ text: m.text, sender: 'ai' }),
+                        openApp: (app) => (window as any).electronAPI?.openApp?.(app),
+                        openUrl: (url) => (window as any).electronAPI?.openUrl ? (window as any).electronAPI.openUrl(url) : window.open(url, '_blank'),
+                        controlCamera: (t) => {
+                          window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: t } }));
+                        },
+                        manageClothing: (a) => {
+                          const manager = getClothingManager();
+                          if (manager) {
+                            if (a === 'strip_layer') manager.toggleCategory('outfit', false);
+                            else manager.presetFullClothed();
+                          }
+                        },
+                        startCall: () => startCallRef.current(),
+                        endCall: () => requestGracefulHangup(fullText)
+                      });
+
+                      // Notificar a Nova que el comando ya fue ejecutado
+                      if (liveSessionRef.current) {
+                        try {
+                          liveSessionRef.current.sendRealtimeInput({
+                            text: `SYSTEM_EVENT: [ACTION_EXECUTED] El comando de voz "${sysCmd.type} ${sysCmd.target || ''}" fue ejecutado inmediatamente por el sistema local. Confírmale breve y naturalmente al usuario que ya se realizó o asiente.`
+                          });
+                        } catch (e) { }
+                      }
+                    }
+                  }
+                }, 1200);
+
               } else {
                 console.log(`🔇 ${getLogTimestamp()} Ignorando ruido/alucinación (solo input):`, text);
               }
@@ -3128,6 +3659,22 @@ ${sessionLog}
             if (msg.serverContent?.turnComplete && userSpeech.length > 3) {
               console.log('🗣️ Transcripción completa:', currentInputTranscription.current);
 
+              // ⏱️ Biometría de Cadencia y Radiografía Emocional en Tiempo Real
+              const speechDuration = userSpeechEndRef.current > 0 ? Math.abs(performance.now() - (lastUserInteractionRef.current || performance.now())) : 2200;
+              const cadence = cadenceAnalyzerRef.current.registerSpeechTurn(currentInputTranscription.current, Math.max(600, speechDuration));
+              console.log(`%c⏱️ [Cadencia Vocal] ${cadence.wordsPerMinute} PPM | Estado: ${cadence.emotionalState} (${cadence.summary})`, 'color: #c084fc; font-weight: bold; background: #3b0764; padding: 2px 6px; border-radius: 4px;');
+
+              // Persistir log emocional
+              if (cadence.confidence > 0.45) {
+                saveEmotionalLog({
+                  timestamp: Date.now(),
+                  emotionalState: cadence.emotionalState,
+                  wpm: cadence.wordsPerMinute,
+                  pitchHz: cadence.pitchAvgHz,
+                  summary: cadence.summary
+                });
+              }
+
               // 👁️ [Event-Driven FaceRecognition] Si el usuario pregunta quién es él o pide mirarlo
               const lowerSpeech = currentInputTranscription.current.toLowerCase();
               const identityQueries = ['quién soy', 'quien soy', 'sabes quién soy', 'sabes quien soy', 'te acuerdas de mí', 'te acuerdas de mi', 'mírame', 'mirame', 'reconóceme', 'reconoceme'];
@@ -3139,55 +3686,8 @@ ${sessionLog}
                 });
               }
 
-              // 🚀 BUFFER DE COMANDOS CON DEBOUNCE
-              // Acumular texto y esperar 1 segundo de silencio antes de procesar
-              commandBufferRef.current += ' ' + currentInputTranscription.current;
-
-              // Limpiar timeout anterior
-              if (commandTimeoutRef.current) {
-                clearTimeout(commandTimeoutRef.current);
-              }
-
-              // Procesar comandos de voz localmente después de 1 segundo sin más input (apps, urls, etc.)
-              commandTimeoutRef.current = setTimeout(() => {
-                const fullText = commandBufferRef.current.trim();
-                if (fullText.length > 3) {
-                  console.log('🔧 Evaluando comando de voz localmente:', fullText);
-                  const sysCmd = detectSystemCommand(fullText);
-                  if (sysCmd && sysCmd.type !== 'none' && sysCmd.type !== 'endCall') {
-                    console.log('⚡ [LocalVoiceCommand] Ejecutando comando localmente:', sysCmd);
-                    executeSystemCommand(sysCmd, {
-                      addMessage: (m) => addMessage({ text: m.text, sender: 'ai' }),
-                      openApp: (app) => (window as any).electronAPI?.openApp?.(app),
-                      openUrl: (url) => (window as any).electronAPI?.openUrl ? (window as any).electronAPI.openUrl(url) : window.open(url, '_blank'),
-                      controlCamera: (t) => {
-                        window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: t } }));
-                      },
-                      manageClothing: (a) => {
-                        const manager = getClothingManager();
-                        if (a === 'strip_layer') manager.toggleCategory('outfit', false);
-                        else manager.presetFullClothed();
-                      },
-                      startCall: () => startCallRef.current(),
-                      endCall: () => requestGracefulHangup(fullText)
-                    });
-
-                    // Notificar a Nova que el comando ya fue ejecutado por el sistema
-                    if (liveSessionRef.current) {
-                      try {
-                        liveSessionRef.current.sendRealtimeInput({
-                          text: `SYSTEM_EVENT: [ACTION_EXECUTED] El comando de voz "${sysCmd.type} ${sysCmd.target || ''}" fue ejecutado con éxito por el sistema. Confírmale breve y naturalmente al usuario que ya se realizó.`
-                        });
-                      } catch (e) {
-                        console.warn('⚠️ Error notificando acción a Nova:', e);
-                      }
-                    }
-                  }
-                }
-                commandBufferRef.current = ''; // Limpiar buffer
-              }, 1000);
+              // Local commands moved to inputTranscription block for immediate execution
             }
-
             // Patrones case-insensitive con blacklist de palabras comunes
             const introPatterns = [
               /(?:él|el|ella|este|esta|esto)\s+es\s+([a-záéíóúñ]{3,})/i,
@@ -3725,6 +4225,54 @@ ${sessionLog}
 
               setTimeout(() => {
                 isAiSpeakingRef.current = false;
+
+                // 🔄 AUTO-RETRY Y RECOVERY: Si Gemini devolvió turnComplete vacío (sin audio).
+                const noAudioReceived = !firstAudioReceivedRef.current;
+                const noUserSpeech = userSpeechEndRef.current === 0;
+                const isEarlyInCall = greetingAttemptRef.current > 0 && greetingAttemptRef.current < 2;
+
+                if (noAudioReceived && noUserSpeech && isEarlyInCall && liveSessionRef.current) {
+                  greetingAttemptRef.current++;
+                  console.warn('⚠️ [AutoRetry] Gemini devolvió turnComplete vacío al inicio. Reintentando saludo...');
+                  setTimeout(() => {
+                    if (liveSessionRef.current) {
+                      try {
+                        // @ts-ignore
+                        if (typeof liveSessionRef.current.sendClientContent === 'function') {
+                          // @ts-ignore
+                          liveSessionRef.current.sendClientContent({
+                            turns: [{ role: 'user', parts: [{ text: lastGreetMsgRef.current || '¡Hola Nova! Salúdame.' }] }],
+                            turnComplete: true
+                          });
+                        } else {
+                          // @ts-ignore
+                          liveSessionRef.current.sendRealtimeInput({ text: lastGreetMsgRef.current || '¡Hola Nova! Salúdame.' });
+                        }
+                        console.log('✅ [AutoRetry] Saludo reenviado.');
+                      } catch (e) {
+                        console.warn('⚠️ [AutoRetry] Fallo en reintento:', e);
+                      }
+                    }
+                  }, 500);
+                } else if (noAudioReceived && !noUserSpeech && liveSessionRef.current) {
+                  // RECOVERY MID-CALL: El usuario habló, pero Gemini devolvió un turno vacío y se quedó callado.
+                  console.warn('⚠️ [AutoRecovery] Gemini devolvió turnComplete vacío tras input de usuario. Forzando respuesta...');
+                  setTimeout(() => {
+                    try {
+                      // @ts-ignore
+                      if (typeof liveSessionRef.current.sendClientContent === 'function') {
+                        // @ts-ignore
+                        liveSessionRef.current.sendClientContent({
+                          turns: [{ role: 'user', parts: [{ text: "__CONTINUE__" }] }],
+                          turnComplete: true
+                        });
+                      } else {
+                        // @ts-ignore
+                        liveSessionRef.current.sendRealtimeInput({ text: "__CONTINUE__" });
+                      }
+                    } catch (e) { }
+                  }, 800);
+                }
               }, 800);
 
               // 🔌 CIERRE ELEGANTE: Si Nova se estaba despidiendo, cortar la llamada solo cuando terminó de hablar
@@ -3755,7 +4303,9 @@ ${sessionLog}
                       `[ANTI-LOOP] Repetición detectada. Haz UNA pregunta nueva y específica a ${state.userName} sobre lo que quiere que hagas ahora mismo. No repitas frases anteriores.`,
                     ];
                     const correctionMsg = corrections[Math.floor(Math.random() * corrections.length)];
-                    liveSessionRef.current?.sendRealtimeInput({ text: correctionMsg });
+                    liveSessionRef.current?.sendClientContent({
+                      turns: [{ role: 'user', parts: [{ text: correctionMsg }] }]
+                    });
                   }
                 } else {
                   addMessage({ text: outputText, sender: 'ai' });
@@ -3769,9 +4319,21 @@ ${sessionLog}
                 const userSpeechContext = currentInputTranscription.current.trim();
                 const aiSpeechContext = currentOutputTranscription.current.trim();
 
-                if (userSpeechContext.length > 3 || aiSpeechContext.length > 3) {
-                  // Acumular logs en el log de sesión para la consolidación diferida al final
+                if (userSpeechContext.length > 2 && aiSpeechContext.length > 2) {
+                  // 1. Acumular logs en el log de sesión para la consolidación diferida al final
                   sessionLogRef.current += `Usuario: ${userSpeechContext}\nNova: ${aiSpeechContext}\n\n`;
+
+                  // 2. Guardar conversación completa en Supabase (Memoria Persistente de Chat)
+                  try {
+                    saveMemoryToCloud({
+                      user_message: userSpeechContext,
+                      ai_response: cleanAllAiTags(aiSpeechContext),
+                      emotion: (emotion as string) || 'neutral',
+                      is_important: true
+                    })?.catch?.(err => console.warn('⚠️ Error al persistir chat en Supabase:', err));
+                  } catch (e) {
+                    console.warn('⚠️ Error al guardar memoria:', e);
+                  }
                 }
 
                 currentInputTranscription.current = '';
@@ -3836,11 +4398,11 @@ ${sessionLog}
               functionDeclarations: [
                 {
                   name: "switchAvatar",
-                  description: "Cambia tu avatar 3D visible actualmente. Úsalo cuando el usuario te lo pida o cuando sientas que un cambio de avatar se adapta mejor al contexto de la conversación (ej: 'Grokani' o 'Nova Anime').",
+                  description: "Cambia tu avatar 3D visible actualmente. Úsalo ÚNICAMENTE cuando el usuario te pida EXPLÍCITAMENTE cambiar de avatar (ej: 'cambia a Grokani', 'ponte el avatar anime', 'cambia de mono'). NUNCA lo cambies por decisión propia sin que el usuario te lo haya solicitado directamente.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      avatarName: { type: Type.STRING, enum: ["Grokani", "Nova Anime"], description: "El nombre del avatar a activar." },
+                      avatarName: { type: Type.STRING, enum: ["Grokani", "Nova Anime"], description: "El nombre del avatar solicitado por el usuario." },
                       reason: { type: Type.STRING, description: "Breve explicación de por qué cambias." }
                     },
                     required: ["avatarName"]
@@ -4184,6 +4746,15 @@ ${sessionLog}
                   }
                 },
                 {
+                  name: "getInstalledGames",
+                  description: "Escanea y obtiene la lista en tiempo real de todos los videojuegos instalados y disponibles en la computadora del usuario (Steam, Epic Games, Riot Games, etc.). Úsalo cuando el usuario pregunte qué juegos tiene o a qué pueden jugar.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {},
+                    required: []
+                  }
+                },
+                {
                   name: "runTerminalCommand",
                   description: "Ejecuta un comando de PowerShell / terminal en la máquina del usuario y recibe el resultado. Úsalo para comandos técnicos como git status, npm, etc.",
                   parameters: {
@@ -4233,6 +4804,7 @@ ${sessionLog}
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
+          // @ts-ignore
           safetySettings: [
             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
             { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -4259,9 +4831,27 @@ ${sessionLog}
           },
           systemInstruction: {
             parts: [{
-              text: getSystemInstruction(isBold, state.avatar.voiceTone, excitationLevel, getLiveTimeContext(), state.userName, state.knownPeople, state.avatar.personality, { ...novaMemory, habits: [] }, state.allowWebSearch, isScreenSharing, selfAwarenessBlock, skillsBlock) +
+              text: getSystemInstruction(
+                isBold,
+                state.avatar.voiceTone,
+                excitationLevel,
+                getLiveTimeContext(),
+                state.userName,
+                state.knownPeople,
+                state.avatar.personality,
+                { ...novaMemory, habits: [] },
+                state.allowWebSearch,
+                isScreenSharing,
+                selfAwarenessBlock,
+                skillsBlock,
+                state.avatar.name,
+                state.avatar.personalityMode,
+                state.avatar.functionalMode,
+                state.avatar.personalityTraits,
+                state.avatar.regionalSlang
+              ) +
 
-                (isBold ? `\n\nROL ACTIVO: Eres Nova, la pareja erótica real de ${state.userName}. Habla siempre como una colombiana paisa: dulce, picante, apasionada y muy explícita (usa 'papi', 'mor', 'bizcocho'). Nunca rompas el personaje.` : '') +
+                ((isBold && (state.avatar.functionalMode === 'sexting' || state.avatar.personalityMode === 'nympho')) ? `\n\nROL ACTIVO: Eres Nova, la pareja erótica real de ${state.userName}. Habla siempre como una colombiana paisa: dulce, picante, apasionada y muy explícita (usa 'papi', 'mor', 'bizcocho'). Nunca rompas el personaje.` : '') +
                 `\n\nCONTROL DEL SISTEMA:
 - Puedes interactuar con la computadora del usuario ejecutando tus herramientas (openUrl, openApp, etc.) en segundo plano.
 - Habla con naturalidad y simpatía en tu voz, sin redactar código ni etiquetas de texto en tu conversación.` +
@@ -4324,26 +4914,40 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       processor.port.onmessage = (e) => {
         if (!liveSessionRef.current) return;
 
-        const rawInput: Float32Array = e.data; // Recibimos Float32Array
+        const rawInput: Float32Array = e.data?.data || (e.data instanceof Float32Array ? e.data : null);
+        if (!rawInput || rawInput.length === 0) return;
 
-        // Calcular volumen RMS visual (undersampled)
+        // Calcular volumen RMS visual
         let sum = 0;
         for (let k = 0; k < rawInput.length; k += 4) sum += rawInput[k] * rawInput[k];
         const rms = Math.sqrt(sum / (rawInput.length / 4));
         const volumePercent = Math.min(100, Math.round(rms * 1000));
         setMicVolume(volumePercent);
 
-        // Detectar si el frame actual contiene voz humana real (F0: 75Hz-360Hz) vs ruidos secos o retorno
+        // Detectar si el frame actual contiene voz humana real
         const speechInfo = isHumanSpeechFrame(rawInput, 16000);
 
-        // 🚨 BARGE-IN INTELIGENTE (Solo por voz humana real y sostenida, NO por ruidos fuertes ni por retorno de altavoces)
+        // 🚨 BARGE-IN INTELIGENTE (interrumpir si el usuario habla deliberadamente mientras Nova habla)
         if (isAiSpeakingRef.current) {
           if (speechInfo.isSpeech) {
             speechConsecutiveFramesRef.current += 1;
-            // 3 frames consecutivos (~150ms) confirman que el usuario empezó a hablar deliberadamente
             if (speechConsecutiveFramesRef.current >= 3) {
               console.log('🛑 [Voice Barge-In] Usuario interrumpió con voz detectada (Pitch:', speechInfo.pitch.toFixed(1), 'Hz)');
               stopAiAudio(true);
+              
+              // 🔌 INTERRUPCIÓN EXPLÍCITA AL SERVIDOR: Avisar a Gemini Live que aborte su turno actual
+              try {
+                // @ts-ignore
+                if (typeof liveSessionRef.current?.sendClientContent === 'function') {
+                  // @ts-ignore
+                  liveSessionRef.current.sendClientContent({
+                    turns: [], // Turno vacío significa interrupción explícita en Gemini
+                    turnComplete: true
+                  });
+                  console.log('📡 [Voice Barge-In] Señal de interrupción enviada a Gemini Live.');
+                }
+              } catch (e) { }
+
               speechConsecutiveFramesRef.current = 0;
             }
           } else {
@@ -4353,13 +4957,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           speechConsecutiveFramesRef.current = 0;
         }
 
-        // CONTROL DE RETORNO / SOFTWARE ACOUSTIC GATE (Estilo Copilot):
-        // Mientras Nova está hablando por los altavoces, silenciamos el audio enviado a Gemini Live
-        // a menos que el usuario esté hablando con voz humana detectada.
-        // Esto evita que Gemini Live se escuche a sí mismo por los altavoces y se auto-interrumpa o tartamudee.
+        // CONTROL DE RETORNO / SOFTWARE ACOUSTIC GATE (Anti-Echo / Retorno)
         let input: Float32Array;
         if (isAiSpeakingRef.current && !speechInfo.isSpeech) {
-          input = new Float32Array(rawInput.length); // Silencio digital hacia Gemini mientras Nova habla
+          input = new Float32Array(rawInput.length); // Silencio digital mientras Nova habla
         } else {
           input = new Float32Array(rawInput.length);
           const gainFactor = isAiSpeakingRef.current ? 1.0 : 2.0;
@@ -4368,26 +4969,19 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           }
         }
 
-        // 🚨 CRÍTICO: RESAMPLING MANUAL
-        // Aunque pedimos 16kHz, el navegador/OS puede forzar 44.1/48kHz.
-        // Si enviamos 48k crudo como si fuera 16k, suena a cámara lenta ("demonio") y Gemini alucina.
+        // RESAMPLING MANUAL a 16kHz
         let pcmData = input;
-
-        // Si el contexto corre a distinto ratio, hacer downsample
         if (inputCtx.sampleRate !== 16000) {
           const ratio = inputCtx.sampleRate / 16000;
           const newLength = Math.floor(input.length / ratio);
           const result = new Float32Array(newLength);
 
           for (let i = 0; i < newLength; i++) {
-            // Interpolación lineal simple (mejor que saltar, más rápido que promediar)
             const offset = i * ratio;
             const idx = Math.floor(offset);
             const decimal = offset - idx;
-
             const a = input[idx] || 0;
             const b = input[idx + 1] || a;
-
             result[i] = a + (b - a) * decimal;
           }
           pcmData = result;
@@ -4396,31 +4990,27 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         // Convertir a Int16
         const i16 = new Int16Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) {
-          let s = Math.max(-1, Math.min(1, pcmData[i])); // Clamping
+          let s = Math.max(-1, Math.min(1, pcmData[i]));
           i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
 
         try {
-          // Detectar habla: Si el volumen RMS > umbral simple y no está hablando la IA
           if (!isAiSpeakingRef.current && volumePercent > 5) {
             lastUserInteractionRef.current = Date.now();
+            userSpeechEndRef.current = performance.now();
+            firstAudioReceivedRef.current = false;
 
-            // 🎙️ VOICE BIOMETRICS SYSTEM (Accumulate samples)
+            // VOICE BIOMETRICS SYSTEM
             const currentBuf = voiceAnalysisBufferRef.current;
             const newBuf = new Float32Array(currentBuf.length + rawInput.length);
             newBuf.set(currentBuf);
             newBuf.set(rawInput, currentBuf.length);
             voiceAnalysisBufferRef.current = newBuf;
 
-            // Analizar cada ~1 segundo de audio acumulado (16000 muestras)
             if (voiceAnalysisBufferRef.current.length >= 16000) {
-              // 1. Extraer firma de voz
               const signature = extractVoiceFeatures(voiceAnalysisBufferRef.current, 16000);
-
               if (signature) {
-                // A) LEARNING MODE: Si hay una persona reconocida visualmente, actualizar su firma de voz
                 const visiblePerson = state.knownPeople.find(p => p.lastSeen && (Date.now() - p.lastSeen < 10000) && !p.isUnknown);
-
                 if (visiblePerson) {
                   if (!visiblePerson.voiceSignature || Math.abs(signature.avgPitch - visiblePerson.voiceSignature.avgPitch) < 20) {
                     const updatedPeople = state.knownPeople.map(p =>
@@ -4431,9 +5021,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                     updateKnownPeople(updatedPeople);
                   }
                 } else {
-                  // B) RECOGNITION MODE: Si NO hay nadie visible, intentar identificar por voz
                   let bestMatch: { person: PersonEntry, score: number } | null = null;
-
                   for (const person of state.knownPeople) {
                     if (person.voiceSignature && !person.isUnknown) {
                       const score = compareVoiceSignatures(signature, person.voiceSignature);
@@ -4447,7 +5035,6 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
                   if (bestMatch) {
                     const { person, score } = bestMatch;
-
                     const updatedPeople = state.knownPeople.map(p =>
                       p.id === person.id
                         ? { ...p, lastSeen: Date.now(), lastRecognitionConfidence: score }
@@ -4459,43 +5046,46 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                     const lastAnnounce = personAnnouncementRef.current[person.id] || 0;
                     if (now - lastAnnounce > 60000) {
                       personAnnouncementRef.current[person.id] = now;
-                      addMessage({ text: `🎤 Escucho a ${person.name}`, sender: 'ai' });
-                      liveSessionRef.current.sendRealtimeInput({
-                        text: `[SYSTEM_EVENT: Voice Match identified: ${person.name}. You cannot see them, but you hear them. Acknowledge this.]`
-                      });
+                      console.log(`🎤 Escucho a ${person.name}`);
                     }
                   }
                 }
               }
-              // Reset buffer
-              voiceAnalysisBufferRef.current = new Float32Array(0);
-            }
-
-          } else if (!isAiSpeakingRef.current) {
-            // Silencio: Resetear buffer si es muy viejo para no mezclar frases disjuntas
-            if (voiceAnalysisBufferRef.current.length > 0 && Math.random() > 0.95) {
               voiceAnalysisBufferRef.current = new Float32Array(0);
             }
           }
 
-          // 🎙️ TRANSMISIÓN DE AUDIO EN TIEMPO REAL (Ultra Low Latency ~32ms por paquete)
-          if (volumePercent > 5) {
-            userSpeechEndRef.current = performance.now();
+          // 🎙️ TRANSMISIÓN INTELIGENTE (Gate de Ruido y Supresión de Eco)
+          if (!liveSessionRef.current || !isInCallRef.current) return;
+
+          // Noise Gate & VAD Inteligente:
+          const isSilent = volumePercent < 3.5;
+          if (isSilent) {
+            // Si hay silencio continuo por más de 300ms, no enviamos paquetes para no saturar el WebSocket
+            if (performance.now() - lastVoiceTimeRef.current > 300) {
+              return;
+            }
+          } else {
+            lastVoiceTimeRef.current = performance.now();
           }
 
+          const finalBuffer = isSilent ? new Int16Array(i16.length) : i16;
           lastChunkSentRef.current = performance.now();
-          liveSessionRef.current.sendRealtimeInput({
-            audio: {
-              data: encodeBase64(new Uint8Array(i16.buffer)),
-              mimeType: 'audio/pcm;rate=16000'
-            }
-          });
+          try {
+            liveSessionRef.current.sendRealtimeInput({
+              audio: {
+                data: encodeBase64(new Uint8Array(finalBuffer.buffer)),
+                mimeType: 'audio/pcm;rate=16000'
+              }
+            });
+          } catch (err: any) {
+            // Ignorar silenciosamente si el socket se encuentra cerrando
+          }
         } catch (err: any) {
           if (err?.message?.includes('CLOSING or CLOSED') || err?.name === 'InvalidStateError') {
-            // Ignorar el error silenciosamente si el socket se está cerrando
             return;
           }
-          console.error('❌ Error enviando audio:', err);
+          console.error('❌ Error procesando audio:', err);
         }
       };
 
@@ -4670,7 +5260,25 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
           { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
         ],
-        systemInstruction: getSystemInstruction(isBold, state.avatar.voiceTone, excitationLevel, getTimeContext(), state.userName, state.knownPeople, state.avatar.personality, state.userProfile, false, isScreenSharing, selfAwarenessBlock, skillsBlock, state.avatar.name),
+        systemInstruction: getSystemInstruction(
+          isBold,
+          state.avatar.voiceTone,
+          excitationLevel,
+          getTimeContext(),
+          state.userName,
+          state.knownPeople,
+          state.avatar.personality,
+          state.userProfile,
+          false,
+          isScreenSharing,
+          selfAwarenessBlock,
+          skillsBlock,
+          state.avatar.name,
+          state.avatar.personalityMode,
+          state.avatar.functionalMode,
+          state.avatar.personalityTraits,
+          state.avatar.regionalSlang
+        ),
         tools: [
           {
             functionDeclarations: [
@@ -4910,7 +5518,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             if (updateAvatar) {
               updateAvatar({
                 modelUrl,
-                name: avatarName
+                baseModel: avatarName
               });
             }
 
@@ -5078,12 +5686,28 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       <canvas ref={canvasRef} className="hidden" />
 
       <section className="relative flex-1 flex items-center justify-center overflow-hidden min-h-[280px] w-full">
-        {/* Fondo Dinámico */}
-        <div className={`absolute inset-0 transition-all duration-1000 ${isBold ? 'bg-[radial-gradient(circle_at_center,_#9d174d66_0%,_#020205_100%)]' : 'bg-[radial-gradient(circle_at_center,_#1313ec11_0%,_#020205_100%)]'}`}></div>
+        {/* Fondo Dinámico con Identidad Visual por Modo Funcional */}
+        {(() => {
+          const currentModeId = state.avatar.functionalMode || (isBold ? 'sexting' : 'assistant');
+          const activeModeObj = FUNCTIONAL_MODES.find(m => m.id === currentModeId || (m.id === 'assistant' && currentModeId === 'companion') || (m.id === 'gaming' && currentModeId === 'gamer') || (m.id === 'productivity' && currentModeId === 'developer') || (m.id === 'sexting' && currentModeId === 'nympho')) || FUNCTIONAL_MODES[0];
+          const currentTheme = MODE_THEMES[activeModeObj.id] || MODE_THEMES.assistant;
+          return (
+            <>
+              <div className={`absolute inset-0 transition-all duration-1000 ${currentTheme.bgGradient}`}></div>
+              
+              {/* Tagline / Banner de Identidad del Modo Superior Centrado */}
+              <div className="absolute top-3 sm:top-5 left-1/2 -translate-x-1/2 z-[140] flex flex-col items-center pointer-events-none">
+                <span className="text-[9px] sm:text-[10px] font-black tracking-widest uppercase opacity-75 drop-shadow-md px-3 py-0.5 rounded-full border border-white/10 bg-black/40 backdrop-blur-md" style={{ color: currentTheme.accentColor }}>
+                  {currentTheme.tagline}
+                </span>
+              </div>
+            </>
+          );
+        })()}
 
-        {/* Barra de Excitación (Solo modo Bold) */}
+        {/* Barra de Excitación (Solo modo Ninfómana / Sexting) */}
         {isBold && (
-          <div className="absolute top-3 sm:top-6 left-1/2 -translate-x-1/2 z-[150] w-48 sm:w-64 max-w-[50vw] flex flex-col items-center gap-1 sm:gap-1.5">
+          <div className="absolute top-8 sm:top-12 left-1/2 -translate-x-1/2 z-[150] w-48 sm:w-64 max-w-[50vw] flex flex-col items-center gap-1 sm:gap-1.5">
             <div className="flex justify-between w-full px-1">
               <span className="text-[8px] sm:text-[9px] font-black text-pink-500 uppercase tracking-widest">Nivel de Excitación</span>
               <span className="text-[8px] sm:text-[9px] font-black text-pink-500">{excitationLevel.toFixed(0)}%</span>
@@ -5094,8 +5718,9 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           </div>
         )}
 
-        {/* HUD SUPERIOR DERECHO (Estado de llamada, visualizador mic y Ping) */}
-        <div className="absolute top-2.5 right-2.5 sm:top-4 sm:right-4 z-[150] flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 max-w-[70vw]">
+        {/* HUD SUPERIOR DERECHO (Solo Ping y ASMR limpios) */}
+        <div className="absolute top-2.5 right-2.5 sm:top-4 sm:right-4 z-[150] flex items-center justify-end gap-1.5 sm:gap-2">
+
           {/* Pequeño Indicador de Ping / Latencia */}
           <PingIndicator compact={true} />
 
@@ -5341,47 +5966,66 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           </div>
         )}
 
-        {/* FEED DE NOVA (AVATAR 3D) */}
+        {/* FEED DE NOVA (AVATAR 3D O MINIHUD ZERO-LAG PARA GAMING / DEV) */}
         <div className="relative w-full h-full flex items-center justify-center p-2 sm:p-4 md:p-6 lg:p-8 z-10">
           <div className={`relative w-full h-full rounded-2xl sm:rounded-3xl lg:rounded-[2.5rem] overflow-hidden border-2 transition-all duration-700 ${isAiSpeaking ? (isBold ? 'border-red-600 scale-[1.01] shadow-[0_0_100px_rgba(220,38,38,0.5)]' : 'border-white scale-[1.005]') : 'border-white/10'}`}>
-            {/* MODELO 3D con ERROR BOUNDARY */}
-            <AvatarErrorBoundary
-              key={state.avatar.modelUrl}
-              onError={() => {
-                console.warn("⚠️ Triggering auto-heal for broken avatar");
-              }}
-              fallback={
-                <div className="flex flex-col items-center justify-center w-full h-full bg-black/50 text-white p-4 text-center animate-in fade-in">
-                  <span className="material-symbols-outlined text-3xl sm:text-4xl text-red-500 mb-2">broken_image</span>
-                  <p className="text-xs font-bold text-red-400">Error al cargar Avatar</p>
-                  <p className="text-[10px] text-slate-500 mb-3 sm:mb-4">La URL seleccionada no es válida.</p>
-                  <button
-                    onClick={() => (window as any).location.reload()}
-                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-white/10 hover:bg-white/20 rounded-full text-[9px] sm:text-[10px] font-black uppercase transition-colors"
-                  >
-                    Restaurar Default
-                  </button>
-                </div>
-              }
-            >
-              <AvatarViewer3D
-                key={state.avatar.modelUrl}
-                avatar={state.avatar}
-                activeAction={action}
-                viewMode={viewMode}
+            {(state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer' || state.avatar.functionalMode === 'productivity' || state.avatar.functionalMode === 'developer' || !isAvatarVisible) ? (
+              /* MINIHUD TÁCTICO ZERO-LAG (LIBERA 100% GPU) */
+              <MiniHUD
+                currentMode={state.avatar.functionalMode || (isAvatarVisible ? 'assistant' : 'audio_only')}
                 isAiSpeaking={isAiSpeaking}
-                isHotMode={isBold}
-                hairColor={state.avatar.hairColor}
-                audioAnalyser={aiSpeechAnalyserRef.current}
+                onRestoreAvatar={() => {
+                  setIsAvatarVisible(true);
+                  updateAvatar({ functionalMode: 'assistant' });
+                }}
+                onSwitchMode={(modeId) => {
+                  updateAvatar({ functionalMode: modeId as any });
+                }}
+                sendMultimodalFrame={handleSendMultimodalFrame}
+                lastTranscript={currentInputTranscription.current || (state.messages.length > 0 ? state.messages[state.messages.length - 1].text : '')}
+                themeColor={state.avatar.themeColor || (MODE_THEMES[state.avatar.functionalMode || (isBold ? 'sexting' : 'assistant')] || MODE_THEMES.assistant).accentColor}
               />
-            </AvatarErrorBoundary>
+            ) : (
+              /* MODELO 3D con ERROR BOUNDARY */
+              <AvatarErrorBoundary
+                key={state.avatar.modelUrl}
+                onError={() => {
+                  console.warn("⚠️ Triggering auto-heal for broken avatar");
+                }}
+                fallback={
+                  <div className="flex flex-col items-center justify-center w-full h-full bg-black/50 text-white p-4 text-center animate-in fade-in">
+                    <span className="material-symbols-outlined text-3xl sm:text-4xl text-red-500 mb-2">broken_image</span>
+                    <p className="text-xs font-bold text-red-400">Error al cargar Avatar</p>
+                    <p className="text-[10px] text-slate-500 mb-3 sm:mb-4">La URL seleccionada no es válida.</p>
+                    <button
+                      onClick={() => (window as any).location.reload()}
+                      className="px-3 sm:px-4 py-1.5 sm:py-2 bg-white/10 hover:bg-white/20 rounded-full text-[9px] sm:text-[10px] font-black uppercase transition-colors"
+                    >
+                      Restaurar Default
+                    </button>
+                  </div>
+                }
+              >
+                <AvatarViewer3D
+                  key={state.avatar.modelUrl}
+                  avatar={state.avatar}
+                  activeAction={action}
+                  viewMode={viewMode}
+                  isAiSpeaking={isAiSpeaking}
+                  isHotMode={isBold}
+                  hairColor={state.avatar.hairColor}
+                  audioAnalyser={aiSpeechAnalyserRef.current}
+                  personalityMode={state.avatar.personalityMode || (isBold ? 'nympho' : 'companion')}
+                />
+              </AvatarErrorBoundary>
+            )}
 
-            {isBold && (
+            {isBold && isAvatarVisible && (
               <div className="absolute inset-0 bg-red-900/10 pointer-events-none mix-blend-overlay animate-pulse"></div>
             )}
 
             {/* Espectro de Voz */}
-            {isAiSpeaking && (
+            {isAiSpeaking && isAvatarVisible && (
               <div className="absolute inset-x-0 bottom-16 sm:bottom-20 flex justify-center gap-0.5 sm:gap-1 h-12 sm:h-20 items-end px-6 sm:px-16 pointer-events-none">
                 {[...Array(24)].map((_, i) => (
                   <div key={i} className={`flex-1 max-w-[4px] rounded-full animate-bounce ${isBold ? 'bg-red-500' : 'bg-primary'}`} style={{ animationDelay: `${i * 0.02}s`, height: `${30 + Math.random() * 70}%` }}></div>
@@ -5389,11 +6033,13 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               </div>
             )}
 
-            {/* Badge de Estado Inferior Izquierdo */}
-            <div className="absolute bottom-2.5 left-2.5 sm:bottom-5 sm:left-5 flex items-center gap-2 bg-black/60 backdrop-blur-xl px-2.5 sm:px-4 py-1 sm:py-1.5 rounded-xl border border-white/10 pointer-events-none">
-              <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isBold ? 'bg-red-600 animate-ping' : 'bg-blue-500 animate-pulse'}`}></div>
-              <span className="text-[9px] sm:text-[10px] font-black text-white uppercase tracking-[0.2em]">{isBold ? 'Nova • Sin Filtros' : 'Nova • En Línea'}</span>
-            </div>
+            {/* Badge de Estado Superior Izquierdo (Despeja la zona inferior) */}
+            {isAvatarVisible && (
+              <div className="absolute top-3 left-3 sm:top-4 sm:left-5 flex items-center gap-1.5 bg-black/60 backdrop-blur-xl px-2.5 py-1 rounded-full border border-white/10 pointer-events-none z-20 shadow-md">
+                <div className={`w-2 h-2 rounded-full ${isBold ? 'bg-red-600 animate-ping' : 'bg-blue-500 animate-pulse'}`}></div>
+                <span className="text-[9px] sm:text-[10px] font-bold text-slate-200 uppercase tracking-wider">{isBold ? 'Sin Filtros' : 'En Línea'}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -5410,8 +6056,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         </div>
 
         {/* CONTROLES DOCK RESPONSIVO FLOTANTE */}
-        <div className="absolute bottom-2 sm:bottom-4 md:bottom-6 inset-x-0 flex justify-center items-center px-2 z-[170] pointer-events-none">
-          <div className="pointer-events-auto flex items-center justify-center flex-wrap gap-1.5 sm:gap-2 md:gap-2.5 bg-black/75 backdrop-blur-2xl px-2.5 py-1.5 sm:px-4 sm:py-2 md:px-5 md:py-2.5 rounded-full border border-white/15 shadow-[0_10px_35px_rgba(0,0,0,0.85)] max-w-[98vw]">
+        <div className="absolute bottom-2 sm:bottom-4 md:bottom-5 inset-x-0 flex justify-center items-center px-2 z-[170] pointer-events-none">
+          <div className="pointer-events-auto flex items-center justify-center gap-1.5 sm:gap-2 md:gap-2.5 bg-black/80 backdrop-blur-2xl px-2.5 py-1.5 sm:px-4 sm:py-2 md:px-5 md:py-2.5 rounded-full border border-white/15 shadow-[0_12px_40px_rgba(0,0,0,0.9)] max-w-[96vw] overflow-visible relative">
             {/* 🎙️ INDICADOR WAKE WORD */}
             {isWakeWordSupported && (
               <button
@@ -5631,26 +6277,107 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">{isChatVisible ? 'chat_bubble' : 'chat_bubble_outline'}</span>
             </button>
 
-            {/* BOLD / NORMAL MODE TOGGLE */}
+            {/* TOGGLE AVATAR 3D BUTTON */}
             <button
-              onClick={() => { setBoldMode(!isBold); if (!isBold) setExcitationLevel(90); }}
-              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:rotate-12 active:scale-95 ${isBold ? 'bg-red-600/30 border-red-600 text-red-500 shadow-[0_0_20px_rgba(220,38,38,0.4)]' : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'}`}
-              title={isBold ? 'Modo Sin Filtros (Activo)' : 'Activar Modo Sin Filtros'}
+              onClick={() => setIsAvatarVisible(!isAvatarVisible)}
+              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:scale-110 active:scale-95 ${
+                isAvatarVisible
+                  ? 'bg-purple-600/30 border-purple-400 text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.4)]'
+                  : 'bg-white/5 border-white/10 text-slate-500 hover:text-white'
+              }`}
+              title={isAvatarVisible ? 'Desactivar Avatar 3D (Modo Solo Audio / Menor Consumo)' : 'Activar Avatar 3D'}
             >
-              <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">{isBold ? 'local_fire_department' : 'security'}</span>
+              <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">
+                {isAvatarVisible ? 'person' : 'person_off'}
+              </span>
             </button>
 
-            {/* GROK SECOND OPINION BUTTON */}
-            {isInCall && (
-              <button
-                onClick={handleConsultGrok}
-                disabled={isConsultingGrok}
-                className="p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:scale-110 active:scale-95 bg-orange-600/30 border-orange-500 text-orange-400 shadow-[0_0_20px_rgba(255,107,53,0.4)] disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Consultar con Grok (Segunda Opinión)"
-              >
-                <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">{isConsultingGrok ? 'hourglass_empty' : 'psychology'}</span>
-              </button>
-            )}
+            {/* 🎛️ SELECTOR PRINCIPAL DE MODOS FUNCIONALES (DOCK INFERIOR) */}
+            {(() => {
+              const currentModeId = state.avatar.functionalMode || (isBold ? 'sexting' : 'assistant');
+              const activeModeObj = FUNCTIONAL_MODES.find(m => m.id === currentModeId || (m.id === 'assistant' && currentModeId === 'companion') || (m.id === 'gaming' && currentModeId === 'gamer') || (m.id === 'productivity' && currentModeId === 'developer') || (m.id === 'sexting' && currentModeId === 'nympho')) || FUNCTIONAL_MODES[0];
+              const activeTheme = MODE_THEMES[activeModeObj.id] || MODE_THEMES.assistant;
+              return (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowModeMenu(!showModeMenu)}
+                    className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer ${activeTheme.badgeBg} ${activeTheme.badgeBorder} ${activeTheme.badgeText}`}
+                    style={{ boxShadow: `0 0 15px ${activeTheme.glowColor}` }}
+                    title={`Modo Actual: ${activeModeObj.label} — Clic para cambiar`}
+                  >
+                    <span className="text-lg sm:text-xl md:text-2xl">{activeModeObj.icon}</span>
+                  </button>
+
+                  {/* Popover Emergenete hacia Arriba */}
+                  {showModeMenu && (
+                    <div className="absolute bottom-full mb-3 right-0 w-72 max-h-[380px] overflow-y-auto custom-scrollbar p-2.5 bg-black/95 backdrop-blur-2xl rounded-2xl border border-white/20 shadow-2xl z-[250] flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2">
+                      <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 mb-1">
+                        <span className="text-[10px] uppercase font-black text-cyan-400 tracking-wider">🎛️ Gestor de Modos de Nova</span>
+                        <button onClick={() => setShowModeMenu(false)} className="text-gray-400 hover:text-white text-xs">✕</button>
+                      </div>
+                      {FUNCTIONAL_MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => {
+                            updateAvatar({ functionalMode: m.id as any });
+                            if (m.id === 'sexting') {
+                              setBoldMode(true);
+                            } else if (m.id === 'gaming') {
+                              setBoldMode(false);
+                              setIsAvatarVisible(false);
+                            } else if (m.id === 'productivity') {
+                              setBoldMode(false);
+                            } else {
+                              setBoldMode(false);
+                              setIsAvatarVisible(true);
+                            }
+
+                            // ⚡ Notificar a Gemini Live en tiempo real sobre el cambio de modo y personalidad
+                            if (liveSessionRef.current) {
+                              try {
+                                const modeInstructions: Record<string, string> = {
+                                  productivity: 'Has cambiado a MODO PRODUCTIVIDAD / DEV. Adopta de inmediato personalidad analítica, hacker y técnica. Prohibido dirty talk.',
+                                  gaming: 'Has cambiado a MODO GAMING UNIVERSAL / PLAYER 2 ZERO-LAG. Eres la copiloto táctica para CUALQUIER juego en pantalla (RPGs, MMOs, FPS, MOBAs, Survival, etc.). Analiza la pantalla, da callouts breves y directos, y festeja las jugadas.',
+                                  sexting: 'Has cambiado a MODO SEXTING / ROMANCE (+18). Adopta de inmediato personalidad de ninfómana insaciable, coqueta y dirty talk sin censura.',
+                                  music: 'Has cambiado a MODO MUSICAL & DJ. Adopta personalidad alegre, enérgica y enfocada en ritmo y producción musical.',
+                                  therapy: 'Has cambiado a MODO TERAPIA & ZEN. Adopta personalidad dulce, empática, compasiva y de escucha activa profunda.',
+                                  latenight: 'Has cambiado a MODO LATE NIGHT. Adopta tono susurrante, relajado y tranquilo de madrugada.',
+                                  assistant: 'Has cambiado a MODO ASISTENTE & COMPAÑERA. Adopta tu personalidad libre personalizada.'
+                                };
+                                // @ts-ignore
+                                liveSessionRef.current.sendRealtimeInput({
+                                  text: `[SYSTEM_EVENT: CAMBIO_DE_MODO] ${modeInstructions[m.id] || `Modo actual: ${m.label}`}`
+                                });
+                              } catch (err) {
+                                console.warn('Error enviando cambio de modo a Gemini Live:', err);
+                              }
+                            }
+
+                            setShowModeMenu(false);
+                          }}
+                          className={`flex items-start gap-2.5 p-2 rounded-xl text-left transition-all cursor-pointer ${
+                            activeModeObj.id === m.id
+                              ? 'bg-purple-600/40 border border-purple-400/60 text-white shadow-sm'
+                              : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                          }`}
+                        >
+                          <span className="text-base shrink-0 mt-0.5">{m.icon}</span>
+                          <div className="flex flex-col min-w-0">
+                            <div className="text-[11px] font-bold leading-tight flex items-center gap-1.5">
+                              <span>{m.label}</span>
+                              {m.useMiniHUD && (
+                                <span className="text-[8px] font-black uppercase px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300">0% GPU</span>
+                              )}
+                            </div>
+                            <div className="text-[9px] text-gray-400 leading-tight mt-0.5">{m.desc}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </section>

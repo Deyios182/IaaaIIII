@@ -259,6 +259,7 @@ export function captureFrame(quality: number = 0.6): string | null {
 export function isScreenSharing(): boolean {
     return screenStream !== null && screenStream.active;
 }
+export const checkScreenSharing = isScreenSharing;
 
 // Obtener el stream de audio del sistema para enviarlo a Gemini
 export function getSystemAudioStream(): MediaStream | null {
