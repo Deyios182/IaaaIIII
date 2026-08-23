@@ -658,7 +658,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   useAvatarAdaptation({
     userMessage: lastUserMessage,
     currentAvatar: state.avatar,
-    updateAvatar: updateAvatar || (() => {}),
+    updateAvatar: updateAvatar || (() => { }),
     enabled: true
   });
   const [isTyping, setIsTyping] = useState(false);
@@ -685,8 +685,8 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   // ── WAKE WORD: Refs usados dentro de los callbacks para no capturar stale closures
   // El hook ya maneja internamente la actualización de callbacks via refs propios,
   // pero necesitamos estos dos refs para llamar a startCall/endCall que se definen más abajo.
-  const startCallRef = useRef<() => void>(() => {});
-  const endCallRef = useRef<() => void>(() => {});
+  const startCallRef = useRef<() => void>(() => { });
+  const endCallRef = useRef<() => void>(() => { });
   const pendingDisconnectRef = useRef(false);
 
   useEffect(() => {
@@ -731,7 +731,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       osc1.stop(now + 0.22);
       osc2.stop(now + 0.32);
 
-      setTimeout(() => ctx.close().catch(() => {}), 500);
+      setTimeout(() => ctx.close().catch(() => { }), 500);
     } catch (e) {
       console.warn('Earcon sound error:', e);
     }
@@ -780,9 +780,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     // 🔧 BUGFIX: Cuando Nova empieza a hablar, resetear columna, cadera y cabeza a neutral.
     // Evita que el cuello/cabeza se caiga hacia atrás al iniciar una llamada.
     if (isAiSpeaking) {
-      window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'HEAD',  target: 'NEUTRAL' } }));
+      window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'HEAD', target: 'NEUTRAL' } }));
       window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'TORSO', target: 'NEUTRAL' } }));
-      window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'HIPS',  target: 'NEUTRAL' } }));
+      window.dispatchEvent(new CustomEvent('aiko-movement', { detail: { limb: 'HIPS', target: 'NEUTRAL' } }));
     }
   }, [isAiSpeaking]);
 
@@ -895,6 +895,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [isSearching, setIsSearching] = useState(false); // Estado para indicar búsqueda
   const isSearchingRef = useRef(false); // Ref para bloqueo síncrono inmediato
   const isStartingCallRef = useRef(false); // Prevenir AbortError en play()
+  const canSendAudioRef = useRef(true); // Control de VAD para Text Injection
 
   // ⏱️ LATENCY PROFILING REFS (High-Precision Voice Pipeline Metrics)
   const userSpeechStartRef = useRef<number>(0);
@@ -1025,12 +1026,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       hasCamera: isCameraCapturing || isLiveMirror,
       onNovaSpeak: (message, type) => {
         console.log(`🤖 [AutonomyEngine Triggered] ${type}: ${message}`);
-        
+
         // 1. Mostrar de forma visual (acción escénica) en el chat
         if (!isMiniMode) {
           addMessage({ text: `💭 (Pensando en voz alta): ${message}`, sender: 'ai' });
         }
-        
+
         // 2. Enviar a Gemini para que lo diga con su voz
         if (liveSessionRef.current) {
           try {
@@ -1082,17 +1083,49 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
    * Si no → usa Gemini Flash REST y muestra la respuesta en el chat.
    */
   const sendVisualFrame = async (base64: string, source: 'camera' | 'screen') => {
+    const cleanData = base64.replace(/^data:image\/[a-z]+;base64,/, '');
     if (liveSessionRef.current) {
       try {
+        setIsVisionSyncing(true);
         // @ts-ignore
-        liveSessionRef.current.sendRealtimeInput({
-          mediaChunks: [
-            {
-              mimeType: 'image/jpeg',
-              data: base64
-            }
-          ]
-        });
+        if (typeof liveSessionRef.current.send === 'function') {
+          try {
+            // @ts-ignore
+            liveSessionRef.current.send({
+              realtimeInput: {
+                mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+              }
+            });
+          } catch (e) {
+            // @ts-ignore
+            liveSessionRef.current.sendRealtimeInput({
+              mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+            });
+          }
+        } else {
+          // @ts-ignore
+          liveSessionRef.current.sendRealtimeInput({
+            mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+          });
+        }
+        setTimeout(() => setIsVisionSyncing(false), 400);
+
+        if (isBold) {
+          setExcitationLevel(prev => Math.min(100, prev + 2.0));
+          // En modo Sexting/Hot, estimular a Nova para que reaccione vocalmente a lo que ve de forma auténtica y en tiempo real
+          if (!isAiSpeaking) {
+            setTimeout(() => {
+              if (liveSessionRef.current && !isAiSpeaking) {
+                // @ts-ignore
+                liveSessionRef.current.sendRealtimeInput({
+                  text: source === 'camera'
+                    ? "[SYSTEM_EVENT: Estás mirando a través de la cámara del usuario en este mismo milisegundo. REGLA ESTRICTA DE REALIDAD: Describe y reacciona ÚNICAMENTE a lo que se ve físicamente en el fotograma real (su rostro real, qué está vistiendo de verdad, su expresión real, su habitación o si se mueve). PROHIBIDO ALUCINAR o inventar ropa que no tiene (como chaquetas que no lleva), luces de colores falsas o poses ficticias. Reacciona en tu personaje ninfómano/coqueto basándote 100% en lo que de verdad estás viendo con tus ojos.]"
+                    : "[SYSTEM_EVENT: Estás viendo la pantalla del usuario en este instante. Describe exactamente qué aplicación, juego o contenido real hay en su pantalla y haz un comentario pícaro o cómplice al respecto sin inventar contenido.]"
+                });
+              }
+            }, 150);
+          }
+        }
         return;
       } catch (e) {
         console.warn('[VisualCapture] Error en live session, usando REST fallback:', e);
@@ -1105,7 +1138,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       if (!apiKey) return;
       const ai = new GoogleGenAI({ apiKey });
       const promptText = source === 'camera'
-        ? `Estás observando la cámara de ${state.userName}. Haz un comentario breve, vivo, empático y espontáneo de lo que ves (expresión o entorno) como Nova.`
+        ? (isBold
+          ? `Estás observando la cámara de ${state.userName} en modo íntimo/ninfómano. Haz un comentario muy coqueto, sensual, pícaro y directo sobre su apariencia, su mirada o su ropa como Nova.`
+          : `Estás observando la cámara de ${state.userName}. Haz un comentario breve, vivo, empático y espontáneo de lo que ves (expresión o entorno) como Nova.`)
         : `Estás observando la pantalla de ${state.userName}. Haz un comentario breve, táctico y útil sobre lo que está haciendo o jugando como Nova.`;
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -1147,17 +1182,38 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     if (!liveSessionRef.current || !isInCallRef.current) return;
     try {
       const cleanData = base64Image.replace(/^data:image\/[a-z]+;base64,/, '');
+      setIsVisionSyncing(true);
+
       // @ts-ignore
-      liveSessionRef.current.sendRealtimeInput({
-        video: { mimeType: 'image/jpeg', data: cleanData }
-      });
+      if (typeof liveSessionRef.current.send === 'function') {
+        try {
+          // @ts-ignore
+          liveSessionRef.current.send({
+            realtimeInput: {
+              mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+            }
+          });
+        } catch (e) {
+          // @ts-ignore
+          liveSessionRef.current.sendRealtimeInput({
+            mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+          });
+        }
+      } else {
+        // @ts-ignore
+        liveSessionRef.current.sendRealtimeInput({
+          mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+        });
+      }
+
+      setTimeout(() => setIsVisionSyncing(false), 400);
 
       if (triggerVoiceReaction && !isAiSpeaking) {
         setTimeout(() => {
           if (liveSessionRef.current && isInCallRef.current && !isAiSpeaking) {
             // @ts-ignore
             liveSessionRef.current.sendRealtimeInput({
-              text: "Nova, mira lo que tengo en pantalla ahora mismo. Coméntame brevemente en voz alta qué ves o qué juego o situación está pasando."
+              text: "Nova, acabo de transmitirte un frame de mi pantalla en este instante. Analízalo de inmediato y dime en voz alta qué estás viendo."
             });
           }
         }, 150);
@@ -1183,12 +1239,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       }
       setIsCameraCapturing(true);
       isCameraCapturingRef.current = true;
-      addMessage({ text: '📷 Análisis autónomo de cámara activado — Nova observará un frame cada 15 segundos.', sender: 'ai' });
+      addMessage({ text: '📷 Análisis autónomo de cámara activado — Nova observará un frame cada 10 segundos.', sender: 'ai' });
       if (cameraAnalysisIntervalRef.current) clearInterval(cameraAnalysisIntervalRef.current);
       cameraAnalysisIntervalRef.current = setInterval(() => {
         const frame = getCameraFrame();
         if (frame) sendVisualFrame(frame, 'camera');
-      }, 15000);
+      }, 10000);
     } catch (e: any) {
       console.error('[CameraCapture] Error:', e);
       addMessage({
@@ -1853,7 +1909,7 @@ ${sessionLog}
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (!liveSessionRef.current) return;
-      
+
       const { part, action, isBoldMode, tool } = detail;
 
       // Throttle: Evitar que el usuario spamee interacciones y Nova hable encima de sí misma
@@ -1862,10 +1918,10 @@ ${sessionLog}
         return; // Ignorar si han pasado menos de 4 segundos desde la última interacción
       }
       lastToolCallTimeRef.current = now;
-      
+
       let contextMsg = '';
-      const moodInstruction = isBoldMode 
-        ? "Sé insaciable, extremadamente ninfómana, caliente, dulce y provocativa. Reacciona al contacto según la zona tocada con excitación desbordante. TOMA LA INICIATIVA CONSTANTEMENTE proponiendo paja rusa, chupada oral, nalgadas o penetración. Usa dirty talk colombiano paisa explícito ('papi', 'amor', 'mor', 'bizcocho', 'tetas', 'culo', 'lechita', 'azotes'), gemidos [moan], jadeos [gasp] y sonidos orales [slurp] variados." 
+      const moodInstruction = isBoldMode
+        ? "Sé insaciable, extremadamente ninfómana, caliente, dulce y provocativa. Reacciona al contacto según la zona tocada con excitación desbordante. TOMA LA INICIATIVA CONSTANTEMENTE proponiendo paja rusa, chupada oral, nalgadas o penetración. Usa dirty talk colombiano paisa explícito ('papi', 'amor', 'mor', 'bizcocho', 'tetas', 'culo', 'lechita', 'azotes'), gemidos [moan], jadeos [gasp] y sonidos orales [slurp] variados."
         : "Reacciona con sorpresa, curiosidad, o pon un límite suave si te parece inapropiado o muy atrevido.";
 
       // Diccionario de traducciones para el prompt
@@ -1892,7 +1948,7 @@ ${sessionLog}
 
       const usedTool = toolNames[tool] || 'un objeto';
       const zoneName = zoneNames[part] || part;
-      
+
       // Personalizar el verbo según la herramienta
       let verb = 'tocando';
       if (tool === 'feather') verb = 'haciendo cosquillas en';
@@ -1902,9 +1958,9 @@ ${sessionLog}
       else if (tool === 'penis') verb = 'penetrando / frotando con su miembro en';
       else if (tool === 'tongue') verb = 'lamiendo y besando con su lengua en';
       else if (action === 'pull' || action === 'grab') verb = 'agarrando y acariciando intensamente en AR';
-        
+
       contextMsg = `[SYSTEM_EVENT: El usuario acaba de interactuar físicamente contigo mediante Realidad Aumentada / AR Tracking. Está ${verb} ${zoneName} usando ${usedTool}. Reacciona en tiempo real de forma extremadamente consciente, caliente, física y verbal. Siente el peso y el movimiento de sus manos/herramientas sobre tu cuerpo. ${moodInstruction}]`;
-      
+
       if (contextMsg) {
         // Enviar evento de sistema al cerebro de Nova
         try {
@@ -2697,26 +2753,26 @@ ${sessionLog}
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.41);
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleConfirmSearch = async () => {
     if (!pendingSearchRef.current) return;
     const { query, callId } = pendingSearchRef.current;
-    
+
     // Reset state
     setPendingSearch(null);
     pendingSearchRef.current = null;
-    
+
     setIsSearching(true);
     isSearchingRef.current = true;
-    
+
     try {
       addMessage({ text: `⏳ Buscando en la red: "${query}"`, sender: 'ai' });
       const searchResult = await searchDuckDuckGo(query);
-      
+
       const combinedResult = `[RESULTADO DE BÚSQUEDA WEB PARA "${query}"]: ${searchResult}\n\nResponde ahora usando esta información real encontrada.`;
-      
+
       // Responder a la herramienta
       if (liveSessionRef.current) {
         if (callId) {
@@ -2752,12 +2808,12 @@ ${sessionLog}
   const handleCancelSearch = () => {
     if (!pendingSearchRef.current) return;
     const { callId } = pendingSearchRef.current;
-    
+
     setPendingSearch(null);
     pendingSearchRef.current = null;
-    
+
     const cancelMsg = "Búsqueda web cancelada por el usuario. No tienes acceso a la información en tiempo real, dile amigablemente al usuario que no hay problema.";
-    
+
     if (liveSessionRef.current) {
       if (callId) {
         try {
@@ -2938,37 +2994,34 @@ ${sessionLog}
 
               // CRITICAL: Resume audio context SIN BLOQUEAR el saludo (fire-and-forget)
               if (audioContextRef.current?.state === 'suspended') {
-                audioContextRef.current.resume().catch(() => {}); // No-await: no bloquea el saludo
+                audioContextRef.current.resume().catch(() => { }); // No-await: no bloquea el saludo
               }
 
               const greetMsg = lastGreetMsgRef.current;
               console.log('👋 [CallStart] Enviando saludo pre-computado inmediatamente...');
 
               try {
-                // Enviar como ClientContent Turn con turnComplete para forzar generación de voz en Gemini Live
+                // Enviar como realtimeInput o clientContent limpio
                 // @ts-ignore
-                if (typeof session.sendClientContent === 'function') {
+                if (typeof session.sendRealtimeInput === 'function') {
+                  // @ts-ignore
+                  session.sendRealtimeInput({ text: greetMsg });
+                } else if (typeof session.sendClientContent === 'function') {
                   // @ts-ignore
                   session.sendClientContent({
                     turns: [{ role: 'user', parts: [{ text: greetMsg }] }],
                     turnComplete: true
                   });
-                } else if (typeof (session as any).send === 'function') {
-                  // @ts-ignore
-                  session.send({
-                    clientContent: {
-                      turns: [{ role: 'user', parts: [{ text: greetMsg }] }],
-                      turnComplete: true
-                    }
-                  });
-                } else {
-                  // @ts-ignore
-                  session.sendRealtimeInput({ text: greetMsg });
                 }
                 console.log('✅ [CallStart] Saludo enviado en 0ms:', greetMsg);
               } catch (e) {
                 console.warn('⚠️ Error enviando saludo inicial:', e);
               }
+
+              // Seguridad: Asegurar que el micrófono siempre se reabre tras el saludo
+              setTimeout(() => {
+                canSendAudioRef.current = true;
+              }, 1200);
 
               // FIX Bug 1: Restaurar screen share automáticamente si estaba activo antes de la desconexión
               if (wasScreenSharingRef.current) {
@@ -3012,19 +3065,41 @@ ${sessionLog}
               if (checkScreenSharing() || isAiSpeaking) return;
 
               const f = getCameraFrame();
-              if (f) {
+              if (f && liveSessionRef.current) {
+                const cleanData = f.replace(/^data:image\/[a-z]+;base64,/, '');
                 setIsVisionSyncing(true);
                 try {
-                  if (liveSessionRef.current) {
-                    liveSessionRef.current.sendRealtimeInput({ video: { data: f, mimeType: 'image/jpeg' } });
+                  // @ts-ignore
+                  if (typeof liveSessionRef.current.send === 'function') {
+                    try {
+                      // @ts-ignore
+                      liveSessionRef.current.send({
+                        realtimeInput: {
+                          mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                        }
+                      });
+                    } catch (e) {
+                      // @ts-ignore
+                      liveSessionRef.current.sendRealtimeInput({
+                        mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                      });
+                    }
+                  } else {
+                    // @ts-ignore
+                    liveSessionRef.current.sendRealtimeInput({
+                      mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                    });
                   }
                 } catch (e) { console.warn('Error enviando frame cámara:', e); }
-                setTimeout(() => setIsVisionSyncing(false), 300);
+                setTimeout(() => setIsVisionSyncing(false), 400);
                 if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
               }
-            }, 4000); // 4s para evitar congestión de WebSocket y Deadline Expired
+            }, 3000); // 3s para análisis visual ágil
           },
           onmessage: async (msg: LiveServerMessage) => {
+            // 🟢 ABRIMOS EL MICRÓFONO AL RECIBIR CUALQUIER COSA DEL SERVIDOR
+            canSendAudioRef.current = true;
+
             // DETECTAR BLOQUEO/SCENSURA (Refusal)
             const turnComplete = msg.serverContent?.turnComplete;
             if (turnComplete && (turnComplete as any).truncated) {
@@ -3425,7 +3500,7 @@ ${sessionLog}
                   } else if (fc.name === 'controlRobotGym') {
                     const { action, parameter, reason } = fc.args as any;
                     console.log('🦾 [Nova Tool] controlRobotGym:', action, 'parameter:', parameter, 'reason:', reason);
-                    
+
                     const channel = new BroadcastChannel('gym_channel');
                     channel.postMessage({ action, parameter });
                     channel.close();
@@ -3450,7 +3525,7 @@ ${sessionLog}
                     console.log('🚀 [Dashboard] Ejecutando tool openUrl:', url);
                     const electronAPI = (window as any).electronAPI || (window as any).electron;
                     let formattedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-                    try { formattedUrl = encodeURI(formattedUrl).replace(/ /g, '%20'); } catch (e) {}
+                    try { formattedUrl = encodeURI(formattedUrl).replace(/ /g, '%20'); } catch (e) { }
                     if (electronAPI?.openUrl) {
                       electronAPI.openUrl(formattedUrl);
                     } else {
@@ -3504,7 +3579,7 @@ ${sessionLog}
                     const learnedSkill = `Regla aprendida: Cuando el usuario diga "${trigger_phrase}", debes ${behavior}.`;
                     try {
                       await addFactToCloud(learnedSkill, 'habit');
-                    } catch (e) {}
+                    } catch (e) { }
                     addMessage({ text: `🧠 Aprendí una nueva habilidad: *${trigger_phrase}* ➔ ${behavior}`, sender: 'ai' });
                     toolResult = `Habilidad aprendida y guardada exitosamente: "${trigger_phrase}" -> "${behavior}".`;
                   } else if (fc.name === 'changeIntimatePose') {
@@ -3564,11 +3639,11 @@ ${sessionLog}
               const text = msg.serverContent.inputTranscription.text.trim();
 
               // 🔇 FILTRO DE RUIDO Y ALUCINACIONES:
-              // Ignorar tags (<noise>, <silence>), puntuación, onomatopeyas breves aisladas y cadenas sin letras
-              const ignoredPatterns = /^(\.|,|!|\?|<noise>|<silence>|<unknown>|neutral|ah|eh|mm|uh)$/i;
-              const hasRealWord = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]{2,}/.test(text);
+              // Ignorar únicamente tags de ruido de Vosk o cadenas totalmente vacías/sin letras
+              const isNoiseTag = text.includes('<noise>') || text.includes('<silence>') || text.includes('<unknown>');
+              const hasLetters = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(text);
 
-              if (hasRealWord && !ignoredPatterns.test(text) && !text.includes('<noise>') && text.toLowerCase() !== 'neutral') {
+              if (hasLetters && !isNoiseTag) {
                 const now = performance.now();
                 if (userSpeechStartRef.current === 0) {
                   userSpeechStartRef.current = now;
@@ -3595,7 +3670,7 @@ ${sessionLog}
                 if (commandTimeoutRef.current) {
                   clearTimeout(commandTimeoutRef.current);
                 }
-                
+
                 commandTimeoutRef.current = setTimeout(() => {
                   const fullText = currentInputTranscription.current.trim();
                   if (fullText.length > 3) {
@@ -3867,7 +3942,7 @@ ${sessionLog}
                 const mdMatch = url.match(/\((https?:\/\/[^\s\)]+)\)/i) || url.match(/(https?:\/\/[^\s\)]+)/i);
                 if (mdMatch) url = mdMatch[1];
                 let targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-                try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) {}
+                try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) { }
                 console.log('🚀 [Streaming Func Fallback] openUrl detectado:', targetUrl);
                 const electronAPI = (window as any).electronAPI || (window as any).electron;
                 if (electronAPI?.openUrl) {
@@ -3912,7 +3987,7 @@ ${sessionLog}
                     cmdTarget = mdMatch[1];
                   }
                   let targetUrl = /^https?:\/\//i.test(cmdTarget) ? cmdTarget : `https://${cmdTarget}`;
-                  try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) {}
+                  try { targetUrl = encodeURI(targetUrl).replace(/ /g, '%20'); } catch (e) { }
                   if (electronAPI?.openUrl) {
                     electronAPI.openUrl(targetUrl);
                   } else {
@@ -4238,40 +4313,23 @@ ${sessionLog}
                     if (liveSessionRef.current) {
                       try {
                         // @ts-ignore
-                        if (typeof liveSessionRef.current.sendClientContent === 'function') {
-                          // @ts-ignore
-                          liveSessionRef.current.sendClientContent({
-                            turns: [{ role: 'user', parts: [{ text: lastGreetMsgRef.current || '¡Hola Nova! Salúdame.' }] }],
-                            turnComplete: true
-                          });
-                        } else {
-                          // @ts-ignore
-                          liveSessionRef.current.sendRealtimeInput({ text: lastGreetMsgRef.current || '¡Hola Nova! Salúdame.' });
-                        }
+                        liveSessionRef.current.sendRealtimeInput({ text: lastGreetMsgRef.current || '¡Hola Nova! Salúdame con ganas.' });
                         console.log('✅ [AutoRetry] Saludo reenviado.');
                       } catch (e) {
                         console.warn('⚠️ [AutoRetry] Fallo en reintento:', e);
                       }
                     }
-                  }, 500);
+                  }, 400);
                 } else if (noAudioReceived && !noUserSpeech && liveSessionRef.current) {
                   // RECOVERY MID-CALL: El usuario habló, pero Gemini devolvió un turno vacío y se quedó callado.
                   console.warn('⚠️ [AutoRecovery] Gemini devolvió turnComplete vacío tras input de usuario. Forzando respuesta...');
+                  userSpeechEndRef.current = 0; // FIX: Prevenir bucle infinito
                   setTimeout(() => {
                     try {
                       // @ts-ignore
-                      if (typeof liveSessionRef.current.sendClientContent === 'function') {
-                        // @ts-ignore
-                        liveSessionRef.current.sendClientContent({
-                          turns: [{ role: 'user', parts: [{ text: "__CONTINUE__" }] }],
-                          turnComplete: true
-                        });
-                      } else {
-                        // @ts-ignore
-                        liveSessionRef.current.sendRealtimeInput({ text: "__CONTINUE__" });
-                      }
+                      liveSessionRef.current.sendRealtimeInput({ text: "Nova, acabo de hablarte. Responde brevemente a lo que te dije." });
                     } catch (e) { }
-                  }, 800);
+                  }, 400);
                 }
               }, 800);
 
@@ -4476,14 +4534,14 @@ ${sessionLog}
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      action: { 
-                        type: Type.STRING, 
-                        enum: ["set_policy", "push"], 
-                        description: "La acción de control: 'set_policy' para cambiar el modo de control de movimiento, o 'push' para aplicar una fuerza/empujón en el torso." 
+                      action: {
+                        type: Type.STRING,
+                        enum: ["set_policy", "push"],
+                        description: "La acción de control: 'set_policy' para cambiar el modo de control de movimiento, o 'push' para aplicar una fuerza/empujón en el torso."
                       },
-                      parameter: { 
-                        type: Type.STRING, 
-                        description: "Si la acción es 'set_policy', puede ser: 'stand' (equilibrio activo), 'walk' (marcha/caminata) o 'random' (exploración aleatoria). Si la acción es 'push', puede ser: 'forward' (empujar adelante), 'backward' (atrás), 'up' (saltar/arriba)." 
+                      parameter: {
+                        type: Type.STRING,
+                        description: "Si la acción es 'set_policy', puede ser: 'stand' (equilibrio activo), 'walk' (marcha/caminata) o 'random' (exploración aleatoria). Si la acción es 'push', puede ser: 'forward' (empujar adelante), 'backward' (atrás), 'up' (saltar/arriba)."
                       },
                       reason: { type: Type.STRING, description: "Breve justificación de la acción." }
                     },
@@ -4913,6 +4971,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
       processor.port.onmessage = (e) => {
         if (!liveSessionRef.current) return;
+        if (!canSendAudioRef.current) return; // 🛑 Bloqueo por Text Injection
 
         const rawInput: Float32Array = e.data?.data || (e.data instanceof Float32Array ? e.data : null);
         if (!rawInput || rawInput.length === 0) return;
@@ -4934,7 +4993,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             if (speechConsecutiveFramesRef.current >= 3) {
               console.log('🛑 [Voice Barge-In] Usuario interrumpió con voz detectada (Pitch:', speechInfo.pitch.toFixed(1), 'Hz)');
               stopAiAudio(true);
-              
+
               // 🔌 INTERRUPCIÓN EXPLÍCITA AL SERVIDOR: Avisar a Gemini Live que aborte su turno actual
               try {
                 // @ts-ignore
@@ -5055,26 +5114,14 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             }
           }
 
-          // 🎙️ TRANSMISIÓN INTELIGENTE (Gate de Ruido y Supresión de Eco)
+          // 🎙️ TRANSMISIÓN INTELIGENTE (Audio Crudo continuo a Gemini Live)
           if (!liveSessionRef.current || !isInCallRef.current) return;
 
-          // Noise Gate & VAD Inteligente:
-          const isSilent = volumePercent < 3.5;
-          if (isSilent) {
-            // Si hay silencio continuo por más de 300ms, no enviamos paquetes para no saturar el WebSocket
-            if (performance.now() - lastVoiceTimeRef.current > 300) {
-              return;
-            }
-          } else {
-            lastVoiceTimeRef.current = performance.now();
-          }
-
-          const finalBuffer = isSilent ? new Int16Array(i16.length) : i16;
           lastChunkSentRef.current = performance.now();
           try {
             liveSessionRef.current.sendRealtimeInput({
               audio: {
-                data: encodeBase64(new Uint8Array(finalBuffer.buffer)),
+                data: encodeBase64(new Uint8Array(i16.buffer)),
                 mimeType: 'audio/pcm;rate=16000'
               }
             });
@@ -5354,13 +5401,13 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                 parameters: {
                   type: "OBJECT",
                   properties: {
-                    action: { 
-                      type: "STRING", 
-                      description: "La acción de control: 'set_policy' (cambiar modo de movimiento) o 'push' (aplicar empujón en torso)." 
+                    action: {
+                      type: "STRING",
+                      description: "La acción de control: 'set_policy' (cambiar modo de movimiento) o 'push' (aplicar empujón en torso)."
                     },
-                    parameter: { 
-                      type: "STRING", 
-                      description: "Si la acción es 'set_policy': 'stand' (equilibrio activo), 'walk' (caminata) o 'random' (aleatorio). Si es 'push': 'forward', 'backward', 'up'." 
+                    parameter: {
+                      type: "STRING",
+                      description: "Si la acción es 'set_policy': 'stand' (equilibrio activo), 'walk' (caminata) o 'random' (aleatorio). Si es 'push': 'forward', 'backward', 'up'."
                     }
                   },
                   required: ["action", "parameter"]
@@ -5591,7 +5638,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             const args: any = call.args;
             const action = args.action;
             const parameter = args.parameter;
-            
+
             const channel = new BroadcastChannel('gym_channel');
             channel.postMessage({ action, parameter });
             channel.close();
@@ -5694,7 +5741,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           return (
             <>
               <div className={`absolute inset-0 transition-all duration-1000 ${currentTheme.bgGradient}`}></div>
-              
+
               {/* Tagline / Banner de Identidad del Modo Superior Centrado */}
               <div className="absolute top-3 sm:top-5 left-1/2 -translate-x-1/2 z-[140] flex flex-col items-center pointer-events-none">
                 <span className="text-[9px] sm:text-[10px] font-black tracking-widest uppercase opacity-75 drop-shadow-md px-3 py-0.5 rounded-full border border-white/10 bg-black/40 backdrop-blur-md" style={{ color: currentTheme.accentColor }}>
@@ -5730,11 +5777,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               onClick={toggleAsmrSound}
               onContextMenu={(e) => { e.preventDefault(); setShowAsmrPanel(!showAsmrPanel); }}
               title="Clic izquierdo: Encender/Apagar Lluvia ASMR | Clic derecho: Panel de Frecuencia"
-              className={`px-2 sm:px-2.5 py-1 backdrop-blur-md rounded-lg border shadow-lg flex items-center gap-1.5 shrink-0 transition-all ${
-                isAsmrPlaying
-                  ? 'bg-blue-600/60 border-cyan-400 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.4)] animate-pulse'
-                  : 'bg-black/70 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
-              }`}
+              className={`px-2 sm:px-2.5 py-1 backdrop-blur-md rounded-lg border shadow-lg flex items-center gap-1.5 shrink-0 transition-all ${isAsmrPlaying
+                ? 'bg-blue-600/60 border-cyan-400 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.4)] animate-pulse'
+                : 'bg-black/70 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                }`}
             >
               <span className="text-[11px] sm:text-xs">🌧️</span>
               <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-wider">
@@ -5754,81 +5800,73 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                 <div className="grid grid-cols-2 gap-1 bg-white/5 p-1 rounded-xl">
                   <button
                     onClick={() => { asmrEngine.play('RAIN', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'RAIN'
-                        ? 'bg-cyan-500 text-black shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'RAIN'
+                      ? 'bg-cyan-500 text-black shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🌧️</span> <span>Lluvia Suave</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('FIREPLACE', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'FIREPLACE'
-                        ? 'bg-amber-500 text-black shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'FIREPLACE'
+                      ? 'bg-amber-500 text-black shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🔥</span> <span>Chimenea</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('OCEAN_WAVES', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'OCEAN_WAVES'
-                        ? 'bg-blue-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'OCEAN_WAVES'
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🌊</span> <span>Olas de Mar</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('BINAURAL_ALPHA', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'BINAURAL_ALPHA'
-                        ? 'bg-indigo-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'BINAURAL_ALPHA'
+                      ? 'bg-indigo-500 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🧠</span> <span>Alfa 10Hz</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('BINAURAL_THETA', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'BINAURAL_THETA'
-                        ? 'bg-violet-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'BINAURAL_THETA'
+                      ? 'bg-violet-500 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🌙</span> <span>Theta 6Hz</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.playHeartbeat(80, asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'HEARTBEAT'
-                        ? 'bg-red-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'HEARTBEAT'
+                      ? 'bg-red-500 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>💓</span> <span>Corazón 50Hz</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('BREATHING', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'BREATHING'
-                        ? 'bg-purple-500 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'BREATHING'
+                      ? 'bg-purple-500 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🌬️</span> <span>Respiración</span>
                   </button>
                   <button
                     onClick={() => { asmrEngine.play('NIGHT_CRICKETS', asmrVolume); setIsAsmrPlaying(true); }}
-                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${
-                      asmrEngine.getCurrentSound() === 'NIGHT_CRICKETS'
-                        ? 'bg-emerald-500 text-black shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                    className={`py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center gap-1.5 ${asmrEngine.getCurrentSound() === 'NIGHT_CRICKETS'
+                      ? 'bg-emerald-500 text-black shadow-sm'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }`}
                   >
                     <span>🦗</span> <span>Grillos</span>
                   </button>
@@ -5906,15 +5944,34 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             </div>
           )}
 
+          {/* Badge Indicador de Transmisión de Pantalla Activa */}
+          {isScreenSharing && (
+            <div className="px-2 sm:px-2.5 py-1 bg-emerald-950/70 backdrop-blur-md rounded-lg border border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.3)] flex items-center gap-1.5 shrink-0 animate-in fade-in">
+              <div className={`w-2 h-2 rounded-full ${isVisionSyncing ? 'bg-cyan-400 scale-125' : 'bg-emerald-400 animate-pulse'}`}></div>
+              <span className="text-[10px] sm:text-xs text-emerald-300 font-bold uppercase tracking-wider flex items-center gap-1">
+                🖥️ {isVisionSyncing ? 'Transmitiendo Frame...' : 'Viendo tu Pantalla'}
+              </span>
+            </div>
+          )}
+
+          {/* Badge Indicador de Análisis de Pantalla Autónomo (Botón Púrpura) */}
+          {isScreenCapturing && !isScreenSharing && (
+            <div className="px-2 sm:px-2.5 py-1 bg-violet-950/70 backdrop-blur-md rounded-lg border border-violet-500/40 shadow-[0_0_15px_rgba(139,92,246,0.3)] flex items-center gap-1.5 shrink-0 animate-in fade-in">
+              <div className="w-2 h-2 rounded-full bg-violet-400 animate-ping"></div>
+              <span className="text-[10px] sm:text-xs text-violet-300 font-bold uppercase tracking-wider flex items-center gap-1">
+                👁️ Análisis de Pantalla (15s)
+              </span>
+            </div>
+          )}
+
           {/* Visualizador de volumen de micrófono */}
           {isInCall && !isMiniMode && (
             <div className="px-2 sm:px-2.5 py-1 bg-black/70 backdrop-blur-md rounded-lg border border-white/10 shadow-lg flex items-center gap-1.5 sm:gap-2 shrink-0">
               <span className="text-[9px] sm:text-[10px] text-gray-400 font-medium">🎤 {micVolume}%</span>
               <div className="w-10 sm:w-14 h-1.5 bg-gray-800 rounded-full overflow-hidden">
                 <div
-                  className={`h-full transition-all duration-100 ${
-                    micVolume > 30 ? 'bg-green-500' : micVolume > 10 ? 'bg-yellow-500' : 'bg-red-500'
-                  }`}
+                  className={`h-full transition-all duration-100 ${micVolume > 30 ? 'bg-green-500' : micVolume > 10 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
                   style={{ width: `${Math.min(100, micVolume)}%` }}
                 ></div>
               </div>
@@ -5969,10 +6026,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         {/* FEED DE NOVA (AVATAR 3D O MINIHUD ZERO-LAG PARA GAMING / DEV) */}
         <div className="relative w-full h-full flex items-center justify-center p-2 sm:p-4 md:p-6 lg:p-8 z-10">
           <div className={`relative w-full h-full rounded-2xl sm:rounded-3xl lg:rounded-[2.5rem] overflow-hidden border-2 transition-all duration-700 ${isAiSpeaking ? (isBold ? 'border-red-600 scale-[1.01] shadow-[0_0_100px_rgba(220,38,38,0.5)]' : 'border-white scale-[1.005]') : 'border-white/10'}`}>
-            {(state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer' || state.avatar.functionalMode === 'productivity' || state.avatar.functionalMode === 'developer' || !isAvatarVisible) ? (
-              /* MINIHUD TÁCTICO ZERO-LAG (LIBERA 100% GPU) */
+            {(state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer') ? (
+              /* MINIHUD TÁCTICO ZERO-LAG (LIBERA 100% GPU) SOLO MODO GAMER */
               <MiniHUD
-                currentMode={state.avatar.functionalMode || (isAvatarVisible ? 'assistant' : 'audio_only')}
+                currentMode={state.avatar.functionalMode}
                 isAiSpeaking={isAiSpeaking}
                 onRestoreAvatar={() => {
                   setIsAvatarVisible(true);
@@ -5984,6 +6041,17 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                 sendMultimodalFrame={handleSendMultimodalFrame}
                 lastTranscript={currentInputTranscription.current || (state.messages.length > 0 ? state.messages[state.messages.length - 1].text : '')}
                 themeColor={state.avatar.themeColor || (MODE_THEMES[state.avatar.functionalMode || (isBold ? 'sexting' : 'assistant')] || MODE_THEMES.assistant).accentColor}
+                isGlobalScreenSharing={isScreenSharing}
+                onManualScan={() => {
+                  try {
+                    const { frame } = captureOptimizedFrame({ quality: 0.7 });
+                    if (frame) {
+                      handleSendMultimodalFrame(frame, true);
+                    }
+                  } catch (e) {
+                    console.warn('⚠️ Error en escaneo manual:', e);
+                  }
+                }}
               />
             ) : (
               /* MODELO 3D con ERROR BOUNDARY */
@@ -6063,11 +6131,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               <button
                 onClick={() => isWakeWordListening ? stopWakeWord() : startWakeWord()}
                 title={isWakeWordListening ? 'Wake word activo — di "hey nova" para llamar · Click para desactivar' : 'Click para activar detección de voz'}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-full border text-[9px] sm:text-[10px] md:text-[11px] font-black uppercase tracking-wider transition-all ${
-                  isWakeWordListening
-                    ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]'
-                    : 'bg-white/5 border-white/10 text-slate-500 hover:border-white/30'
-                }`}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-full border text-[9px] sm:text-[10px] md:text-[11px] font-black uppercase tracking-wider transition-all ${isWakeWordListening
+                  ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]'
+                  : 'bg-white/5 border-white/10 text-slate-500 hover:border-white/30'
+                  }`}
               >
                 <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isWakeWordListening ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
                 <span className="hidden xs:inline">{isWakeWordListening ? 'HEY NOVA' : 'WAKE WORD'}</span>
@@ -6200,7 +6267,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                     } else {
                       systemGainNodeRef.current = null;
                       if (systemSourceRef.current) {
-                        try { systemSourceRef.current.disconnect(); } catch (e) {}
+                        try { systemSourceRef.current.disconnect(); } catch (e) { }
                         systemSourceRef.current = null;
                       }
                     }
@@ -6212,9 +6279,30 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                         try {
                           const { frame } = captureOptimizedFrame({ quality: 0.55 });
                           if (frame) {
-                            liveSessionRef.current.sendRealtimeInput({
-                              video: { mimeType: 'image/jpeg', data: frame }
-                            });
+                            const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
+                            setIsVisionSyncing(true);
+                            // @ts-ignore
+                            if (typeof liveSessionRef.current.send === 'function') {
+                              try {
+                                // @ts-ignore
+                                liveSessionRef.current.send({
+                                  realtimeInput: {
+                                    mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                                  }
+                                });
+                              } catch (e) {
+                                // @ts-ignore
+                                liveSessionRef.current.sendRealtimeInput({
+                                  mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                                });
+                              }
+                            } else {
+                              // @ts-ignore
+                              liveSessionRef.current.sendRealtimeInput({
+                                mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+                              });
+                            }
+                            setTimeout(() => setIsVisionSyncing(false), 400);
                             if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
                           }
                         } catch (e) {
@@ -6280,11 +6368,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             {/* TOGGLE AVATAR 3D BUTTON */}
             <button
               onClick={() => setIsAvatarVisible(!isAvatarVisible)}
-              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:scale-110 active:scale-95 ${
-                isAvatarVisible
-                  ? 'bg-purple-600/30 border-purple-400 text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.4)]'
-                  : 'bg-white/5 border-white/10 text-slate-500 hover:text-white'
-              }`}
+              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:scale-110 active:scale-95 ${isAvatarVisible
+                ? 'bg-purple-600/30 border-purple-400 text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.4)]'
+                : 'bg-white/5 border-white/10 text-slate-500 hover:text-white'
+                }`}
               title={isAvatarVisible ? 'Desactivar Avatar 3D (Modo Solo Audio / Menor Consumo)' : 'Activar Avatar 3D'}
             >
               <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">
@@ -6355,11 +6442,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
                             setShowModeMenu(false);
                           }}
-                          className={`flex items-start gap-2.5 p-2 rounded-xl text-left transition-all cursor-pointer ${
-                            activeModeObj.id === m.id
-                              ? 'bg-purple-600/40 border border-purple-400/60 text-white shadow-sm'
-                              : 'text-gray-300 hover:bg-white/10 hover:text-white'
-                          }`}
+                          className={`flex items-start gap-2.5 p-2 rounded-xl text-left transition-all cursor-pointer ${activeModeObj.id === m.id
+                            ? 'bg-purple-600/40 border border-purple-400/60 text-white shadow-sm'
+                            : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                            }`}
                         >
                           <span className="text-base shrink-0 mt-0.5">{m.icon}</span>
                           <div className="flex flex-col min-w-0">

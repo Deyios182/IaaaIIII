@@ -48,10 +48,10 @@ const FUNCTIONAL_MODES: Array<{
   },
   {
     id: 'intimate',
-    label: 'Intimidad & Romance',
+    label: 'Ninfómana / Íntimo',
     icon: '🔥',
     desc: 'Dirty talk apasionado, seducción física, complicidad sin tabúes y erotismo puro.',
-    badge: 'SIN FILTROS',
+    badge: 'SIN FILTROS +18',
     color: 'from-rose-500/20 to-red-600/20 border-rose-500/30 text-rose-300'
   },
   {
@@ -272,7 +272,15 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
               return (
                 <button
                   key={mode.id}
-                  onClick={() => updateAvatar({ functionalMode: mode.id, isBoldMode: mode.id === 'intimate' })}
+                  onClick={() => {
+                    const isIntimate = mode.id === 'intimate';
+                    updateAvatar({
+                      functionalMode: mode.id,
+                      personalityMode: isIntimate ? 'nympho' : (mode.id === 'gamer' ? 'gamer' : mode.id === 'developer' ? 'hacker' : mode.id === 'therapist' ? 'zen' : mode.id === 'latenight' ? 'latenight' : 'companion'),
+                      isBoldMode: isIntimate,
+                      ...(isIntimate ? { personalityTraits: ['nymphomaniac', 'provocative', 'dominant'] } : {})
+                    });
+                  }}
                   className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
                     isSelected
                       ? `bg-gradient-to-br ${mode.color} border-white/40 shadow-[0_0_25px_rgba(255,255,255,0.15)] scale-[1.02]`

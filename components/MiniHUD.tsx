@@ -10,211 +10,235 @@ interface MiniHUDProps {
   onTriggerSearch?: (query: string) => void;
   lastTranscript?: string;
   themeColor?: string;
+  isGlobalScreenSharing?: boolean;
+  onManualScan?: () => void;
 }
 
 export const MiniHUD: React.FC<MiniHUDProps> = ({
   currentMode,
   isAiSpeaking = false,
   onRestoreAvatar,
-  onSwitchMode,
   sendMultimodalFrame,
-  onTriggerSearch,
   lastTranscript = '',
-  themeColor = '#10b981'
+  isGlobalScreenSharing = false,
+  onManualScan,
 }) => {
-  const { isCapturing, startScreenCapture, getScreenFrameBase64, stopScreenCapture } = useScreenCapture();
-  const [tacticalLog, setTacticalLog] = useState<string[]>([]);
+  const [tacticalLog, setTacticalLog] = useState<{ text: string; time: string; type: 'ai' | 'sys' }[]>([]);
   const [scanPulse, setScanPulse] = useState(false);
+  const [glitchFactor, setGlitchFactor] = useState(0);
+  
   const intervalRef = useRef<any>(null);
   const frameCountRef = useRef(0);
+  const [fakeLatency, setFakeLatency] = useState(12);
 
-  // Iniciar automáticamente captura de pantalla al entrar al HUD
+  // Telemetry fluctuation
   useEffect(() => {
-    if (!isCapturing) {
-      startScreenCapture().catch(e => console.warn('Autostart screen capture:', e));
-    }
-  }, []);
+    const t = setInterval(() => {
+      setFakeLatency(prev => {
+        const target = isGlobalScreenSharing ? 8 + Math.floor(Math.random() * 6) : 0;
+        return prev + (target - prev) * 0.3;
+      });
+      if (Math.random() > 0.95) setGlitchFactor(1);
+      else setGlitchFactor(0);
+    }, 500);
+    return () => clearInterval(t);
+  }, [isGlobalScreenSharing]);
 
-  // Bucle de visión: 1 frame cada 3s; cada 3 frames (~9s) dispara reacción de voz proactiva si hay silencio
+  // Multimodal visual pulse (Fake pulse since Dashboard handles the real capture)
   useEffect(() => {
-    if (isCapturing && sendMultimodalFrame) {
+    if (isGlobalScreenSharing) {
       intervalRef.current = setInterval(() => {
-        const frame = getScreenFrameBase64();
-        if (frame) {
-          frameCountRef.current = (frameCountRef.current + 1) % 3;
-          const shouldTriggerVoice = frameCountRef.current === 0 && !isAiSpeaking;
-          sendMultimodalFrame(frame, shouldTriggerVoice);
-          setScanPulse(true);
-          setTimeout(() => setScanPulse(false), 250);
+        frameCountRef.current = (frameCountRef.current + 1) % 3;
+        const shouldTriggerVoice = frameCountRef.current === 0 && !isAiSpeaking;
+        setScanPulse(true);
+        setTimeout(() => setScanPulse(false), 300);
+        
+        if (shouldTriggerVoice) {
+          addSysLog('SCAN_COMPLETE: ANALIZANDO PANTALLA...');
         }
-      }, 3000);
+      }, 5000); // Pulse every 5s
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
     }
+    return () => clearInterval(intervalRef.current);
+  }, [isGlobalScreenSharing, isAiSpeaking]);
 
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isCapturing, sendMultimodalFrame, getScreenFrameBase64, isAiSpeaking]);
-
-  // Escaneo manual inmediato con reacción de voz forzada
-  const triggerInstantScan = () => {
-    if (getScreenFrameBase64 && sendMultimodalFrame) {
-      const frame = getScreenFrameBase64();
-      if (frame) {
-        sendMultimodalFrame(frame, true);
-        setTacticalLog(prev => ['📸 Escaneando pantalla... Nova comentando en tiempo real', ...prev.slice(0, 3)]);
-        setScanPulse(true);
-        setTimeout(() => setScanPulse(false), 400);
-      }
-    }
+  // Tactical Log
+  const addSysLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 2 } as any);
+    setTacticalLog(prev => [{ text: msg, time, type: 'sys' }, ...prev].slice(0, 8));
   };
 
-  // Agregar transcripciones al log táctico
   useEffect(() => {
     if (lastTranscript) {
-      setTacticalLog(prev => [lastTranscript, ...prev.slice(0, 3)]);
+      const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setTacticalLog(prev => [{ text: lastTranscript, time, type: 'ai' }, ...prev].slice(0, 8));
     }
   }, [lastTranscript]);
 
   return (
-    <div className="relative w-full h-full flex flex-col justify-between p-4 sm:p-6 md:p-8 bg-gradient-to-b from-[#05080e] via-[#030508] to-[#010204] text-white select-none overflow-hidden font-mono">
+    <div className="relative w-full h-full bg-[#02050a] text-cyan-500 font-mono overflow-hidden flex flex-col justify-between" style={{
+      filter: glitchFactor > 0 ? 'hue-rotate(90deg) contrast(150%)' : 'none',
+      transition: 'filter 0.1s ease-out'
+    }}>
       
-      {/* Grid de fondo cibernético sutil */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
+      {/* BACKGROUND SCENE */}
+      <div className="absolute inset-0 z-0 pointer-events-none opacity-20"
+           style={{
+             backgroundImage: 'linear-gradient(rgba(0, 255, 255, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 255, 255, 0.1) 1px, transparent 1px)',
+             backgroundSize: '40px 40px',
+             backgroundPosition: 'center center',
+             transform: 'perspective(500px) rotateX(60deg) scale(2.5) translateY(-100px)',
+             transformOrigin: 'top center'
+           }}
+      />
+      <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,#02050a_80%)] pointer-events-none" />
 
-      {/* ─── BARRA SUPERIOR HUD ─── */}
-      <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
-        
-        {/* Badge de Estado */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-black/60 border border-emerald-500/30 shadow-lg">
-            <span className="text-xl">🎮</span>
-            <div className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${scanPulse ? 'bg-cyan-400 scale-150' : 'bg-emerald-400 animate-ping'}`} />
+      {/* TOP BAR - TELEMETRY & ACTIONS */}
+      <div className="relative z-10 p-6 flex justify-between items-start pointer-events-none">
+        {/* Left: Telemetry Panel */}
+        <div className="flex flex-col gap-1">
+          <div className="text-3xl font-black tracking-tighter flex items-center gap-2 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]">
+            <span className="text-white">NOVA</span>
+            <span className="text-cyan-400">SYS_HUD</span>
+            <div className={`w-3 h-3 rounded-full ${isGlobalScreenSharing ? 'bg-cyan-400 animate-pulse' : 'bg-red-500'}`} />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border border-emerald-500/40 text-emerald-400 bg-emerald-950/40">
-                COPILOTO GAMER ZERO-LAG
-              </span>
-              <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-950/30 border border-emerald-500/20">
-                GPU: 0% 3D LOAD
+          <div className="flex gap-4 text-xs font-bold mt-2">
+            <div className="flex flex-col">
+              <span className="text-cyan-800">VSYNC_LINK</span>
+              <span className={isGlobalScreenSharing ? 'text-cyan-300' : 'text-red-400'}>
+                {isGlobalScreenSharing ? 'ACTIVE' : 'OFFLINE'}
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Visión activa. Nova reconoce cualquier juego o busca guías en internet.
-            </p>
+            <div className="flex flex-col">
+              <span className="text-cyan-800">LATENCY</span>
+              <span className="text-cyan-300">{Math.round(fakeLatency)} MS</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-cyan-800">CORTEX_LOAD</span>
+              <span className="text-cyan-300">{Math.round(20 + Math.random()*15)}%</span>
+            </div>
           </div>
         </div>
 
-        {/* Acciones Rápidas */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-          {/* Botón Escaneo Inmediato */}
-          <button
-            onClick={triggerInstantScan}
-            title="Envía una captura instantánea para que Nova comente o aconseje"
-            className="px-3 py-1.5 rounded-xl border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-[0_0_12px_rgba(6,182,212,0.25)] active:scale-95"
-          >
-            <span className="material-symbols-outlined text-sm">center_focus_strong</span>
-            <span>Escanear Pantalla</span>
-          </button>
-
-          {/* Toggle Transmisión */}
-          <button
-            onClick={isCapturing ? stopScreenCapture : startScreenCapture}
-            className={`px-3 py-1.5 rounded-xl border text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-              isCapturing
-                ? 'bg-emerald-600/30 border-emerald-400 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
-                : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'
-            }`}
-          >
-            <span className="material-symbols-outlined text-sm">{isCapturing ? 'videocam' : 'screen_share'}</span>
-            <span>{isCapturing ? 'Ojo Multimodal ON' : 'Compartir Pantalla'}</span>
-          </button>
+        {/* Right: Actions */}
+        <div className="pointer-events-auto flex items-center gap-3">
+          {onManualScan && isGlobalScreenSharing && (
+            <button
+              onClick={() => {
+                onManualScan();
+                setScanPulse(true);
+                setTimeout(() => setScanPulse(false), 500);
+                addSysLog('TACTICAL_SCAN: ENVIANDO FRAME DIRECTO A NOVA...');
+              }}
+              className="group flex items-center gap-2 px-3 py-1.5 border border-cyan-500/60 bg-cyan-950/40 hover:bg-cyan-500/20 hover:border-cyan-400 rounded-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:shadow-[0_0_20px_rgba(6,182,212,0.6)]"
+              title="Forzar análisis táctico inmediato de pantalla"
+            >
+              <span className="material-symbols-outlined text-sm text-cyan-400 animate-pulse">photo_camera</span>
+              <span className="text-xs font-bold text-cyan-300 uppercase tracking-widest">ESCANEAR YA</span>
+            </button>
+          )}
 
           {onRestoreAvatar && (
             <button
               onClick={onRestoreAvatar}
-              className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer"
+              className="group flex items-center gap-2 px-3 py-1.5 border border-cyan-800 bg-cyan-950/30 hover:bg-cyan-900/50 hover:border-cyan-400 rounded-lg backdrop-blur-md transition-all active:scale-95 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-sm">view_in_ar</span>
-              <span className="hidden sm:inline">Restaurar 3D</span>
+              <span className="material-symbols-outlined text-sm text-cyan-500 group-hover:text-cyan-300">logout</span>
+              <span className="text-xs font-bold text-cyan-600 group-hover:text-cyan-300 uppercase tracking-widest">Exit HUD</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* ─── CENTRO: ORBE DE VOZ & ESTADO EN VIVO ─── */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center my-4">
-        
-        {/* Orbe Central Reactivo */}
-        <div className="relative flex items-center justify-center w-40 h-40 sm:w-56 sm:h-56">
-          <div
-            className="absolute inset-0 rounded-full border border-dashed border-emerald-500/40 opacity-40 animate-spin"
-            style={{ animationDuration: '20s' }}
-          />
-          <div
-            className="absolute inset-4 rounded-full border border-emerald-400/30 opacity-30 animate-spin"
-            style={{ animationDuration: '10s', animationDirection: 'reverse' }}
-          />
+      {/* CENTER: RADAR & STATUS */}
+      <div className="relative z-10 flex-1 flex items-center justify-center pointer-events-none">
+        <div className="relative w-64 h-64 sm:w-80 sm:h-80 flex items-center justify-center">
+          {/* Radar Circles */}
+          <div className={`absolute inset-0 rounded-full border-2 ${isAiSpeaking ? 'border-cyan-300' : 'border-cyan-800/50'}`} />
+          <div className="absolute inset-4 rounded-full border border-cyan-800/30" />
+          <div className="absolute inset-12 rounded-full border border-dashed border-cyan-800/40 animate-spin-slow" />
+          
+          {/* Crosshair */}
+          <div className="absolute top-0 bottom-0 left-1/2 w-[1px] bg-cyan-800/30" />
+          <div className="absolute left-0 right-0 top-1/2 h-[1px] bg-cyan-800/30" />
 
-          {/* Anillos de pulsación */}
-          <div
-            className={`w-24 h-24 sm:w-32 sm:h-32 rounded-full flex flex-col items-center justify-center transition-all duration-300 ${
-              isAiSpeaking ? 'scale-110 shadow-2xl animate-pulse bg-emerald-950/80 border-emerald-400' : 'scale-100 opacity-90 bg-black/80 border-emerald-500/40'
-            } border`}
-            style={{
-              boxShadow: `0 0 ${isAiSpeaking ? '50px' : '20px'} rgba(16,185,129,0.4)`
-            }}
-          >
-            <span className="text-3xl sm:text-4xl drop-shadow-md">🎮</span>
-            <span className="text-[9px] font-black uppercase tracking-widest mt-1 text-emerald-300">
-              {isAiSpeaking ? 'Hablando' : isCapturing ? 'Viendo Pantalla' : 'Atenta'}
-            </span>
-          </div>
-        </div>
-
-        {/* Visualizador de Barras de Sonido */}
-        <div className="flex items-end justify-center gap-1 h-7 mt-3">
-          {[...Array(20)].map((_, i) => (
-            <div
-              key={i}
-              className={`w-1 rounded-full transition-all duration-75 ${isAiSpeaking ? 'bg-emerald-400' : 'bg-slate-700'}`}
-              style={{
-                height: isAiSpeaking ? `${25 + Math.random() * 75}%` : '20%',
-                animationDelay: `${i * 0.05}s`
-              }}
+          {/* Scanner Sweep */}
+          {isGlobalScreenSharing && (
+            <div 
+              className="absolute top-1/2 left-1/2 w-1/2 h-1/2 origin-top-left bg-gradient-to-br from-cyan-400/20 to-transparent animate-radar-sweep rounded-br-full"
             />
-          ))}
+          )}
+
+          {/* Core Reactivity */}
+          <div className={`relative z-20 w-24 h-24 rounded-full flex items-center justify-center bg-[#02050a] border-4 transition-all duration-300 shadow-[0_0_50px_rgba(0,0,0,0.8)]
+            ${isAiSpeaking ? 'border-cyan-400 scale-110 shadow-[0_0_30px_rgba(34,211,238,0.5)]' : 'border-cyan-900 scale-100'}
+            ${scanPulse ? 'ring-8 ring-cyan-500/30' : ''}
+          `}>
+            {/* Audio Bars inside core */}
+            <div className="flex items-center gap-1">
+              {[1,2,3,4].map(i => (
+                <div 
+                  key={i} 
+                  className={`w-1 rounded-full ${isAiSpeaking ? 'bg-cyan-300' : 'bg-cyan-900'}`}
+                  style={{
+                    height: isAiSpeaking ? `${20 + Math.random()*60}%` : '4px',
+                    transition: 'height 0.1s ease'
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+          
+          {/* HUD Text Under Core */}
+          <div className="absolute top-[70%] text-[10px] font-bold tracking-widest text-cyan-600 bg-[#02050a] px-2">
+            {isAiSpeaking ? 'AUDIO_OUT' : (isGlobalScreenSharing ? 'VISUAL_SYNC_ON' : 'NO_SIGNAL')}
+          </div>
         </div>
       </div>
 
-      {/* ─── BARRA INFERIOR: LOGS & CONVERSACIÓN ─── */}
-      <div className="relative z-10 flex flex-col items-center justify-center pt-2 mb-20 sm:mb-24 border-t border-white/10 w-full">
-        <div className="w-full max-w-2xl bg-black/75 backdrop-blur-md rounded-2xl border border-white/10 p-3 shadow-xl">
-          <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-widest mb-1.5 px-1">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Copiloto Gamer en Vivo
-            </span>
-            <span className="text-emerald-400 font-bold">CANAL BIDIRECCIONAL</span>
+      {/* BOTTOM AREA: TERMINAL FEED */}
+      <div className="relative z-10 p-6 pointer-events-none w-full max-w-2xl mb-24 lg:mb-32">
+        <div className="flex flex-col gap-1 bg-[#02050a]/80 border-l-2 border-cyan-800 p-4 backdrop-blur-sm relative">
+          
+          <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-cyan-400 -ml-2.5 -mt-0.5" />
+          <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-cyan-400 -ml-2.5 -mb-0.5" />
+
+          <div className="text-[10px] text-cyan-700 font-bold mb-2 flex justify-between">
+            <span>[TERMLOG://NOVA_LINK]</span>
+            <span className="animate-pulse">_</span>
           </div>
-          <div className="space-y-1 text-xs px-1">
-            {tacticalLog.length > 0 ? (
-              tacticalLog.map((log, index) => (
-                <p key={index} className={`truncate ${index === 0 ? 'text-emerald-300 font-bold' : 'text-slate-500 text-[11px]'}`}>
-                  {index === 0 ? '▶ ' : '  '}{log}
-                </p>
-              ))
+          
+          <div className="flex flex-col gap-1.5 h-[120px] overflow-hidden">
+            {tacticalLog.length === 0 ? (
+              <div className="text-cyan-800 text-xs mt-auto">Waiting for events...</div>
             ) : (
-              <p className="text-slate-400 italic text-[11px]">
-                Habla con Nova o dile: "Nova, ¿qué juego es este?", "¿qué build me recomiendas?", "¿ves peligro en el minimapa?"
-              </p>
+              tacticalLog.map((log, i) => (
+                <div key={i} className={`text-[11px] sm:text-xs flex gap-3 ${i === 0 ? 'opacity-100' : 'opacity-40'}`}>
+                  <span className="text-cyan-700 shrink-0">[{log.time}]</span>
+                  <span className={log.type === 'sys' ? 'text-cyan-500' : 'text-white'}>
+                    {log.type === 'sys' ? '>> ' : '> '}{log.text}
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>
       </div>
 
+      {/* CUSTOM CSS INJECTIONS FOR HUD ANIMATIONS */}
+      <style>{`
+        @keyframes radar-sweep {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .animate-radar-sweep {
+          animation: radar-sweep 2s linear infinite;
+        }
+        .animate-spin-slow {
+          animation: spin 10s linear infinite;
+        }
+      `}</style>
     </div>
   );
 };

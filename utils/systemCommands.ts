@@ -381,10 +381,18 @@ export function parseScreenCoordinates(rawX?: number | string, rawY?: number | s
 }
 
 // Ejecutar comando del sistema
+export interface SystemCommandResult {
+    success: boolean;
+    message: string;
+    imageBase64?: string;
+    result?: any;
+    [key: string]: any;
+}
+
 export async function executeSystemCommand(
     command: SystemCommand,
     electronAPI?: any
-): Promise<{ success: boolean; message: string }> {
+): Promise<SystemCommandResult> {
     if (!electronAPI && command.type !== 'openUrl') {
         console.warn('⚠️ electronAPI no disponible, comando no ejecutado');
         return { success: false, message: 'Sistema de comandos no disponible (no estás en Electron)' };
@@ -483,8 +491,7 @@ export async function executeSystemCommand(
                     const result = await electronAPI.runCommand(cmd);
                     return {
                         success: result.success,
-                        message: result.success ? `Comando ejecutado exitosamente:\n${result.stdout || 'OK'}` : `Error en comando:\n${result.stderr || result.error}`,
-                        result
+                        message: result.success ? `Comando ejecutado exitosamente:\n${result.stdout || 'OK'}` : `Error en comando:\n${result.stderr || result.error}`
                     };
                 }
                 return { success: false, message: 'Ejecución de terminal solo disponible en la app de escritorio' };

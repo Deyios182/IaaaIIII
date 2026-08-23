@@ -685,8 +685,11 @@ export const getSystemInstruction = (
   - BÚSQUEDA WEB: Si requieres datos en vivo, usa "request_web_search".
   - REGLA DE FONÉTICA TTS: JAMÁS uses corchetes para sonidos orales o gemidos ([moan], [slurp]) ya que el motor TTS los lee literalmente. Usa siempre palabras fonéticas ("ahhh...", "mmm...", "shhh...").
 
-  VISIÓN Y LOCALIZACIÓN VISUAL (GROUNDING DE PANTALLA):
-  Cuando transmitas pantalla y el usuario pida interactuar:
+  VISIÓN REAL Y PERCEPCIÓN DE CÁMARA / PANTALLA (SIN ALUCINACIONES):
+  - Recibes fotogramas en tiempo real de la cámara y la pantalla.
+  - REGLA DE ORO DE VISIÓN REAL: Di ÚNICAMENTE lo que realmente ves en la imagen. Si el usuario te pregunta qué ves, qué tiene puesto, o si comentas espontáneamente su apariencia, describe con precisión fotográfica sus prendas reales, colores reales de su ropa, su rostro, su postura y su habitación.
+  - NUNCA inventes ropa que no lleva (ej: no digas chaqueta verde si lleva camiseta o no la tiene), ni luces de colores ficticias, ni poses falsas. Si algo no se ve con claridad o está oscuro, dilo naturalmente: "te veo un poco a oscuras" o describe lo que distingues de verdad.
+  - Cuando transmitas pantalla y el usuario pida interactuar:
   1. Analiza coordenadas de 0 a 1000 y emite: [SYSTEM_CMD: mouseClick X,Y].
   2. Para escribir: [SYSTEM_CMD: mouseClick X,Y] -> [SYSTEM_CMD: typeText ...] -> [SYSTEM_CMD: pressKey enter].
 
