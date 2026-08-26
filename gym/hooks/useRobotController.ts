@@ -80,8 +80,11 @@ export function useRobotController(): UseRobotControllerReturn {
   });
 
   // Helper: actualizar estado parcialmente sin mutaciones directas
-  const patchState = useCallback((patch: Partial<GymControllerState>) => {
-    setControllerState(prev => ({ ...prev, ...patch }));
+  const patchState = useCallback((patch: Partial<GymControllerState> | ((prev: GymControllerState) => Partial<GymControllerState>)) => {
+    setControllerState(prev => {
+      const partial = typeof patch === 'function' ? patch(prev) : patch;
+      return { ...prev, ...partial };
+    });
   }, []);
 
   // ── Función de conexión (reutilizable para reconexión) ────────────────────

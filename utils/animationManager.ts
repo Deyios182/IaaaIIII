@@ -75,6 +75,16 @@ export class AnimationManager {
     }
 
     /**
+     * Registrar una animación dinámicamente en tiempo de ejecución
+     */
+    registerAnimation(name: string, clip: THREE.AnimationClip): void {
+        this.clips.set(name, clip);
+        const action = this.mixer.clipAction(clip);
+        this.actions.set(name, action);
+        console.log(`🎬 [AnimationManager] Animación registrada dinámicamente: [${name}]`);
+    }
+
+    /**
      * Reproducir una animación con configuración
      */
     play(animationName: string, config?: Partial<AnimationConfig>): boolean {
@@ -255,6 +265,13 @@ export class AnimationManager {
      */
     isPlaying(animationName: string): boolean {
         return this.activeAnimations.some(a => a.config.name === animationName);
+    }
+
+    /**
+     * Verificar si una animación externa/acción está activa (prioridad > 5)
+     */
+    isPlayingExternal(): boolean {
+        return this.activeAnimations.some(a => a.config.priority > 5);
     }
 
     /**

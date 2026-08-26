@@ -156,16 +156,34 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     return () => clearInterval(interval);
   }, []);
 
-  const triggerAction = useCallback((actionId: string, duration = 2500) => {
-    if (actionTimeoutRef.current) clearTimeout(actionTimeoutRef.current);
+  const triggerAction = useCallback((actionId: string | null, duration?: number) => {
+    if (actionTimeoutRef.current) {
+      clearTimeout(actionTimeoutRef.current);
+      actionTimeoutRef.current = null;
+    }
     
-    // Si es una animación externa, primero nos aseguramos de cargarla en el visor
+    if (!actionId) {
+      setActiveAction(null);
+      window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+      return;
+    }
+
+    // Si ya está activa esta acción y el usuario vuelve a hacer clic, la detenemos
+    if (activeAction === actionId) {
+      setActiveAction(null);
+      window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+      return;
+    }
+
+    // Si es una animación externa, disparar la carga y reproducción directa en el motor 3D
     const externalAnim = animationStore.get(actionId);
     if (externalAnim) {
       window.dispatchEvent(new CustomEvent('nova-load-animation', { 
         detail: { 
-          name: actionId, 
-          animations: [externalAnim] 
+          url: externalAnim.url,
+          name: externalAnim.name, 
+          type: externalAnim.type,
+          autoplay: true
         } 
       }));
     }
@@ -173,11 +191,14 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     setActiveAction(actionId);
     window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: actionId } }));
     
-    actionTimeoutRef.current = setTimeout(() => {
-      setActiveAction(null);
-      window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
-    }, duration);
-  }, []);
+    // Si se pasa una duración fija (ej: gestos rápidos), volver a Idle al terminar
+    if (duration && duration > 0) {
+      actionTimeoutRef.current = setTimeout(() => {
+        setActiveAction(null);
+        window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+      }, duration);
+    }
+  }, [activeAction]);
 
   const handleAnimationUpload = useCallback(async (files: FileList | null) => {
     if (!files?.length) return;
@@ -188,9 +209,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       try {
         const url = URL.createObjectURL(file);
         const animName = file.name.replace(/\.(glb|fbx)$/i, '');
-        animationStore.add({ name: animName, url, type: ext, source: 'mixamo' });
-        window.dispatchEvent(new CustomEvent('nova-load-animation', { detail: { url, name: animName, type: ext } }));
-        setUploadStatus(`✅ "${animName}" cargado`);
+        // Pasamos el archivo real para que se guarde en IndexedDB
+        animationStore.add({ name: animName, url, type: ext, source: 'mixamo' }, file);
+        window.dispatchEvent(new CustomEvent('nova-load-animation', { detail: { url, name: animName, type: ext, autoplay: false } }));
+        setUploadStatus(`✅ "${animName}" cargado y guardado`);
         setTimeout(() => setUploadStatus(''), 3000);
       } catch { setUploadStatus(`❌ Error cargando`); }
     }
@@ -403,19 +425,63 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 </label>
                 <div className="space-y-1.5">
                   {storedAnims.map(anim => (
-                    <div key={anim.name}
-                      className="flex items-center justify-between p-2.5 rounded-lg bg-white/[0.02] border border-white/5 group hover:border-violet-500/20 transition-all">
-                      <button onClick={() => triggerAction(anim.name, 4000)} className="flex items-center gap-2 flex-1 text-left">
-                        <span className="material-symbols-outlined text-xs text-emerald-400">play_circle</span>
-                        <div>
-                          <span className="text-[10px] font-medium block">{anim.name}</span>
-                          <span className="text-[8px] text-slate-500">{anim.source} • .{anim.type}</span>
+                    <div key={anim.name} className="flex flex-col gap-2 p-2.5 rounded-lg bg-white/[0.02] border border-white/5 group hover:border-violet-500/20 transition-all">
+                      <div className="flex items-center justify-between">
+                        <button onClick={() => triggerAction(anim.name)} className="flex items-center gap-2 flex-1 text-left">
+                          <span className={`material-symbols-outlined text-xs ${activeAction === anim.name ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
+                            {activeAction === anim.name ? 'pause_circle' : 'play_circle'}
+                          </span>
+                          <div>
+                            <span className={`text-[10px] font-medium block ${activeAction === anim.name ? 'text-violet-300 font-bold' : ''}`}>{anim.name}</span>
+                            <span className="text-[8px] text-slate-500">
+                              {activeAction === anim.name ? '▶ En reproducción (clic para parar)' : `${anim.source} • .${anim.type}`}
+                            </span>
+                          </div>
+                        </button>
+                        <button onClick={() => animationStore.remove(anim.name)}
+                          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all">
+                          <span className="material-symbols-outlined text-xs">delete</span>
+                        </button>
+                      </div>
+                      
+                      <div className="flex flex-col gap-1 w-full">
+                        <input 
+                          type="text" 
+                          placeholder="Etiqueta (ej: baile)" 
+                          defaultValue={anim.customTag || ''}
+                          onBlur={(e) => {
+                            const val = e.target.value.trim().toLowerCase();
+                            animationStore.updateMeta(anim.name, { customTag: val || undefined });
+                          }}
+                          className="w-full bg-black/20 border border-white/10 rounded px-2 py-1 text-[9px] text-white outline-none focus:border-violet-500"
+                        />
+                        
+                        {/* NUEVO: Botón Auto-Fix A-Pose */}
+                        <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-1.5">
+                          <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                            <span>Auto-Calibración</span>
+                            <span className="material-symbols-outlined text-[10px] text-emerald-400">magic_button</span>
+                          </label>
+                          <button
+                            onClick={() => {
+                              const newPreset = anim.posePreset === 'vrm' ? 'none' : 'vrm';
+                              animationStore.updateMeta(anim.name, { posePreset: newPreset });
+                              const isCurrentlyActive = activeAction === anim.name;
+                              // Recargar la animación y reanudar inmediatamente si está activa
+                              window.dispatchEvent(new CustomEvent('nova-load-animation', { 
+                                detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: isCurrentlyActive } 
+                              }));
+                            }}
+                            className={`w-full py-1.5 text-[10px] font-bold tracking-wider rounded-lg border transition-all ${
+                              anim.posePreset === 'vrm' 
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/30' 
+                                : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'
+                            }`}
+                          >
+                            {anim.posePreset === 'vrm' ? '🪄 A-POSE (ANIME) APLICADO' : 'APLICAR FIX A-POSE (ANIME)'}
+                          </button>
                         </div>
-                      </button>
-                      <button onClick={() => animationStore.remove(anim.name)}
-                        className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all">
-                        <span className="material-symbols-outlined text-xs">delete</span>
-                      </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -777,17 +843,6 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             <span className="text-[9px] font-medium text-violet-300">▶ {activeAction}</span>
           </div>
         )}
-
-        {/* Avatar 3D - Preview dedicado */}
-        <AvatarViewer3D
-          modelUrl={avatar.modelUrl || '/models/nova-avatar.glb'}
-          emotion="neutral"
-          action={activeAction}
-          audioElement={null}
-          isAiSpeaking={false}
-          isHotMode={avatar.isBoldMode}
-          hairColor={avatar.hairColor}
-        />
       </div>
     </div>
   );

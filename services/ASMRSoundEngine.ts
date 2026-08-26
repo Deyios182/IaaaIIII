@@ -101,55 +101,10 @@ export class ASMRSoundEngine {
         return this.context;
     }
 
-    /**
-     * Inicia cualquier atmósfera ASMR de forma unificada
-     */
     public play(sound: ASMRSoundType, volume: number = 0.35): void {
-        const ctx = this.ensureContext();
+        // Desactivado a nivel global temporalmente por solicitud del usuario
         this.stopImmediate();
-
-        if (sound === 'STOP' || !sound) {
-            this.currentSound = 'STOP';
-            return;
-        }
-
-        this.currentSound = sound;
-        this.currentVolume = Math.max(0.01, Math.min(1.0, volume));
-
-        // Configurar Master Gain con Fade-in suave de 1.2 segundos
-        this.masterGain = ctx.createGain();
-        this.masterGain.gain.setValueAtTime(0.001, ctx.currentTime);
-        this.masterGain.gain.exponentialRampToValueAtTime(this.currentVolume, ctx.currentTime + 1.2);
-        this.masterGain.connect(ctx.destination);
-
-        console.log(`🎧 [ASMR Engine] Iniciando atmósfera: ${sound} (Vol: ${(this.currentVolume * 100).toFixed(0)}%)`);
-
-        switch (sound) {
-            case 'RAIN':
-                this.synthesizeRain(ctx);
-                break;
-            case 'FIREPLACE':
-                this.synthesizeFireplace(ctx);
-                break;
-            case 'OCEAN_WAVES':
-                this.synthesizeOceanWaves(ctx);
-                break;
-            case 'BINAURAL_ALPHA':
-                this.synthesizeBinaural(ctx, 216, 226); // 10Hz Alpha (Flow / Enfoque)
-                break;
-            case 'BINAURAL_THETA':
-                this.synthesizeBinaural(ctx, 140, 146); // 6Hz Theta (Sueño / Relajación)
-                break;
-            case 'BREATHING':
-                this.synthesizeBreathing(ctx);
-                break;
-            case 'NIGHT_CRICKETS':
-                this.synthesizeCrickets(ctx);
-                break;
-            case 'HEARTBEAT':
-                this.playHeartbeat(80, volume);
-                break;
-        }
+        return;
     }
 
     /**

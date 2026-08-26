@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runCommand: (command, options) => ipcRenderer.invoke('system:run-command', command, options),
     runMacro: (macroName, params) => ipcRenderer.invoke('system:run-macro', macroName, params),
     captureScreenFrame: () => ipcRenderer.invoke('system:capture-screen-frame'),
+    captureWindowFrame: (windowName) => ipcRenderer.invoke('system:capture-window-frame', windowName),
+    listWindows: () => ipcRenderer.invoke('system:list-windows'),
 
     // Información de la plataforma
     platform: process.platform,

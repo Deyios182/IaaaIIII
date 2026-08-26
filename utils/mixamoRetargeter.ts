@@ -152,21 +152,26 @@ function scoreBoneMatch(
     return 0;
   }
 
+  // Exact Match de nombre Mixamo (ej: mixamorigLeftArm, mixamorig:LeftArm, LeftArm)
+  const pureMixamoName = definition.mixamoName.replace('mixamorig', '').toLowerCase();
+  const rawCleanName = lower.replace(/^(mixamorig[:_]?|j_bip_[clr]_?)/i, '');
+
+  if (lower === definition.mixamoName.toLowerCase()) return 200;
+  if (rawCleanName === pureMixamoName) return 150;
+
   // Buscar keywords
   let score = 0;
   for (const keyword of definition.keywords) {
     if (lower.includes(keyword.toLowerCase())) {
-      score += keyword.length;
+      score += keyword.length * 3;
     }
   }
 
   // Bonus MASIVO para huesos DEF- (son los de deformación en Rigify)
   if (lower.startsWith('def-')) score += 50;
   
-  // Bonus para nombres limpios/estándar (ej: "Head", "LeftArm")
-  const pureMixamoName = definition.mixamoName.replace('mixamorig', '').toLowerCase();
-  if (lower === pureMixamoName) score += 30;
-  if (lower.includes(pureMixamoName)) score += 10;
+  // Bonus para huesos estándar VRM (J_Bip_)
+  if (lower.startsWith('j_bip_')) score += 50;
 
   return score;
 }
@@ -182,83 +187,167 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
   const results: BoneMappingResult[] = [];
   const usedBones = new Set<string>();
 
-  // Para huesos de spine, necesitamos ordenarlos
-  const spineBonesInModel: string[] = [];
-  modelBoneNames.forEach(name => {
-    if (name.toLowerCase().includes('spine') &&
-        !name.toLowerCase().includes('ik') &&
-        !name.toLowerCase().includes('mch') &&
-        !name.toLowerCase().includes('org')) {
-      spineBonesInModel.push(name);
+  // Detectar si el modelo es un rig Rigify (usa prefijos DEF-)
+  const hasDefBones = Array.from(modelBoneNames).some(n => n.toLowerCase().startsWith('def-'));
+
+  // 1. Hips / Pelvis
+  let hipBone: string | undefined = undefined;
+
+  if (hasDefBones) {
+    // En Rigify, SOLO usar huesos de deformación DEF-. NUNCA los huesos de control 'hips', 'torso' o 'root'.
+    hipBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-pelvis') ||
+              Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-spine');
+  } else {
+    // Para VRM / Mixamo / Estándar:
+    const hipCandidates = [
+      'j_bip_c_hips', 'mixamorig:hips', 'mixamorighips', 'pelvis', 'hips', 'hip'
+    ];
+    for (const cand of hipCandidates) {
+      const found = Array.from(modelBoneNames).find(n => n.toLowerCase() === cand);
+      if (found) { hipBone = found; break; }
     }
-  });
-  spineBonesInModel.sort(); // Ordenar: DEF-spine, DEF-spine.001, DEF-spine.002, etc.
-
-  // Hips: Debe ser la pelvis/caderas del personaje (def-pelvis, pelvis, hips, j_bip_c_hips)
-  // NUNCA 'root', 'armature' ni 'torso', ya que eso rotaría el contenedor 3D entero 90° hacia atrás.
-  let hipBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-pelvis') ||
-    Array.from(modelBoneNames).find(n => {
-      const lower = n.toLowerCase();
-      return (lower.includes('pelvis') || lower.includes('hip')) &&
-             !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
-             lower !== 'root' && lower !== 'armature' && lower !== 'torso';
-    });
-
-  if (!hipBone) {
-    hipBone = Array.from(modelBoneNames).find(n => {
-      const lower = n.toLowerCase();
-      return lower.includes('hips') && lower !== 'root' && lower !== 'armature' && lower !== 'torso';
-    });
-  }
-
-  if (!hipBone && spineBonesInModel.length > 0) {
-    hipBone = spineBonesInModel[0];
+    if (!hipBone) {
+      hipBone = Array.from(modelBoneNames).find(n => {
+        const lower = n.toLowerCase();
+        return (lower.includes('pelvis') || lower.includes('hip')) &&
+               !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
+               lower !== 'root' && lower !== 'armature' && lower !== 'torso';
+      });
+    }
   }
 
   if (hipBone) {
     mapping.set('mixamorigHips', hipBone);
     usedBones.add(hipBone);
-    results.push({ mixamoBone: 'mixamorigHips', targetBone: hipBone, confidence: 0.9, priority: 10 });
+    results.push({ mixamoBone: 'mixamorigHips', targetBone: hipBone, confidence: 0.95, priority: 10 });
   }
 
-  // Spine1, Spine2, Spine3 = spine bones después de hips
-  const remainingSpines = spineBonesInModel.filter(s => s !== hipBone);
+  // 2. Torso / Columna: Buscar Spine, Chest, UpperChest de forma jerárquica
+  const vrmSpine = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'j_bip_c_spine');
+  const vrmChest = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'j_bip_c_chest');
+  const vrmUpperChest = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'j_bip_c_upperchest');
 
-  const spineNames = ['mixamorigSpine', 'mixamorigSpine1', 'mixamorigSpine2'];
-  spineNames.forEach((mixName, i) => {
-    if (i < remainingSpines.length) {
-      mapping.set(mixName, remainingSpines[i]);
-      usedBones.add(remainingSpines[i]);
-      results.push({ mixamoBone: mixName, targetBone: remainingSpines[i], confidence: 0.8, priority: 9 });
+  if (vrmSpine) {
+    mapping.set('mixamorigSpine', vrmSpine);
+    usedBones.add(vrmSpine);
+    results.push({ mixamoBone: 'mixamorigSpine', targetBone: vrmSpine, confidence: 0.95, priority: 9 });
+
+    if (vrmChest) {
+      mapping.set('mixamorigSpine1', vrmChest);
+      usedBones.add(vrmChest);
+      results.push({ mixamoBone: 'mixamorigSpine1', targetBone: vrmChest, confidence: 0.95, priority: 9 });
     }
+    if (vrmUpperChest) {
+      mapping.set('mixamorigSpine2', vrmUpperChest);
+      usedBones.add(vrmUpperChest);
+      results.push({ mixamoBone: 'mixamorigSpine2', targetBone: vrmUpperChest, confidence: 0.95, priority: 9 });
+    }
+  } else if (hasDefBones) {
+    // Mapeo para Rigify: AniGrok exporta los huesos como DEF-spine001, DEF-spine002... (sin punto)
+    // Recopilar TODOS los huesos de columna DEF- disponibles, ordenados
+    const defSpineBones = Array.from(modelBoneNames)
+      .filter(n => {
+        const l = n.toLowerCase();
+        // Coincide con def-spine, def-spine001, def-spine002, etc. (con o sin punto)
+        return l.startsWith('def-spine') && !usedBones.has(n);
+      })
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    // Distribuir los 3 Mixamo spine bones a lo largo de los segmentos de columna disponibles
+    // defSpineBones[0] ya está usado (=DEF-spine → hips)
+    // Distribuir Spine→Spine1→Spine2 en el tercio inferior, medio y superior de la columna
+    const spineAvail = defSpineBones.filter(n => !usedBones.has(n));
+    console.log(`🦴 [Rigify] Huesos de columna disponibles: ${spineAvail.join(', ')}`);
+
+    if (spineAvail.length >= 1) {
+      // Spine → primer segmento disponible (el más bajo, justo encima de caderas)
+      const spineTarget = spineAvail[0];
+      mapping.set('mixamorigSpine', spineTarget);
+      usedBones.add(spineTarget);
+      results.push({ mixamoBone: 'mixamorigSpine', targetBone: spineTarget, confidence: 0.9, priority: 9 });
+    }
+    if (spineAvail.length >= 2) {
+      // Spine1 → segmento medio
+      const spine1Idx = Math.floor((spineAvail.length - 1) / 2) + (spineAvail.length >= 3 ? 0 : 0);
+      const spine1Target = spineAvail[Math.min(1, spineAvail.length - 1)];
+      if (!usedBones.has(spine1Target)) {
+        mapping.set('mixamorigSpine1', spine1Target);
+        usedBones.add(spine1Target);
+        results.push({ mixamoBone: 'mixamorigSpine1', targetBone: spine1Target, confidence: 0.85, priority: 9 });
+      }
+    }
+    if (spineAvail.length >= 3) {
+      // Spine2 → segmento superior (pecho/chest)
+      const spine2Target = spineAvail[Math.min(2, spineAvail.length - 1)];
+      if (!usedBones.has(spine2Target)) {
+        mapping.set('mixamorigSpine2', spine2Target);
+        usedBones.add(spine2Target);
+        results.push({ mixamoBone: 'mixamorigSpine2', targetBone: spine2Target, confidence: 0.85, priority: 9 });
+      }
+    }
+  } else {
+    // Para otros modelos genéricos:
+    const spineBonesInModel: string[] = [];
+    modelBoneNames.forEach(name => {
+      const lower = name.toLowerCase();
+      if ((lower.includes('spine') || lower.includes('chest')) &&
+          !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
+          !lower.includes('spine.004') && !lower.includes('spine.005') && !lower.includes('spine.006') &&
+          name !== hipBone) {
+        spineBonesInModel.push(name);
+      }
+    });
+    spineBonesInModel.sort();
+
+    if (spineBonesInModel.length > 0) {
+      mapping.set('mixamorigSpine', spineBonesInModel[0]);
+      usedBones.add(spineBonesInModel[0]);
+      results.push({ mixamoBone: 'mixamorigSpine', targetBone: spineBonesInModel[0], confidence: 0.9, priority: 9 });
+
+      if (spineBonesInModel.length === 2) {
+        mapping.set('mixamorigSpine1', spineBonesInModel[1]);
+        usedBones.add(spineBonesInModel[1]);
+        results.push({ mixamoBone: 'mixamorigSpine1', targetBone: spineBonesInModel[1], confidence: 0.85, priority: 9 });
+      } else if (spineBonesInModel.length >= 3) {
+        const midIdx = Math.floor(spineBonesInModel.length / 2);
+        const topIdx = spineBonesInModel.length - 1;
+
+        mapping.set('mixamorigSpine1', spineBonesInModel[midIdx]);
+        usedBones.add(spineBonesInModel[midIdx]);
+        results.push({ mixamoBone: 'mixamorigSpine1', targetBone: spineBonesInModel[midIdx], confidence: 0.85, priority: 9 });
+
+        mapping.set('mixamorigSpine2', spineBonesInModel[topIdx]);
+        usedBones.add(spineBonesInModel[topIdx]);
+        results.push({ mixamoBone: 'mixamorigSpine2', targetBone: spineBonesInModel[topIdx], confidence: 0.85, priority: 9 });
+      }
+    }
+  }
+
+  // 3. Neck & Head
+  const neckBone = Array.from(modelBoneNames).find(n => {
+    const l = n.toLowerCase();
+    return l === 'j_bip_c_neck' || l === 'def-neck' || l === 'mixamorig:neck' || (l.includes('neck') && !l.includes('mch') && !l.includes('org'));
   });
 
-  // Neck y Head desde spine (últimos en la cadena)
-  // NOTA: NO usar spine.004, 005, 006 si el usuario los usa para el CABELLO!
-  const neckBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-neck') ||
-    Array.from(modelBoneNames).find(n =>
-      n.toLowerCase().includes('neck') &&
-      !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
-    );
-    
-  const headBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-head') ||
-    Array.from(modelBoneNames).find(n =>
-      n.toLowerCase().includes('head') &&
-      !n.toLowerCase().includes('mch') && !n.toLowerCase().includes('org')
-    );
+  const headBone = Array.from(modelBoneNames).find(n => {
+    const l = n.toLowerCase();
+    // Excluir 'forehead' (es un hueso de frente, no la cabeza entera)
+    if (l.includes('forehead') || l.includes('brow') || l.includes('face')) return false;
+    return l === 'j_bip_c_head' || l === 'def-head' || l === 'mixamorig:head' || (l.includes('head') && !l.includes('mch') && !l.includes('org'));
+  });
 
   if (neckBone) {
     mapping.set('mixamorigNeck', neckBone);
     usedBones.add(neckBone);
-    results.push({ mixamoBone: 'mixamorigNeck', targetBone: neckBone, confidence: 0.85, priority: 8 });
+    results.push({ mixamoBone: 'mixamorigNeck', targetBone: neckBone, confidence: 0.95, priority: 8 });
   }
   if (headBone) {
     mapping.set('mixamorigHead', headBone);
     usedBones.add(headBone);
-    results.push({ mixamoBone: 'mixamorigHead', targetBone: headBone, confidence: 0.85, priority: 8 });
+    results.push({ mixamoBone: 'mixamorigHead', targetBone: headBone, confidence: 0.95, priority: 8 });
   }
 
-  // Mapear el resto de huesos (extremidades, dedos)
+  // 4. Mapear el resto de huesos (extremidades, dedos)
   const nonSpineDefinitions = MIXAMO_BONE_DEFINITIONS.filter(d =>
     !d.mixamoName.includes('Spine') && !d.mixamoName.includes('Hips') &&
     d.mixamoName !== 'mixamorigNeck' && d.mixamoName !== 'mixamorigHead'
@@ -313,17 +402,14 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
 
 /**
  * Retargetea una AnimationClip usando el mapping dinámico
- * CLAVE: Aplica corrección de rest-pose para que las rotaciones de Mixamo
- * se interpreten correctamente en el esqueleto Rigify.
- * 
- * Fórmula: correctedQ = targetRest * inverse(sourceRest) * animQ
  */
 export function retargetMixamoClip(
   clip: THREE.AnimationClip,
   targetBoneNames: Set<string>,
   targetModel?: THREE.Object3D,
   sourceRestPoses?: Map<string, THREE.Quaternion>,
-  targetRestPoses?: Map<string, THREE.Quaternion>
+  targetRestPoses?: Map<string, THREE.Quaternion>,
+  posePreset: string = 'none'
 ): THREE.AnimationClip {
   const { mapping, results } = buildBoneMapping(targetBoneNames);
 
@@ -339,17 +425,6 @@ export function retargetMixamoClip(
   (window as any).__lastBoneMapping = results;
   (window as any).__lastBoneMappingMap = Object.fromEntries(mapping);
 
-  // === Corrección de Rest Pose ===
-  // Siempre aplicamos la corrección de rest-pose si tenemos las poses de reposo del source (Mixamo) y del target,
-  // independientemente de si el modelo usa prefijos DEF- o nombres estándar (VRoid, DAZ, etc.).
-  const shouldCorrectRestPose = Boolean(sourceRestPoses && targetRestPoses && sourceRestPoses.size > 0 && targetRestPoses.size > 0);
-  
-  if (shouldCorrectRestPose) {
-    console.log(`✅ Aplicando corrección matemática de rest-pose para retargeting perfecto.`);
-  } else {
-    console.warn(`⚠️ Faltan rest-poses. Se usará copia directa de rotaciones.`);
-  }
-
   const hipsTargetName = mapping.get('mixamorigHips');
 
   // Escala para root motion
@@ -357,18 +432,56 @@ export function retargetMixamoClip(
   if (targetModel) {
     const box = new THREE.Box3().setFromObject(targetModel);
     const modelHeight = box.max.y - box.min.y;
-    if (modelHeight < 10) {
+    if (modelHeight < 10 && modelHeight > 0.1) {
       rootScaleFactor = modelHeight / 170;
     } else {
       rootScaleFactor = 1;
     }
-    console.log(`📏 Escala root: ${rootScaleFactor.toFixed(4)} (h=${modelHeight.toFixed(2)})`);
   }
 
   const retargeted = clip.clone();
   let keptRotations = 0;
   let correctedRotations = 0;
   let keptPosition = 0;
+
+  // Detectar tipo de esqueleto
+  const isRigify = Array.from(targetBoneNames).some(n => n.toLowerCase().startsWith('def-'));
+
+  // Pre-calcular correcciones de espacio local para Rigify.
+  // Los FBX de Mixamo tienen bones con quaterniones IDENTIDAD en rest pose (T-pose).
+  // Los huesos Rigify (DEF-) pueden tener rotaciones no triviales en su bind pose.
+  // Fórmula: outQuat = tgtRest * inv(srcRest) * srcAnim
+  // Como srcRest ≈ identity para Mixamo FBX, se simplifica a: outQuat = tgtRest * srcAnim
+  // Pero necesitamos sacar primero la componente de reposo del hueso target:
+  // outQuat = inv(tgtRest) * (tgtRest * srcAnim) -- no, esto borra la corrección
+  //
+  // La fórmula CORRECTA de retargeting "local space":
+  // outQuat = tgtRest * deltaQ * inv(tgtRest)   donde deltaQ = inv(srcRest) * srcAnim
+  // Esto mantiene la pose de reposo intacta y solo aplica el movimiento relativo.
+  //
+  // Dado srcRest ≈ identity: deltaQ ≈ srcAnim
+  // outQuat = tgtRest * srcAnim * inv(tgtRest)
+  const rigifyCorrections = new Map<string, { tgtRest: THREE.Quaternion; tgtRestInv: THREE.Quaternion }>();
+  if (isRigify && targetRestPoses) {
+    targetRestPoses.forEach((tgtRest, boneName) => {
+      const tgtRestInv = tgtRest.clone().invert();
+      rigifyCorrections.set(boneName, { tgtRest: tgtRest.clone(), tgtRestInv });
+    });
+  }
+
+  // Log qué bones se mapearon para Rigify (diagnóstico)
+  if (isRigify) {
+    const rigifyLog: string[] = [];
+    mapping.forEach((targetBone, srcBone) => {
+      rigifyLog.push(`  ${srcBone} → ${targetBone}`);
+    });
+    console.log(`🦴 Rigify mapping (${rigifyLog.length} bones):\n` + rigifyLog.join('\n'));
+  }
+
+  // === VRM arm correction (A-Pose 45°) ===
+  const offsetRad = posePreset === 'vrm' ? 45 * (Math.PI / 180) : 0;
+  const armFixLeft  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1),  offsetRad);
+  const armFixRight = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -offsetRad);
 
   retargeted.tracks = clip.tracks
     .map(track => {
@@ -383,33 +496,42 @@ export function retargetMixamoClip(
 
       const lowerTarget = targetName.toLowerCase();
       if (lowerTarget === 'root' || lowerTarget === 'armature' || lowerTarget === 'torso') {
-        return null; // EVITAR que se rote el contenedor global del personaje
+        return null; 
       }
 
-      // === ROTACIONES con corrección de rest-pose ===
+      // === ROTACIONES ===
       if (property === '.quaternion') {
         keptRotations++;
         const newTrack = track.clone();
         newTrack.name = targetName + property;
+        const values = newTrack.values;
 
-        // Aplicar corrección de rest pose SOLO si es modelo Rigify compatible
-        if (shouldCorrectRestPose) {
-          const srcRest = sourceRestPoses?.get(boneName);
-          const tgtRest = targetRestPoses?.get(targetName);
-
-          if (srcRest && tgtRest) {
+        if (isRigify) {
+          // DIAGNÓSTICO: Aplicar corrección universal X,Z negate para TODOS los huesos Rigify.
+          // Esto invierte el eje de pitch (inclinación adelante/atrás) y el eje de roll lateral.
+          // Si el modelo queda peor, necesitamos hacer diferente para distintos grupos de huesos.
+          correctedRotations++;
+          for (let i = 0; i < values.length; i += 4) {
+            // Negar X y Z: convierte la rotación al espacio de Rigify
+            values[i]   = -values[i];    // x
+            // values[i+1] unchanged     // y
+            values[i+2] = -values[i+2];  // z
+            // values[i+3] unchanged     // w
+          }
+        } else if (!isRigify && posePreset === 'vrm') {
+          // Para VRM (Nova Anime): corrección A-Pose de 45° en brazos
+          const isLeftArm  = boneName.includes('LeftArm')  || boneName.includes('LeftForeArm')  || boneName.includes('LeftShoulder');
+          const isRightArm = boneName.includes('RightArm') || boneName.includes('RightForeArm') || boneName.includes('RightShoulder');
+          if (isLeftArm || isRightArm) {
             correctedRotations++;
-            const srcRestInv = srcRest.clone().invert();
-            const values = newTrack.values;
-
             for (let i = 0; i < values.length; i += 4) {
               const animQ = new THREE.Quaternion(values[i], values[i+1], values[i+2], values[i+3]);
-              const delta = new THREE.Quaternion().multiplyQuaternions(srcRestInv, animQ);
-              const corrected = new THREE.Quaternion().multiplyQuaternions(tgtRest, delta);
-              values[i]   = corrected.x;
-              values[i+1] = corrected.y;
-              values[i+2] = corrected.z;
-              values[i+3] = corrected.w;
+              if (isLeftArm)  animQ.multiply(armFixLeft);
+              else            animQ.multiply(armFixRight);
+              values[i]   = animQ.x;
+              values[i+1] = animQ.y;
+              values[i+2] = animQ.z;
+              values[i+3] = animQ.w;
             }
           }
         }
@@ -417,17 +539,12 @@ export function retargetMixamoClip(
         return newTrack;
       }
 
-      // Descartar TODOS los position tracks (incluido hips)
-      // El root motion causa stretching severo en modelos con diferentes proporciones
+      // Descartar position tracks para mantener orientación vertical y accesorios (collar, ojos, botas) perfectamente anclados
       return null;
     })
     .filter((track): track is THREE.KeyframeTrack => track !== null);
 
-  // INYECCIÓN RIGIFY: Mapear Hips correctamente a root o torso resuelve la mayoría de desconexiones.
-  // No intentaremos combinar las pistas matemáticamente porque los quaternions ya están corregidos
-  // por los rest poses locales y su multiplicación resultaría en ejes cruzados.
-
-  console.log(`🎬 Retarget: ${keptRotations} rotaciones (${correctedRotations} corregidas) + ${keptPosition} posición raíz de ${clip.tracks.length} totales`);
+  console.log(`🎬 Retarget: ${keptRotations} rotaciones (${correctedRotations} corregidas), ${keptPosition} posiciones`);
   return retargeted;
 }
 

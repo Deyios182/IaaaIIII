@@ -37,7 +37,7 @@ export const HandTrackingOverlay: React.FC<HandTrackingOverlayProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [handDetected, setHandDetected] = useState<boolean>(false);
   const [fps, setFps] = useState<number>(0);
-  const [handPos, setHandPos] = useState<{ x: number; y: number; isPinching: boolean } | null>(null);
+  const [handPos, setHandPos] = useState<{ x: number; y: number; isPinching: boolean; gesture?: string } | null>(null);
 
   const handsRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);

@@ -14,55 +14,55 @@ const FUNCTIONAL_MODES: Array<{
   badge: string;
   color: string;
 }> = [
-  {
-    id: 'companion',
-    label: 'Compañera General',
-    icon: '🌸',
-    desc: 'Asistente versátil, conversacional, colaborativa y apoyo en el día a día.',
-    badge: 'BALANCEADO',
-    color: 'from-pink-500/20 to-purple-500/20 border-pink-500/30 text-pink-300'
-  },
-  {
-    id: 'gamer',
-    label: 'Copiloto Gamer',
-    icon: '🎮',
-    desc: 'Player 2 en Albion Online, mazmorras de Ironmace, farmeo, builds y hype de combate.',
-    badge: 'COMPETITIVO',
-    color: 'from-emerald-500/20 to-green-500/20 border-emerald-500/30 text-emerald-300'
-  },
-  {
-    id: 'developer',
-    label: 'Hacker & Arquitecta Tech',
-    icon: '💻',
-    desc: 'TypeScript, Supabase, WebAssembly, código, terminal y resolución de bugs sin rodeos.',
-    badge: 'ALTA INGENIERÍA',
-    color: 'from-cyan-500/20 to-blue-500/20 border-cyan-500/30 text-cyan-300'
-  },
-  {
-    id: 'therapist',
-    label: 'Confidente Zen',
-    icon: '🧘‍♀️',
-    desc: 'Escucha activa sin juicio, gestión de estrés, relajación guiada y bienestar emocional.',
-    badge: 'SANATIVO',
-    color: 'from-teal-500/20 to-emerald-500/20 border-teal-500/30 text-teal-300'
-  },
-  {
-    id: 'intimate',
-    label: 'Ninfómana / Íntimo',
-    icon: '🔥',
-    desc: 'Dirty talk apasionado, seducción física, complicidad sin tabúes y erotismo puro.',
-    badge: 'SIN FILTROS +18',
-    color: 'from-rose-500/20 to-red-600/20 border-rose-500/30 text-rose-300'
-  },
-  {
-    id: 'latenight',
-    label: 'Nocturna & Lo-Fi',
-    icon: '🌙',
-    desc: 'Susurros de baja energía, compañía para la madrugada y calma para el insomnio.',
-    badge: 'LO-FI / CALMA',
-    color: 'from-indigo-500/20 to-purple-900/20 border-indigo-500/30 text-indigo-300'
-  }
-];
+    {
+      id: 'companion',
+      label: 'Compañera General',
+      icon: '🌸',
+      desc: 'Asistente cercana y versátil. Te acompaña en el día a día con conversación natural, ayuda práctica y buena vibra.',
+      badge: 'BALANCEADO',
+      color: 'from-pink-500/20 to-purple-500/20 border-pink-500/30 text-pink-300'
+    },
+    {
+      id: 'gamer',
+      label: 'Copiloto Gamer',
+      icon: '🎮',
+      desc: 'Tu Player 2 táctica. Callouts, builds, hype de combate y compañía real en cualquier juego.',
+      badge: 'COMPETITIVO',
+      color: 'from-emerald-500/20 to-green-500/20 border-emerald-500/30 text-emerald-300'
+    },
+    {
+      id: 'developer',
+      label: 'Hacker & Arquitecta Tech',
+      icon: '💻',
+      desc: 'Ingeniera de software de élite. TypeScript, arquitectura, debugging y soluciones directas sin relleno.',
+      badge: 'ALTA INGENIERÍA',
+      color: 'from-cyan-500/20 to-blue-500/20 border-cyan-500/30 text-cyan-300'
+    },
+    {
+      id: 'therapist',
+      label: 'Confidente Zen',
+      icon: '🧘‍♀️',
+      desc: 'Espacio seguro de escucha profunda. Te ayuda a bajar la ansiedad, ordenar la mente y sentirte acompañado.',
+      badge: 'SANATIVO',
+      color: 'from-teal-500/20 to-emerald-500/20 border-teal-500/30 text-teal-300'
+    },
+    {
+      id: 'intimate',
+      label: 'Ninfómana / Íntimo',
+      icon: '🔥',
+      desc: 'Amante apasionada y sin filtros. Dirty talk explícito, seducción intensa, cámara, fantasías y erotismo total.',
+      badge: 'SIN FILTROS +18',
+      color: 'from-rose-500/20 to-red-600/20 border-rose-500/30 text-rose-300'
+    },
+    {
+      id: 'latenight',
+      label: 'Nocturna & Lo-Fi',
+      icon: '🌙',
+      desc: 'Compañía suave para la madrugada. Voz calmada, ritmo lento y presencia ligera para noches de insomnio.',
+      badge: 'LO-FI / CALMA',
+      color: 'from-indigo-500/20 to-purple-900/20 border-indigo-500/30 text-indigo-300'
+    }
+  ];
 
 export interface TraitCategory {
   title: string;
@@ -137,17 +137,17 @@ const REGIONAL_SLANGS: Array<{
   flag: string;
   examples: string;
 }> = [
-  { id: 'neutral', label: 'Neutro Internacional', flag: '🌐', examples: 'Español claro, fluido y natural.' },
-  { id: 'chilean', label: 'Chilena', flag: '🇨🇱', examples: 'weón, cachai, bacán, po, al tiro, yapo, la raja, filete' },
-  { id: 'colombian', label: 'Colombiana / Paisa', flag: '🇨🇴', examples: 'parce, mor, pues, papacito, chimba, berraquera, de una' },
-  { id: 'argentine', label: 'Argentina', flag: '🇦🇷', examples: 'che, boludo, re, posta, quilombo, ni en pedo, viste' },
-  { id: 'mexican', label: 'Mexicana', flag: '🇲🇽', examples: 'wey, no manches, chido, cabrón, neta, padrísimo, a huevo' },
-  { id: 'spanish', label: 'Española', flag: '🇪🇸', examples: 'tío, mola, chaval, hostia, flipar, guay, qué pasa' },
-  { id: 'peruvian', label: 'Peruana', flag: '🇵🇪', examples: 'causa, pe, chévere, asu mare, pucha, pata, qué palta' },
-  { id: 'brazilian', label: 'Brasileña / Portuñol', flag: '🇧🇷', examples: 'cara, legal, beleza, gostoso, você, né, meu amor' },
-  { id: 'japanese', label: 'Japonesa / Kawaii', flag: '🇯🇵', examples: 'senpai, daisuki, arigato, baka, sugoi, kawaii, uwu' },
-  { id: 'venezuelan', label: 'Venezolana', flag: '🇻🇪', examples: 'chamo, pana, chévere, arrecho, burda, qué ladilla, fino' }
-];
+    { id: 'neutral', label: 'Neutro Internacional', flag: '🌐', examples: 'Español claro, fluido y natural.' },
+    { id: 'chilean', label: 'Chilena', flag: '🇨🇱', examples: 'weón, cachai, bacán, po, al tiro, yapo, la raja, filete' },
+    { id: 'colombian', label: 'Colombiana / Paisa', flag: '🇨🇴', examples: 'parce, mor, pues, papacito, chimba, berraquera, de una' },
+    { id: 'argentine', label: 'Argentina', flag: '🇦🇷', examples: 'che, boludo, re, posta, quilombo, ni en pedo, viste' },
+    { id: 'mexican', label: 'Mexicana', flag: '🇲🇽', examples: 'wey, no manches, chido, cabrón, neta, padrísimo, a huevo' },
+    { id: 'spanish', label: 'Española', flag: '🇪🇸', examples: 'tío, mola, chaval, hostia, flipar, guay, qué pasa' },
+    { id: 'peruvian', label: 'Peruana', flag: '🇵🇪', examples: 'causa, pe, chévere, asu mare, pucha, pata, qué palta' },
+    { id: 'brazilian', label: 'Brasileña / Portuñol', flag: '🇧🇷', examples: 'cara, legal, beleza, gostoso, você, né, meu amor' },
+    { id: 'japanese', label: 'Japonesa / Kawaii', flag: '🇯🇵', examples: 'senpai, daisuki, arigato, baka, sugoi, kawaii, uwu' },
+    { id: 'venezuelan', label: 'Venezolana', flag: '🇻🇪', examples: 'chamo, pana, chévere, arrecho, burda, qué ladilla, fino' }
+  ];
 
 export const THEME_COLORS = [
   { id: '#a855f7', name: 'Púrpura Cuántico', class: 'bg-purple-500' },
@@ -235,7 +235,7 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
   return (
     <div className="flex-1 px-4 sm:px-8 py-5 sm:py-8 overflow-y-auto custom-scrollbar">
       <div className="max-w-5xl mx-auto flex flex-col gap-6 sm:gap-8">
-        
+
         {/* Header SaaS */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
           <div>
@@ -281,11 +281,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
                       ...(isIntimate ? { personalityTraits: ['nymphomaniac', 'provocative', 'dominant'] } : {})
                     });
                   }}
-                  className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${
-                    isSelected
+                  className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between gap-3 cursor-pointer ${isSelected
                       ? `bg-gradient-to-br ${mode.color} border-white/40 shadow-[0_0_25px_rgba(255,255,255,0.15)] scale-[1.02]`
                       : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-300'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start justify-between">
                     <span className="text-2xl">{mode.icon}</span>
@@ -326,11 +325,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setActiveCategoryTab('all')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                activeCategoryTab === 'all'
+              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${activeCategoryTab === 'all'
                   ? 'bg-purple-600 text-white shadow-md'
                   : 'bg-white/5 border border-white/10 text-slate-400 hover:text-white'
-              }`}
+                }`}
             >
               Todos ({CATEGORIZED_TRAITS.reduce((acc, c) => acc + c.traits.length, 0)})
             </button>
@@ -338,11 +336,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
               <button
                 key={cat.title}
                 onClick={() => setActiveCategoryTab(idx)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                  activeCategoryTab === idx
+                className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${activeCategoryTab === idx
                     ? 'bg-purple-600 text-white shadow-md'
                     : 'bg-white/5 border border-white/10 text-slate-400 hover:text-white'
-                }`}
+                  }`}
               >
                 <span>{cat.icon}</span>
                 <span>{cat.title}</span>
@@ -369,17 +366,15 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
                         <button
                           key={trait.id}
                           onClick={() => toggleTrait(trait.id)}
-                          className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2.5 cursor-pointer ${
-                            isSelected
+                          className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2.5 cursor-pointer ${isSelected
                               ? 'border-purple-400 bg-purple-600/30 text-white shadow-[0_0_20px_rgba(168,85,247,0.35)] ring-1 ring-purple-400/60 scale-[1.02]'
                               : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:border-white/20'
-                          }`}
+                            }`}
                         >
                           <div className="flex items-start justify-between">
                             <span className="text-2xl">{trait.icon}</span>
-                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${
-                              isSelected ? 'bg-purple-400/40 text-purple-100' : 'bg-white/10 text-slate-400'
-                            }`}>
+                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${isSelected ? 'bg-purple-400/40 text-purple-100' : 'bg-white/10 text-slate-400'
+                              }`}>
                               {trait.tag}
                             </span>
                           </div>
@@ -418,11 +413,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
                 <button
                   key={slang.id}
                   onClick={() => updateAvatar({ regionalSlang: slang.id })}
-                  className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
-                    isSelected
+                  className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${isSelected
                       ? 'border-emerald-400 bg-emerald-600/20 text-white shadow-[0_0_20px_rgba(16,185,129,0.25)] ring-1 ring-emerald-400/50'
                       : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-2xl">{slang.flag}</span>
@@ -485,11 +479,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
                 <button
                   key={c.id}
                   onClick={() => updateAvatar({ themeColor: c.id })}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all cursor-pointer ${isSelected
                       ? 'border-white bg-white/20 shadow-lg scale-105 ring-2 ring-white/40'
                       : 'border-white/10 bg-white/5 hover:bg-white/10 text-slate-300'
-                  }`}
+                    }`}
                 >
                   <div className={`w-3.5 h-3.5 rounded-full ${c.class} shadow-[0_0_8px_currentColor]`} />
                   <span className="text-xs font-bold text-white">{c.name}</span>
@@ -511,17 +504,15 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
                 <button
                   key={v.id}
                   onClick={() => updateAvatar({ voiceName: v.id })}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                    avatar.voiceName === v.id
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${avatar.voiceName === v.id
                       ? 'border-purple-400 bg-purple-600/30 text-white shadow-md'
                       : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                  }`}
+                    }`}
                 >
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-xs font-bold">{v.label}</span>
-                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${
-                      v.gender === 'Femenina' ? 'bg-pink-500/20 text-pink-300' : 'bg-blue-500/20 text-blue-300'
-                    }`}>
+                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${v.gender === 'Femenina' ? 'bg-pink-500/20 text-pink-300' : 'bg-blue-500/20 text-blue-300'
+                      }`}>
                       {v.gender}
                     </span>
                   </div>
@@ -574,11 +565,10 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
               <button
                 key={model.id}
                 onClick={() => setSelectedBrain(model.id as any)}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                  selectedBrain === model.id
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${selectedBrain === model.id
                     ? 'border-purple-400 bg-purple-600/30 text-white shadow-lg ring-1 ring-purple-400'
                     : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                }`}
+                  }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xl">{model.icon}</span>

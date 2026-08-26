@@ -1,8 +1,23 @@
 import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, desktopCapturer, screen, ipcMain, shell, Notification } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
+import os from 'os';
 import fs from 'fs';
+
+/**
+ * Ejecuta un script PowerShell de forma SÍNCRONA escribiéndolo a un archivo
+ * temporal para evitar problemas de escape de comillas en -Command "...".
+ */
+function runPSSync(scriptContent: string): void {
+    const tmpFile = path.join(os.tmpdir(), `nova_ps_${Date.now()}.ps1`);
+    try {
+        fs.writeFileSync(tmpFile, scriptContent, 'utf8');
+        execSync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${tmpFile}"`, { timeout: 5000 });
+    } finally {
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+}
 
 // ============================================================
 // HELPER: Verifica si un proceso está corriendo (Windows)
@@ -801,20 +816,33 @@ app.whenReady().then(() => {
             const downFlag = isRight ? 0x0008 : isMiddle ? 0x0020 : 0x0002;
             const upFlag = isRight ? 0x0010 : isMiddle ? 0x0040 : 0x0004;
 
-            let psCmd = `if (-not ([System.Management.Automation.PSTypeName]'WinMouse').Type) { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMouse { [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo); }'; } `;
-            
+            const scriptLines = [
+                `Add-Type -TypeDefinition @'`,
+                `using System;`,
+                `using System.Runtime.InteropServices;`,
+                `public class WinMouse {`,
+                `    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);`,
+                `    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);`,
+                `}`,
+                `'@ -ErrorAction SilentlyContinue`,
+            ];
+
             if (typeof x === 'number' && typeof y === 'number') {
-                psCmd += `[WinMouse]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}); Start-Sleep -Milliseconds 50; `;
+                scriptLines.push(`[WinMouse]::SetCursorPos(${Math.round(x)}, ${Math.round(y)})`);
+                scriptLines.push(`Start-Sleep -Milliseconds 60`);
             }
 
-            psCmd += `[WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0); [WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0);`;
+            scriptLines.push(`[WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0)`);
+            scriptLines.push(`[WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0)`);
 
             if (double) {
-                psCmd += ` Start-Sleep -Milliseconds 100; [WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0); [WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0);`;
+                scriptLines.push(`Start-Sleep -Milliseconds 100`);
+                scriptLines.push(`[WinMouse]::mouse_event(${downFlag}, 0, 0, 0, 0)`);
+                scriptLines.push(`[WinMouse]::mouse_event(${upFlag}, 0, 0, 0, 0)`);
             }
 
-            exec(`powershell -NoProfile -Command "${psCmd}"`);
-            console.log('🖱️ Mouse click:', button, { x, y, double });
+            runPSSync(scriptLines.join('\n'));
+            console.log('🖱️ Mouse click (sync):', button, { x, y, double });
             return { success: true };
         } catch (e) {
             console.error('Error en mouse-click:', e);
@@ -822,13 +850,25 @@ app.whenReady().then(() => {
         }
     });
 
-    // Mover mouse
+    // Mover mouse (SÍNCRONO - escritura a archivo PS1 temporal para evitar escape de comillas)
     ipcMain.handle('system:mouse-move', async (_event: any, options: { x: number; y: number }) => {
         try {
             const { x, y } = options;
-            const psCmd = `if (-not ([System.Management.Automation.PSTypeName]'WinMouseMove').Type) { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WinMouseMove { [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); }'; } [WinMouseMove]::SetCursorPos(${Math.round(x)}, ${Math.round(y)});`;
-            exec(`powershell -NoProfile -Command "${psCmd}"`);
-            console.log('🖱️ Mouse move:', x, y);
+            const targetX = Math.round(x);
+            const targetY = Math.round(y);
+            const script = [
+                `Add-Type -TypeDefinition @'`,
+                `using System;`,
+                `using System.Runtime.InteropServices;`,
+                `public class WinMouse2 {`,
+                `    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);`,
+                `    [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, int e);`,
+                `}`,
+                `'@ -ErrorAction SilentlyContinue`,
+                `[WinMouse2]::SetCursorPos(${targetX}, ${targetY})`,
+            ].join('\n');
+            runPSSync(script);
+            console.log('🖱️ Mouse move ejecutado (sync):', targetX, targetY);
             return { success: true };
         } catch (e) {
             console.error('Error en mouse-move:', e);
@@ -840,9 +880,10 @@ app.whenReady().then(() => {
     ipcMain.handle('system:type-text', async (_event: any, text: string) => {
         try {
             if (!text) return { success: false, error: 'Texto vacío' };
-            const escaped = text.replace(/'/g, "''").replace(/[\+\^\%~\(\)\{\}\[\]]/g, '{$&}');
-            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')`;
-            exec(`powershell -NoProfile -Command "${psCmd}"`);
+            // Codificar en Base64 para evitar cualquier fallo de escape en PowerShell / comillas / acentos / tildes
+            const b64 = Buffer.from(text, 'utf-8').toString('base64');
+            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; $t = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')); [System.Windows.Forms.SendKeys]::SendWait($t);`;
+            exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`);
             console.log('⌨️ Escribiendo texto:', text);
             return { success: true };
         } catch (e) {
@@ -1019,12 +1060,87 @@ app.whenReady().then(() => {
             });
             if (sources.length > 0 && sources[0].thumbnail) {
                 const base64 = sources[0].thumbnail.toJPEG(75).toString('base64');
-                return { success: true, imageBase64: base64 };
+                return { success: true, imageBase64: base64, mode: 'fullscreen', screenW: 1280, screenH: 720 };
             }
             return { success: false, error: 'No se pudo capturar la pantalla.' };
         } catch (e) {
             console.error('Error en captura nativa de pantalla:', e);
             return { success: false, error: String(e) };
+        }
+    });
+
+    // 🔍 CAPTURA DE VENTANA ESPECÍFICA (Más preciso para juegos y apps)
+    // Busca por nombre fuzzy y captura solo esa ventana con sus bounds reales
+    ipcMain.handle('system:capture-window-frame', async (_event: any, windowName: string) => {
+        try {
+            // Capturar con thumbnail grande para mejor precisión
+            const sources = await desktopCapturer.getSources({
+                types: ['window'],
+                thumbnailSize: { width: 1920, height: 1080 },
+                fetchWindowIcons: false
+            });
+
+            if (!sources.length) {
+                return { success: false, error: 'No hay ventanas disponibles' };
+            }
+
+            // Búsqueda fuzzy por nombre (case insensitive, parcial)
+            const query = windowName.toLowerCase().trim();
+            let match = sources.find(s => s.name.toLowerCase().includes(query));
+
+            // Si no encuentra coincidencia, devolver lista de ventanas disponibles
+            if (!match) {
+                const available = sources.map(s => s.name).join(', ');
+                return {
+                    success: false,
+                    error: `Ventana "${windowName}" no encontrada.`,
+                    available
+                };
+            }
+
+            if (!match.thumbnail) {
+                return { success: false, error: 'No se pudo obtener thumbnail de la ventana' };
+            }
+
+            // Obtener dimensiones reales del thumbnail capturado
+            const size = match.thumbnail.getSize();
+            const base64 = match.thumbnail.toJPEG(85).toString('base64');
+
+            // Obtener bounds de la ventana en pantalla via display info
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const scaleFactor = primaryDisplay.scaleFactor || 1;
+
+            console.log(`🔍 [WindowCapture] Ventana encontrada: "${match.name}" | Thumbnail: ${size.width}x${size.height}`);
+
+            return {
+                success: true,
+                imageBase64: base64,
+                windowName: match.name,
+                mode: 'window',
+                // Dimensiones del thumbnail (para mapeo de coordenadas)
+                thumbW: size.width,
+                thumbH: size.height,
+                scaleFactor
+            };
+        } catch (e) {
+            console.error('Error capturando ventana:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 🧹 LISTAR VENTANAS ABIERTAS (para que Nova sepa qué puede enfocar)
+    ipcMain.handle('system:list-windows', async () => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ['window'],
+                thumbnailSize: { width: 1, height: 1 } // Mínimo para no gastar memoria
+            });
+            return {
+                success: true,
+                windows: sources.map(s => ({ id: s.id, name: s.name }))
+            };
+        } catch (e) {
+            return { success: false, windows: [] };
         }
     });
 

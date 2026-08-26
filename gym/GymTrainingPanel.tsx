@@ -165,7 +165,7 @@ export default function GymTrainingPanel({ isVisible = true }: GymTrainingPanelP
   const [isExporting, setIsExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
   const [collapsed, setCollapsed] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Pollear el servidor REST cada 2s
   const fetchStats = useCallback(async () => {

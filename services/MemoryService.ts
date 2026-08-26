@@ -110,7 +110,8 @@ async function getLocalNeuralPipeline() {
         neuralPipelinePromise = (async () => {
             try {
                 console.log('🧠 [MemoryService] Cargando modelo neuronal semántico local (Transformers.js / WebAssembly)...');
-                const transformers = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+                // @ts-ignore
+                const transformers = await (0, eval)('import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2")');
                 const { pipeline, env } = transformers;
                 env.allowLocalModels = false;
                 env.useBrowserCache = true;

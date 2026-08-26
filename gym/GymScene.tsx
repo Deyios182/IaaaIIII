@@ -29,7 +29,7 @@ function GymContent({ commandQueueRef, onTelemetry, activeModelUrl }: {
 }) {
   return (
     <>
-      <Physics gravity={[0, -9.81, 0]} timestep="vary">
+      <Physics gravity={[0, -9.81, 0]} timeStep="vary">
         <GymEnvironment />
         <RobotAvatar
           commandQueueRef={commandQueueRef}

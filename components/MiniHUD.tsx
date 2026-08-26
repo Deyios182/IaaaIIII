@@ -66,13 +66,13 @@ export const MiniHUD: React.FC<MiniHUDProps> = ({
   // Tactical Log
   const addSysLog = (msg: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 2 } as any);
-    setTacticalLog(prev => [{ text: msg, time, type: 'sys' }, ...prev].slice(0, 8));
+    setTacticalLog(prev => [{ text: msg, time, type: 'sys' as const }, ...prev].slice(0, 8));
   };
 
   useEffect(() => {
     if (lastTranscript) {
       const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setTacticalLog(prev => [{ text: lastTranscript, time, type: 'ai' }, ...prev].slice(0, 8));
+      setTacticalLog(prev => [{ text: lastTranscript, time, type: 'ai' as const }, ...prev].slice(0, 8));
     }
   }, [lastTranscript]);
 

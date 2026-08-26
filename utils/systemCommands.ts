@@ -523,6 +523,16 @@ export async function executeSystemCommand(
                 return { success: false, message: 'Captura nativa no disponible en navegador web' };
             }
 
+
+
+            case 'windowControl': {
+                if (command.windowAction && electronAPI?.controlWindow) {
+                    await electronAPI.controlWindow(command.windowAction, command.target || 'active');
+                    return { success: true, message: `Ventana ${command.windowAction}` };
+                }
+                return { success: false, message: 'Control de ventanas solo disponible en Electron' };
+            }
+
             case 'switchMode': {
                 const mode = command.target || 'companion';
                 window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: { mode } }));

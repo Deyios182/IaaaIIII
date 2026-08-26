@@ -11,6 +11,7 @@ import { JigglePhysicsSystem } from '../utils/jigglePhysics';
 import { getClothingManager } from '../utils/clothingManager';
 import { performanceMonitor } from '../utils/performanceMonitor';
 import { AnimationManager, getAnimationName } from '../utils/animationManager';
+import { animationStore } from '../utils/animationStore';
 import { IKController } from '../utils/ikController';
 import { MoodSystem } from '../utils/moodSystem';
 import { InteractionSystem } from '../utils/interactionSystem';
@@ -2014,15 +2015,18 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     console.log(`🦴 Target: ${boneNames.size} huesos, ${targetRestPoses.size} rest-poses capturadas`);
 
                     const processedClips: THREE.AnimationClip[] = [];
+                    const storedAnim = animationStore.get(name);
+                    const posePreset = storedAnim?.posePreset || 'none';
 
                     animations.forEach((clip: THREE.AnimationClip) => {
                         clip.name = name;
 
                         if (isMixamoAnimation(clip)) {
-                            console.log(`🔄 Retargeteando con corrección rest-pose...`);
+                            console.log(`🎯 Retargeteando con corrección rest-pose...`);
+                            
                             const retargeted = retargetMixamoClip(
                                 clip, boneNames, modelRef.current!,
-                                sourceRestPoses, targetRestPoses
+                                sourceRestPoses, targetRestPoses, posePreset
                             );
                             retargeted.name = name;
                             processedClips.push(retargeted);
@@ -2034,20 +2038,38 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     });
 
                     if (processedClips.length > 0 && mixerRef.current) {
-                        // Parar TODAS las animaciones actuales en el mixer original
-                        mixerRef.current.stopAllAction();
+                        if ((e as CustomEvent).detail.autoplay !== false) {
+                            // Parar TODAS las animaciones actuales en el mixer original
+                            mixerRef.current.stopAllAction();
+                            if (animationManagerRef.current) {
+                                animationManagerRef.current.stopAll(0);
+                            }
 
-                        // Reproducir el clip retargetado en el mixer ORIGINAL del modelo
-                        // Esto es crucial: el mixer original está conectado a TODAS las mallas
-                        // (body, face, clothing, shoes), no solo al skeleton
-                        const clipAction = mixerRef.current.clipAction(processedClips[0]);
-                        clipAction.reset();
-                        clipAction.setLoop(THREE.LoopRepeat, Infinity);
-                        clipAction.clampWhenFinished = false;
-                        clipAction.play();
+                            // Reproducir el clip retargetado en el mixer ORIGINAL del modelo
+                            const clipAction = mixerRef.current.clipAction(processedClips[0]);
+                            clipAction.reset();
+                            clipAction.setLoop(THREE.LoopRepeat, Infinity);
+                            clipAction.clampWhenFinished = false;
+                            clipAction.play();
+                            
+                            externalAnimPlayingRef.current = true;
+                            console.log(`🎬 Animación "${name}" reproduciéndose en mixer original - TODAS las mallas se actualizan`);
+                        } else {
+                            console.log(`🎬 Animación "${name}" registrada exitosamente en background.`);
+                        }
 
-                        externalAnimPlayingRef.current = true;
-                        console.log(`🎯 Animación "${name}" reproduciéndose en mixer original - TODAS las mallas se actualizan`);
+                        // NUEVO: Guardar en el AnimationManager para que Nova pueda invocarla luego por su nombre (etiqueta)
+                        if (animationManagerRef.current) {
+                            animationManagerRef.current.registerAnimation(name.toLowerCase(), processedClips[0]);
+                            if (storedAnim?.customTag) {
+                                animationManagerRef.current.registerAnimation(storedAnim.customTag.toLowerCase(), processedClips[0]);
+                            }
+                        // Reproducir automáticamente si coincide con la acción actual
+                        const currentAction = action;
+                        if (currentAction && (currentAction.toLowerCase() === name.toLowerCase() || currentAction.toLowerCase() === storedAnim?.customTag?.toLowerCase())) {
+                            animationManagerRef.current!.play(currentAction.toLowerCase(), { priority: 10, loop: false });
+                        }
+                        }
                     }
                 } else {
                     console.warn(`⚠️ "${name}" no contiene animaciones`);
@@ -2058,6 +2080,20 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         };
 
         window.addEventListener('nova-load-animation', handler);
+
+        // Auto-cargar animaciones almacenadas previamente para este modelo
+        const storedAnims = animationStore.getAll();
+        if (storedAnims.length > 0) {
+            console.log(`🎬 [AvatarViewer3D] Auto-cargando ${storedAnims.length} animaciones persistidas...`);
+            setTimeout(() => {
+                storedAnims.forEach(anim => {
+                    window.dispatchEvent(new CustomEvent('nova-load-animation', { 
+                        detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: false } 
+                    }));
+                });
+            }, 500); // Pequeño delay para asegurar que el motor y materiales estén listos
+        }
+
         return () => window.removeEventListener('nova-load-animation', handler);
     }, [gltf]);
 
@@ -2202,6 +2238,11 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
                     }
                     // SOLO reproducimos Idle en el AnimationManager para evitar el bug de mallas dobles (Rigify)
                     played = animationManagerRef.current.play(finalName, { priority: 10, loop: true });
+                } else if (animationManagerRef.current.hasAnimation(finalName) || animationManagerRef.current.hasAnimation(action.toLowerCase())) {
+                    // Si existe un clip real con ese nombre (o la etiqueta), lo usamos!
+                    const nameToPlay = animationManagerRef.current.hasAnimation(action.toLowerCase()) ? action.toLowerCase() : finalName;
+                    console.log(`🎬 Reproduciendo clip de animación real: ${nameToPlay}`);
+                    played = animationManagerRef.current.play(nameToPlay, { priority: 10, loop: false });
                 } else {
                     // Para cualquier otra acción, forzamos el uso de animaciones procedurales 
                     // porque las animaciones de Mixamo/Blender rompen la columna (vertex weights desalineados)
@@ -2270,60 +2311,14 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
             lastAnimationUpdateRef.current = now;
         }
 
+        const isExternalAnimPlaying = (animationManagerRef.current?.isPlayingExternal() ?? false) || externalAnimPlayingRef.current;
+
         const t = state.clock.elapsedTime;
         if (mixerRef.current) mixerRef.current.update(delta);
 
-        // Recalibrate IKController bind pose after AnimationMixer has applied the standing animation
-        if (ikRecalibrateFrames.current > 0) {
-            ikRecalibrateFrames.current--;
-            if (ikRecalibrateFrames.current === 0) {
-                if (ikControllerRef.current) {
-                    ikControllerRef.current.recalibrateBindPose();
-                }
-
-                // CRÍTICO: Recalibrar headOriginalQuat.current y headOriginalPos.current
-                // para que el sistema de huesos huérfanos (pelo, ojos) calcule el delta
-                // respecto al mismo punto de referencia que el IKController.
-                if (headBoneRef.current) {
-                    headOriginalQuat.current.copy(headBoneRef.current.quaternion);
-                    headOriginalPos.current.copy(headBoneRef.current.position);
-
-                    // Forzar actualización global de matrices para capturar offset real
-                    headBoneRef.current.updateWorldMatrix(true, false);
-                    const headWorldInv = headBoneRef.current.matrixWorld.clone().invert();
-
-                    // También recalibrar los originalQuat de los huérfanos y su offsetMatrix mundial
-                    headOrphansRef.current.forEach(orphan => {
-                        orphan.originalQuat.copy(orphan.bone.quaternion);
-                        orphan.originalPos.copy(orphan.bone.position);
-
-                        orphan.bone.updateWorldMatrix(true, false);
-                        orphan.offsetMatrix = headWorldInv.clone().multiply(orphan.bone.matrixWorld);
-                    });
-                    console.log('✅ headOriginalQuat + orphans recalibrados al estado Idle estabilizado');
-                }
-
-                // CRÍTICO: Recalibrar también userData.baseQuat para que cualquier reseteo (como al volver a Idle)
-                if (modelRef.current) {
-                    modelRef.current.traverse((child: any) => {
-                        if (child.isBone) {
-                            const name = child.name.toLowerCase();
-                            const isArm = name.includes('arm') || name.includes('hand') || name.includes('shoulder') ||
-                                name.includes('elbow') || name.includes('wrist') || name.includes('finger') ||
-                                name.includes('thumb');
-                            if (!isArm) {
-                                child.userData.baseQuat = child.quaternion.clone();
-                            }
-                        }
-                    });
-                    console.log("✅ Recalibración dinámica de userData.baseQuat completa (brazos excluidos)");
-                }
-            }
-        }
-
-        // === ACTUALIZAR NUEVOS SISTEMAS ===
-        if (animationManagerRef.current) animationManagerRef.current.update(delta);
-        if (proceduralAnimatorRef.current) proceduralAnimatorRef.current.update(t, delta);
+        // === ACTUALIZAR NUEVOS SISTEMAS (Solo si NO hay animación externa activa para evitar conflicto de mixers y velocidad 2x) ===
+        if (animationManagerRef.current && !isExternalAnimPlaying) animationManagerRef.current.update(delta);
+        if (proceduralAnimatorRef.current && !isExternalAnimPlaying) proceduralAnimatorRef.current.update(t, delta);
 
         // === Si hay animación externa (Mixamo), proceduralAnimator o idle ===
         // El parpadeo y lipsync se procesan de forma unificada más abajo en el render loop
@@ -2372,10 +2367,12 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             // Seguir dinámicamente la posición de la cámara 3D (para que el avatar te mire a los ojos y siga la cámara al rotar/mover la vista)
             ikControllerRef.current.setLookTarget(state.camera.position, true);
+        }
 
-            // Inyectar el estado del baile actual (calculado en el frame anterior o actual)
+        // Inyectar el estado del baile actual (calculado en el frame anterior o actual)
+        if (ikControllerRef.current?.isInitialized()) {
             ikControllerRef.current.setDanceState(musicEnergyRef.current, danceTimeRef.current);
-            ikControllerRef.current.update(delta, externalAnimPlayingRef.current);
+            ikControllerRef.current.update(delta, isExternalAnimPlaying);
         }
 
         // --- SINCRONIZACIÓN DE CABELLO SE MOVIÓ AL FINAL DEL FRAME ---
@@ -2388,10 +2385,10 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // Si hay una animación activa (clip o procedural), reducir influencia del idle arm code
         const isIdlePlaying = animationManagerRef.current?.isPlaying('Idle') ?? true;
         const isProceduralPlaying = proceduralAnimatorRef.current?.isPlaying() ?? false;
-        const proceduralLayerWeight = (isIdlePlaying && !action && !isProceduralPlaying) ? 1.0 : 0.0;
+        const proceduralLayerWeight = (isIdlePlaying && !action && !isProceduralPlaying && !isExternalAnimPlaying) ? 1.0 : 0.0;
 
         // --- 1. MOVIMIENTO "VIVO" AVANZADO (Procedural Animation) ---
-        if (modelRef.current && !externalAnimPlayingRef.current) {
+        if (modelRef.current && !isExternalAnimPlaying) {
 
             // --- 0. INTERACCIÓN FÍSICA A MORPH TARGETS ---
             if (interactionLayerRef.current) {
@@ -2601,7 +2598,7 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         // --- 🖐️ FINGER PROCEDURAL ANIMATION ---
         // Usa targets ABSOLUTOS en local-space para evitar acumulación del origX del bind-pose.
         // Los targets fueron calibrados para el GrokAni Rigify rig.
-        if (isGrokAniRef.current && !externalAnimPlayingRef.current) {
+        if (isGrokAniRef.current && !isExternalAnimPlaying) {
             fingerPoseRef.current.timer += delta;
 
             if (fingerPoseRef.current.timer > 4.5 + Math.random() * 2) {
@@ -2923,6 +2920,12 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
 
             // Actualizar morphs faciales (ojos, cejas, boca base)
             updateFacialExpression(morphTargetMeshes, emotion, isAiSpeaking);
+
+            const boneLerp = isAiSpeaking ? 0.35 : 0.18;
+            const topZOffset = autoMouthOpen * 0.015;
+            const bottomZOffset = -autoMouthOpen * 0.025;
+            const cornerXOffset = autoMouthOpen * 0.008;
+
             if (lipTopOuterRef.current && lipTopOuterOriginalPos.current) {
                 lipTopOuterRef.current.position.z = THREE.MathUtils.lerp(lipTopOuterRef.current.position.z, lipTopOuterOriginalPos.current.z + topZOffset * 0.85, boneLerp);
                 lipTopOuterRef.current.position.x = THREE.MathUtils.lerp(lipTopOuterRef.current.position.x, lipTopOuterOriginalPos.current.x + cornerXOffset * 0.9, boneLerp);
@@ -3407,6 +3410,22 @@ function AvatarModel({ modelUrl, emotion, action, audioElement, isAiSpeaking, is
         window.addEventListener('nova-pose', handleNovaPose);
         window.addEventListener('nova-fluid', handleNovaFluid);
         window.addEventListener('nova-touch', handleNovaTouch);
+
+        const handleNovaDance = (event: any) => {
+            const style = event.detail?.style;
+            if (style && animationManagerRef.current) {
+                console.log(`💃 [AvatarViewer3D] Reproduciendo baile: ${style}`);
+                animationManagerRef.current.play(style, { loop: true, blendDuration: 0.5, priority: 8 });
+            }
+        };
+        const handleNovaStopDance = () => {
+            if (animationManagerRef.current) {
+                console.log(`🛑 [AvatarViewer3D] Deteniendo baile y volviendo a Idle`);
+                animationManagerRef.current.play('Idle', { loop: true, blendDuration: 0.5, priority: 5 });
+            }
+        };
+        window.addEventListener('nova-dance', handleNovaDance);
+        window.addEventListener('nova-stop-dance', handleNovaStopDance);
 
         const handleNovaWalkTo = (event: any) => {
             const { x, z, y } = event.detail || {};

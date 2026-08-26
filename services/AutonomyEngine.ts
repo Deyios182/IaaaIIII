@@ -219,8 +219,8 @@ export class AutonomyEngine {
         const silenceMs = now - this.lastSpeakTime;
         const silenceMin = silenceMs / 60000;
 
-        // Solo actuar si hay cierto silencio (al menos 8 min desde última interacción)
-        if (silenceMin < 8 && this.lastSpeakTime !== 0) {
+        // Solo actuar si hay cierto silencio (al menos 2 min desde última interacción)
+        if (silenceMin < 2 && this.lastSpeakTime !== 0) {
             console.log(`🤖 [AutonomyEngine] Silencio de solo ${silenceMin.toFixed(1)} min — postponiendo`);
             return;
         }

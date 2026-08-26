@@ -67,7 +67,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
         let audioContext: AudioContext | null = null;
         let mediaStream: MediaStream | null = null;
         let source: MediaStreamAudioSourceNode | null = null;
-        let processor: ScriptProcessorNode | null = null;
+        let processor: AudioNode | null = null;
         let isUnmounted = false;
 
         const initVosk = async () => {
@@ -132,24 +132,26 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                 }
 
                 source = audioContext.createMediaStreamSource(mediaStream);
-                processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-                processor.onaudioprocess = (event) => {
-                    if (recognizer) {
+                // Migración a AudioWorkletNode (sin deprecation warning, menor latencia y sin bloquear UI)
+                await audioContext.audioWorklet.addModule('/vosk-processor.js');
+                const workletNode = new AudioWorkletNode(audioContext, 'vosk-audio-processor');
+
+                workletNode.port.onmessage = (event) => {
+                    if (recognizer && event.data) {
                         try {
-                            recognizer.acceptWaveform(event.inputBuffer);
+                            const buffer = audioContext!.createBuffer(1, event.data.length, 16000);
+                            buffer.copyToChannel(event.data, 0);
+                            recognizer.acceptWaveform(buffer);
                         } catch {}
                     }
                 };
 
-                source.connect(processor);
-                const muteGain = audioContext.createGain();
-                muteGain.gain.value = 0;
-                processor.connect(muteGain);
-                muteGain.connect(audioContext.destination);
+                source.connect(workletNode);
+                processor = workletNode;
 
                 setIsListening(true);
-                console.log('👂 [WakeWord Vosk] Motor Open Source inicializado y escuchando.');
+                console.log('👂 [WakeWord Vosk] Motor AudioWorklet inicializado y escuchando.');
             } catch (error) {
                 console.error('❌ [WakeWord Vosk] Error al iniciar:', error);
                 setIsListening(false);
@@ -163,13 +165,13 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
             setIsListening(false);
             if (processor && source) {
                 try { source.disconnect(); } catch {}
-                try { processor.disconnect(); } catch {}
+                try { (processor as any).disconnect?.(); } catch {}
             }
             if (audioContext && audioContext.state !== 'closed') {
                 try { audioContext.close(); } catch {}
             }
             if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
+                try { mediaStream.getTracks().forEach(track => track.stop()); } catch {}
             }
             if (recognizer) {
                 try { recognizer.free(); } catch {}

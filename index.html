@@ -4,61 +4,10 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Compañero IA</title>
-    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https: data: blob: ws: wss:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval' blob: data: https://cdn.jsdelivr.net; script-src-elem 'self' 'unsafe-inline' blob: data: https://cdn.jsdelivr.net; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https: wss: ws: blob: data: https://cdn.jsdelivr.net https://huggingface.co https://*.hf.co;" />
+    <title>Nova IA - Asistente Holográfico</title>
     <link href="https://fonts.googleapis.com/css2?family=Spline+Sans:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
-    <script>
-        tailwind.config = {
-            darkMode: "class",
-            theme: {
-                extend: {
-                    colors: {
-                        "primary": "#1313ec",
-                        "background-light": "#f6f6f8",
-                        "background-dark": "#101022",
-                        "surface-dark": "#1c1c2e",
-                        "surface-dark-lighter": "#282839",
-                        "surface-border": "#282839",
-                    },
-                    fontFamily: {
-                        "display": ["Spline Sans", "sans-serif"],
-                        "body": ["Noto Sans", "sans-serif"]
-                    },
-                    borderRadius: {
-                        "DEFAULT": "0.5rem",
-                        "lg": "1rem",
-                        "xl": "1.5rem",
-                        "2xl": "2rem",
-                        "full": "9999px"
-                    },
-                },
-            },
-        }
-    </script>
-    <style>
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #282839; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #3f3f5a; }
-        
-        .glass-panel {
-            background: rgba(28, 28, 46, 0.7);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
-
-        .avatar-glow {
-            box-shadow: 0 0 120px -30px rgba(19, 19, 236, 0.2);
-        }
-
-        body {
-            font-family: 'Spline Sans', sans-serif;
-            background-color: #101022;
-            color: white;
-        }
-    </style>
 </head>
 <body class="bg-background-dark text-white">
     <div id="root"></div>

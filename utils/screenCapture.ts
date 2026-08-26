@@ -52,12 +52,14 @@ export async function startScreenCapture(options: ScreenCaptureOptions = {}): Pr
             console.log('🖥️ Usando captura NATIVA de Electron...');
 
             // Usar getUserMedia con chromeMediaSource para Electron
+            const audioConstraint = options.captureAudio !== false ? {
+                mandatory: {
+                    chromeMediaSource: 'desktop',
+                }
+            } as any : false;
+
             screenStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    mandatory: {
-                        chromeMediaSource: 'desktop',
-                    }
-                } as any,
+                audio: audioConstraint,
                 video: {
                     mandatory: {
                         chromeMediaSource: 'desktop',
