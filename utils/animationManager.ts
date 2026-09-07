@@ -153,8 +153,8 @@ export class AnimationManager {
 
         // Configurar acción
         action.reset();
-        action.setLoop(finalConfig.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-        action.clampWhenFinished = !finalConfig.loop;
+        action.setLoop(finalConfig.loop ? THREE.LoopRepeat : THREE.LoopOnce, finalConfig.loop ? Infinity : 1);
+        action.clampWhenFinished = true;
         action.timeScale = finalConfig.timeScale || 1;
 
         // Fade in
@@ -221,6 +221,10 @@ export class AnimationManager {
         this.activeAnimations.forEach(({ config }) => {
             this.stop(config.name, fadeDuration);
         });
+        if (fadeDuration === 0) {
+            this.actions.forEach(action => action.stop());
+            this.activeAnimations = [];
+        }
     }
 
     /**
@@ -282,10 +286,16 @@ export class AnimationManager {
     }
 
     /**
-     * Verificar si existe una animación
+     * Verificar si existe una animación (con soporte case-insensitive y sin guiones)
      */
     hasAnimation(name: string): boolean {
-        return this.clips.has(name);
+        if (!name) return false;
+        if (this.clips.has(name) || this.actions.has(name)) return true;
+        const lower = name.toLowerCase().replace(/[_\s-]/g, '');
+        for (const k of this.clips.keys()) {
+            if (k.toLowerCase().replace(/[_\s-]/g, '') === lower) return true;
+        }
+        return false;
     }
 
     /**

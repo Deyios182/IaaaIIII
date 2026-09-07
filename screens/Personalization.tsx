@@ -101,6 +101,7 @@ const Personalization: React.FC<PersonalizationProps> = ({ avatar, updateAvatar,
             <div className="grid grid-cols-2 gap-2">
               {[
                 { name: 'Nova Original', url: '/models/nova-avatar.glb', img: 'https://render.readyplayer.me/676ed830026e476839352e82.png' },
+                { name: 'Anie Chafa', url: '/models/anichafa.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23f59e0b" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="11">ANIE CHAFA</text></svg>' },
                 { name: 'Grokani', url: '/models/grokani_lipsync.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23ec4899" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="12">GROKANI</text></svg>' },
                 { name: 'Android', url: '/models/Android.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%238b5cf6" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="11">ANDROID</text></svg>' },
                 { name: 'Cyberpunk', url: 'https://models.readyplayer.me/6185a4acfb622cf1cdc49348.glb', img: 'https://render.readyplayer.me/6185a4acfb622cf1cdc49348.png' },

@@ -62,9 +62,19 @@ export class ProceduralAnimator {
   private restPose: Map<string, THREE.Euler> = new Map();
   private initialized = false;
   private swayIntensity = 1.0;
+  private musicBpm = 120;
+  private musicEnergy = 0.5;
+  private isMusicActive = false;
 
   setSwayIntensity(intensity: number): void {
     this.swayIntensity = intensity;
+  }
+
+  /** Sincronización rítmica con el reproductor de música y analizador de audio */
+  setMusicSync(bpm: number, energy: number, isMusicActive: boolean): void {
+    if (bpm > 40 && bpm < 240) this.musicBpm = bpm;
+    this.musicEnergy = Math.max(0, Math.min(1, energy));
+    this.isMusicActive = isMusicActive;
   }
 
   initialize(bones: BoneRefs): void {
@@ -93,6 +103,16 @@ export class ProceduralAnimator {
       'blow_kiss': 3.2, 'beso': 3.2, 'listen_attentive': 3.6, 'escuchar': 3.6,
       'curious_lean': 3.2, 'curiosa': 3.2, 'stretch_relax': 3.5, 'estirarse': 3.5,
       'playful_tease': 3.2, 'picara': 3.2,
+      'celebrate': 3.2, 'celebrar': 3.2, 'festejar': 3.2,
+      'pose_sexy': 3.8, 'sexy': 3.8, 'sensual': 3.8,
+      'sensual_hip_sway': 4.2, 'bamboleo': 4.2, 'caderas_sexy': 4.2,
+      'chest_caress': 3.6, 'caricia_pecho': 3.6, 'escote': 3.6,
+      'hair_touch': 3.4, 'pelo_coqueta': 3.4,
+      'seductive_look': 3.5, 'mirada_sexy': 3.5, 'seductora': 3.5,
+      'arch_back': 3.8, 'arquearse': 3.8, 'pose_sensual': 3.8,
+      'submissive_lean': 3.6, 'inclinacion_sexy': 3.6,
+      'peace': 2.5, 'paz': 2.5, 'victoria': 2.5,
+      'rhythm_bounce': 4.0, 'ritmo': 4.0, 'groove': 4.0,
       'crouch': 3.5, 'agachate': 3.5, 'touch_head': 3.0, 'toca_cabeza': 3.0,
       'touch_chest': 3.0, 'mano_pecho': 3.0, 'hold_foot': 3.5, 'toma_pie': 3.5,
       'hands_on_hips': 3.0, 'manos_caderas': 3.0, 'hug_self': 3.5, 'abrazarse': 3.5,
@@ -246,47 +266,55 @@ export class ProceduralAnimator {
       }
 
       case 'dance': {
-        const beat = t * 3.8;
+        const beatRate = this.isMusicActive && this.musicBpm > 0
+          ? (this.musicBpm / 60) * Math.PI
+          : 3.8;
+        const energySway = this.isMusicActive ? (0.7 + this.musicEnergy * 0.6) : 1.0;
+        const beat = t * beatRate;
         if (hips) {
           const rest = this.restPose.get('hips');
-          const hipSwayY = Math.sin(beat) * deg(7.5) * intensity * this.swayIntensity;
-          const hipSwayZ = Math.cos(beat * 0.5) * deg(4.0) * intensity * this.swayIntensity;
+          const hipSwayY = Math.sin(beat) * deg(7.5) * intensity * this.swayIntensity * energySway;
+          const hipSwayZ = Math.cos(beat * 0.5) * deg(4.0) * intensity * this.swayIntensity * energySway;
           hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + hipSwayY, 0.1);
           hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + hipSwayZ, 0.1);
         }
         if (spine) {
           const rest = this.restPose.get('spine');
-          const spineSway = Math.sin(beat + 0.8) * deg(4.5) * intensity * this.swayIntensity;
-          const spineBob = Math.sin(beat * 2.0) * deg(2.0) * intensity;
+          const spineSway = Math.sin(beat + 0.8) * deg(4.5) * intensity * this.swayIntensity * energySway;
+          const spineBob = Math.sin(beat * 2.0) * deg(2.0) * intensity * energySway;
           spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + spineSway, 0.1);
           spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + spineBob, 0.1);
         }
         if (head) {
           const rest = this.restPose.get('head');
-          const headBob = Math.sin(beat * 2.0) * deg(3.0) * intensity;
+          const headBob = Math.sin(beat * 2.0) * deg(3.0) * intensity * energySway;
           const headTilt = Math.sin(beat) * deg(3.5) * intensity;
           head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + headBob, 0.1);
           head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + headTilt, 0.1);
         }
         if (rightArm) {
           const rest = this.restPose.get('rightArm');
-          const armRotX = (rest?.x || 0) + deg(18) * intensity + Math.sin(beat) * deg(8) * intensity;
+          const armRotX = (rest?.x || 0) + deg(18) * intensity + Math.sin(beat) * deg(8) * intensity * energySway;
           rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, armRotX, 0.1);
         }
         if (leftArm) {
           const rest = this.restPose.get('leftArm');
-          const armRotX = (rest?.x || 0) + deg(18) * intensity + Math.sin(beat + Math.PI) * deg(8) * intensity;
+          const armRotX = (rest?.x || 0) + deg(18) * intensity + Math.sin(beat + Math.PI) * deg(8) * intensity * energySway;
           leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, armRotX, 0.1);
         }
         break;
       }
 
       case 'sing': {
-        const beat = t * 3.2;
+        const beatRate = this.isMusicActive && this.musicBpm > 0
+          ? (this.musicBpm / 60) * Math.PI * 0.8
+          : 3.2;
+        const energySway = this.isMusicActive ? (0.8 + this.musicEnergy * 0.5) : 1.0;
+        const beat = t * beatRate;
         if (hips) {
           const rest = this.restPose.get('hips');
-          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(9) * intensity * this.swayIntensity, 0.08);
-          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + Math.cos(beat * 0.5) * deg(3.5) * intensity * this.swayIntensity, 0.08);
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(beat) * deg(9) * intensity * this.swayIntensity * energySway, 0.08);
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + Math.cos(beat * 0.5) * deg(3.5) * intensity * this.swayIntensity * energySway, 0.08);
         }
         if (spine) {
           const rest = this.restPose.get('spine');
@@ -762,6 +790,309 @@ export class ProceduralAnimator {
         }
         break;
       }
+
+      case 'celebrate':
+      case 'celebrar':
+      case 'festejar': {
+        const bounce = Math.abs(Math.sin(t * 8.0));
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-8) * intensity + bounce * deg(4), lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-12) * intensity, lerp);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + Math.sin(t * 6.0) * deg(4) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(80) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-45) * intensity + Math.sin(t * 8.0) * deg(10) * intensity, lerp);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(80) * intensity, lerp);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, (rest?.z || 0) + deg(45) * intensity - Math.sin(t * 8.0) * deg(10) * intensity, lerp);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + Math.sin(t * 6.0) * deg(5) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'pose_sexy':
+      case 'sexy':
+      case 'sensual': {
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-14) * intensity, lerp);
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + deg(8) * intensity, lerp);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + deg(6) * intensity, lerp);
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-5) * intensity, lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(11) * intensity, 0.1);
+          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, (rest?.y || 0) + deg(-6) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(25) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-35) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(55) * intensity, lerp);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(50) * intensity, lerp);
+          leftArm.rotation.y = THREE.MathUtils.lerp(leftArm.rotation.y, (rest?.y || 0) + deg(30) * intensity, lerp);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, (rest?.z || 0) + deg(20) * intensity, lerp);
+        }
+        if (leftForeArm) {
+          leftForeArm.rotation.z = THREE.MathUtils.lerp(leftForeArm.rotation.z, deg(-65) * intensity, lerp);
+        }
+        break;
+      }
+
+      case 'sensual_hip_sway':
+      case 'bamboleo':
+      case 'caderas_sexy': {
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          const swayY = Math.sin(t * 3.5) * deg(12) * intensity;
+          const swayZ = Math.cos(t * 3.5) * deg(10) * intensity;
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + swayY, 0.15);
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + swayZ, 0.15);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          const spineArch = deg(-7) * intensity;
+          const spineCounter = Math.sin(t * 3.5) * deg(-4) * intensity;
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + spineArch, 0.1);
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + spineCounter, 0.1);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(8) * intensity, 0.1);
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-5) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(22) * intensity, 0.1);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-30) * intensity, 0.1);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(60) * intensity, 0.1);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(22) * intensity, 0.1);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, (rest?.z || 0) + deg(30) * intensity, 0.1);
+        }
+        if (leftForeArm) {
+          leftForeArm.rotation.z = THREE.MathUtils.lerp(leftForeArm.rotation.z, deg(-60) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'chest_caress':
+      case 'caricia_pecho':
+      case 'escote': {
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(48) * intensity, lerp);
+          rightArm.rotation.y = THREE.MathUtils.lerp(rightArm.rotation.y, (rest?.y || 0) + deg(-25) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-28) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          const caressWave = Math.sin(t * 3.0) * deg(7);
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, (deg(78) + caressWave) * intensity, lerp);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-6) * intensity, 0.08);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-8) * intensity, 0.1);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(-7) * intensity, 0.1);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-8) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'hair_touch':
+      case 'pelo_coqueta': {
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(88) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-42) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          const wave = Math.sin(t * 2.5) * deg(5);
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, (deg(108) + wave) * intensity, lerp);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(13) * intensity, 0.1);
+          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, (rest?.y || 0) + deg(-8) * intensity, 0.1);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-10) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'seductive_look':
+      case 'mirada_sexy':
+      case 'seductora': {
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-7) * intensity, 0.1);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(11) * intensity, 0.1);
+          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, (rest?.y || 0) + deg(12) * intensity, 0.1);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, (rest?.z || 0) + deg(-5) * intensity, 0.1);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-14) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(15) * intensity, 0.1);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-25) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'arch_back':
+      case 'arquearse':
+      case 'pose_sensual': {
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(-13) * intensity, 0.1);
+          spine.rotation.y = THREE.MathUtils.lerp(spine.rotation.y, (rest?.y || 0) + deg(4) * intensity, 0.1);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, (rest?.x || 0) + deg(10) * intensity, 0.1);
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(8) * intensity, 0.1);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-10) * intensity, 0.1);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(6) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(25) * intensity, 0.1);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-30) * intensity, 0.1);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(25) * intensity, 0.1);
+          leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, (rest?.z || 0) + deg(30) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'submissive_lean':
+      case 'inclinacion_sexy': {
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + deg(15) * intensity, 0.1);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-14) * intensity, 0.12);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, (rest?.x || 0) + deg(-8) * intensity, 0.1);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(-18) * intensity, 0.1);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(-18) * intensity, 0.1);
+        }
+        break;
+      }
+
+      case 'peace':
+      case 'paz':
+      case 'victoria': {
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(65) * intensity, lerp);
+          rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, (rest?.z || 0) + deg(-30) * intensity, lerp);
+        }
+        if (rightForeArm) {
+          rightForeArm.rotation.z = THREE.MathUtils.lerp(rightForeArm.rotation.z, deg(80) * intensity, lerp * 1.5);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + deg(9) * intensity, 0.1);
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + deg(-4) * intensity, 0.1);
+        }
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          hips.rotation.z = THREE.MathUtils.lerp(hips.rotation.z, (rest?.z || 0) + deg(-6) * intensity, lerp);
+        }
+        break;
+      }
+
+      case 'rhythm_bounce':
+      case 'ritmo':
+      case 'groove': {
+        const beatRate = this.isMusicActive && this.musicBpm > 0
+          ? (this.musicBpm / 60) * Math.PI * 2
+          : 5.0;
+        const energySway = this.isMusicActive ? (0.6 + this.musicEnergy * 0.8) : 1.0;
+        const beat = t * beatRate;
+        if (hips) {
+          const rest = this.restPose.get('hips');
+          const hipBounce = Math.abs(Math.sin(beat * 0.5)) * deg(3.5) * intensity * energySway;
+          const hipSway = Math.sin(beat * 0.5) * deg(5.0) * intensity * energySway;
+          hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, (rest?.x || 0) + hipBounce, 0.15);
+          hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, (rest?.y || 0) + hipSway, 0.15);
+        }
+        if (spine) {
+          const rest = this.restPose.get('spine');
+          const spineBob = Math.sin(beat) * deg(3.0) * intensity * energySway;
+          spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, (rest?.x || 0) + spineBob, 0.12);
+        }
+        if (head) {
+          const rest = this.restPose.get('head');
+          const headBob = Math.cos(beat) * deg(4.0) * intensity * energySway;
+          const headTilt = Math.sin(beat * 0.5) * deg(3.0) * intensity;
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, (rest?.x || 0) + headBob, 0.15);
+          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, (rest?.z || 0) + headTilt, 0.12);
+        }
+        if (rightArm) {
+          const rest = this.restPose.get('rightArm');
+          rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, (rest?.x || 0) + deg(15) * intensity + Math.sin(beat * 0.5) * deg(8) * intensity * energySway, 0.1);
+        }
+        if (leftArm) {
+          const rest = this.restPose.get('leftArm');
+          leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, (rest?.x || 0) + deg(15) * intensity - Math.sin(beat * 0.5) * deg(8) * intensity * energySway, 0.1);
+        }
+        break;
+      }
     }
 
     // Sincronizar cuaterniones de todos los huesos modificados para que el renderizado de Three.js
@@ -791,9 +1122,10 @@ export class ProceduralAnimator {
     return [
       'wave', 'nod', 'shake_head', 'shrug', 'dance', 'excited', 'happy',
       'sad', 'thinking', 'surprised', 'angry', 'confused', 'point', 'bow',
-      'stretch', 'flirt', 'laugh', 'shy', 'clap',
+      'stretch', 'flirt', 'laugh', 'shy', 'clap', 'sing',
       'blow_kiss', 'listen_attentive', 'curious_lean', 'stretch_relax', 'playful_tease',
-      'crouch', 'touch_head', 'touch_chest', 'hold_foot', 'hands_on_hips', 'hug_self'
+      'celebrate', 'pose_sexy', 'peace', 'rhythm_bounce',
+      'crouch', 'touch_head', 'touch_chest', 'hold_foot', 'hands_on_hips', 'hug_self', 'balance'
     ];
   }
 }

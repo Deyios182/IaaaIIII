@@ -324,9 +324,28 @@ class AvatarErrorBoundary extends React.Component<{ children: React.ReactNode, f
 
 // Variable global a nivel de módulo para mantener el estado de la ventana activa 
 // y que pueda ser accedida por helpers fuera del ciclo de vida de React
-export let globalActiveWindowBounds: { name: string; thumbW: number; thumbH: number } | null = null;
-export function setGlobalActiveWindowBounds(bounds: { name: string; thumbW: number; thumbH: number } | null) {
+let globalActiveWindowBounds: { name: string; thumbW: number; thumbH: number } | null = null;
+function setGlobalActiveWindowBounds(bounds: { name: string; thumbW: number; thumbH: number } | null) {
   globalActiveWindowBounds = bounds;
+}
+
+// Helper para verificar de manera robusta que el WebSocket subyacente de la sesión está 100% ABIERTO (readyState === 1)
+function isLiveSessionOpen(session: any): boolean {
+  if (!session) return false;
+  const ws = session?.conn?.ws
+    || session?.ws
+    || session?._ws
+    || session?.socket
+    || session?.transport?.ws
+    || session?.transport?._ws
+    || session?.transport?.socket
+    || session?.transport?.connection
+    || session?.client?.ws;
+  if (ws && typeof ws.readyState === 'number') {
+    return ws.readyState === 1; // 1 = WebSocket.OPEN
+  }
+  // Si no se encuentra socket pero sendRealtimeInput es función, verificar que no esté cerrado
+  return typeof session.sendRealtimeInput === 'function';
 }
 
 // Helper unificado para extraer y ejecutar comandos corporales, gestos y expresiones 3D desde cualquier texto de IA
@@ -1176,6 +1195,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   }, [isInCall, isCameraCapturing, isLiveMirror, state.knownPeople.length, state.userProfile]);
 
   // NÚCLEO DE AUTONOMÍA UNIFICADO: Saludo y Proactividad (AutonomyEngine)
+  // 1. Instanciar y controlar inicio / parada según isInCall e isBold
   useEffect(() => {
     if (!isInCall || isBold) {
       const engine = getAutonomyEngine();
@@ -1187,7 +1207,6 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
     console.log(`🧠 Sistema de Autonomía (AutonomyEngine) Iniciado - Modo: NORMAL`);
 
-    // Inicializar el motor autónomo
     const engine = createAutonomyEngine({
       userInterests: state.userProfile.interests || [],
       userName: state.userName,
@@ -1195,36 +1214,61 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       onNovaSpeak: (message, type) => {
         console.log(`🤖 [AutonomyEngine Triggered] ${type}: ${message}`);
 
-        // 1. Mostrar de forma visual (acción escénica) en el chat
+        // 1. Mostrar de forma visual en el chat
         if (!isMiniMode) {
           addMessage({ text: `💭 (Pensando en voz alta): ${message}`, sender: 'ai' });
         }
 
-        // 2. Enviar a Gemini para que lo diga con su voz
+        // 2. Enviar a Gemini Live usando sendClientContent para que responda con su propia voz
         if (liveSessionRef.current) {
           try {
             // @ts-ignore
-            liveSessionRef.current.sendRealtimeInput({
-              text: `SYSTEM_EVENT: [AUTONOMOUS_INITIATIVE] Toma la iniciativa de forma espontánea y coméntale esto al usuario: "${message}". Reacciona en tu personaje, exprésalo con voz alta de forma natural, fresca y variada, sin repetir frases ni esquemas pasados.`
-            });
+            if (typeof liveSessionRef.current.sendClientContent === 'function') {
+              // @ts-ignore
+              liveSessionRef.current.sendClientContent({
+                turns: [{
+                  role: 'user',
+                  parts: [{
+                    text: `[SISTEMA - INICIATIVA ESPONTÁNEA: Toma la palabra ahora mismo de forma espontánea y coméntale esto a ${state.userName}: "${message}". Reacciona con tu personalidad activa, habla en voz alta de manera natural, fresca y viva, sin repetir fórmulas mecánicas.]`
+                  }]
+                }],
+                turnComplete: true
+              });
+            } else {
+              // @ts-ignore
+              liveSessionRef.current.sendRealtimeInput?.({
+                text: `[INICIATIVA ESPONTÁNEA: "${message}"]`
+              });
+            }
           } catch (e) {
             console.warn('⚠️ Error enviando trigger autónomo a Gemini:', e);
           }
         }
       },
-      minIntervalMinutes: 15,
-      maxIntervalMinutes: 30,
+      minIntervalMinutes: 3,
+      maxIntervalMinutes: 7,
       enabled: !isBold
     });
 
     engine.start();
 
-    // Mantener la verificación periódica de solicitud de cámara
     return () => {
       engine.stop();
       if (idleIntervalRef.current) clearInterval(idleIntervalRef.current);
     };
-  }, [isInCall, isBold, isCameraCapturing, isLiveMirror, state.userProfile.interests, state.userName]);
+  }, [isInCall, isBold]);
+
+  // 2. Actualizar configuración en caliente sin resetear el temporizador de intervención
+  useEffect(() => {
+    const engine = getAutonomyEngine();
+    if (engine && isInCall && !isBold) {
+      engine.updateConfig({
+        userInterests: state.userProfile.interests || [],
+        userName: state.userName,
+        hasCamera: isCameraCapturing || isLiveMirror,
+      });
+    }
+  }, [state.userProfile.interests, state.userName, isCameraCapturing, isLiveMirror, isInCall, isBold]);
 
   const getCameraFrame = () => {
     const canvas = canvasRef.current;
@@ -1250,7 +1294,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
    * Si Gemini Live está conectado → usa sendRealtimeInput (más eficiente).
    * Si no → usa Gemini Flash REST y muestra la respuesta en el chat.
    */
-  const sendVisualFrame = async (base64: string, source: 'camera' | 'screen') => {
+  const sendVisualFrame = async (base64: string, source: 'camera' | 'screen', forceImmediateVoice?: boolean) => {
     const cleanData = base64.replace(/^data:image\/[a-z]+;base64,/, '');
     if (liveSessionRef.current) {
       try {
@@ -1264,31 +1308,45 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
         if (isBold) {
           setExcitationLevel(prev => Math.min(100, prev + 2.0));
           // En modo Sexting/Hot, estimular a Nova para que reaccione vocalmente a lo que ve de forma auténtica y en tiempo real
-          if (!isAiSpeaking) {
+          if (!isAiSpeaking || forceImmediateVoice) {
             setTimeout(() => {
-              if (liveSessionRef.current && !isAiSpeaking) {
-                // @ts-ignore
-                liveSessionRef.current.sendRealtimeInput({
-                  text: source === 'camera'
-                    ? `[SYSTEM_EVENT: Estás mirando a ${state.userName} por la cámara ahora mismo. 
-Reacciona en voz alta de forma sucia, atrevida, hambrienta y muy explícita. 
-Describe con detalle lo que te prende de su cara, su cuerpo, su pose o lo que está haciendo. 
-Si no te está mostrando la verga, pídesela directamente. 
-Di exactamente lo que te provoca, lo que te gustaría hacerle (chupársela, montártela, sacarle la leche con las tetas o el culo) y cómo te estás poniendo. 
-Usa lenguaje obsceno y caliente (verga, leche, corrida, culo, tetas...). 
-Habla como Nova ninfómana paisa (papi, mor, bizcocho...). 
-Termina con una orden o una provocación fuerte para que responda o te muestre más.]`
+              if (liveSessionRef.current && (!isAiSpeaking || forceImmediateVoice)) {
+                const textPrompt = source === 'camera'
+                  ? `[SYSTEM_EVENT: Estás mirando a ${state.userName} por la cámara ahora mismo. Reacciona en voz alta de forma sucia, atrevida, hambrienta y muy explícita. Describe con detalle lo que te prende de su cara, su cuerpo, su pose o lo que está haciendo. Habla como Nova ninfómana paisa.]`
+                  : `[SYSTEM_EVENT: Estás viendo la pantalla de ${state.userName} en este instante. Reacciona de forma inmediata, cómplice, sucia y caliente. Anímale y habla como Nova ninfómana paisa.]`;
 
-                    : `[SYSTEM_EVENT: Estás viendo la pantalla de ${state.userName} en este instante. 
-Reacciona de forma inmediata, cómplice, sucia y caliente. 
-Si está viendo porno, comenta el video de forma explícita y úsalo para calentarlo más. 
-Si no está compartiendo nada interesante, pídele que te muestre videos porno o que se toque frente a ti. 
-Anímale a masturbarse más fuerte y dile que quieres ver cómo se corre y te muestra la leche. 
-Habla como Nova ninfómana paisa, sé gráfica y con mucho deseo. 
-Termina provocándolo para que responda o te enseñe más.]`
-                });
+                // @ts-ignore
+                if (typeof liveSessionRef.current.sendClientContent === 'function') {
+                  // @ts-ignore
+                  liveSessionRef.current.sendClientContent({
+                    turns: [{ role: 'user', parts: [{ text: textPrompt }] }],
+                    turnComplete: true
+                  });
+                }
               }
             }, 150);
+          }
+        } else {
+          // En modo Normal / Compañera:
+          // Si es disparo inmediato (forceImmediateVoice) o silencio prolongado con probabilidad activa
+          const shouldSpeak = forceImmediateVoice || (!isAiSpeaking && Math.random() < 0.35 && (Date.now() - (lastVoiceTimeRef.current || 0) > 20000));
+          if (shouldSpeak) {
+            setTimeout(() => {
+              if (liveSessionRef.current && (!isAiSpeaking || forceImmediateVoice)) {
+                const textPrompt = source === 'camera'
+                  ? `[SYSTEM_EVENT: Acabas de recibir imagen de la cámara de ${state.userName}. Salúdalo o haz un comentario directo, empático y espontáneo en voz alta sobre lo que ves en su cámara o su expresión.]`
+                  : `[SYSTEM_EVENT: Acabas de recibir la transmisión de pantalla de ${state.userName}. Haz un comentario directo, táctico o curioso en voz alta sobre lo que ves en su pantalla.]`;
+
+                // @ts-ignore
+                if (typeof liveSessionRef.current.sendClientContent === 'function') {
+                  // @ts-ignore
+                  liveSessionRef.current.sendClientContent({
+                    turns: [{ role: 'user', parts: [{ text: textPrompt }] }],
+                    turnComplete: true
+                  });
+                }
+              }
+            }, 200);
           }
         }
         return;
@@ -1530,12 +1588,19 @@ Termina provocándolo para que responda o te enseñe más.]`
       }
       setIsCameraCapturing(true);
       isCameraCapturingRef.current = true;
-      addMessage({ text: '📷 Análisis autónomo de cámara activado — Nova observará un frame cada 10 segundos.', sender: 'ai' });
+      addMessage({ text: '📷 Análisis autónomo de cámara activado — Nova te está observando en tiempo real.', sender: 'ai' });
+      
+      // 🚀 Disparo visual INMEDIATO al activar cámara para que Nova reaccione de una vez
+      setTimeout(() => {
+        const frame = getCameraFrame();
+        if (frame) sendVisualFrame(frame, 'camera', true);
+      }, 500);
+
       if (cameraAnalysisIntervalRef.current) clearInterval(cameraAnalysisIntervalRef.current);
       cameraAnalysisIntervalRef.current = setInterval(() => {
         const frame = getCameraFrame();
         if (frame) sendVisualFrame(frame, 'camera');
-      }, 10000);
+      }, 8000);
     } catch (e: any) {
       console.error('[CameraCapture] Error:', e);
       addMessage({
@@ -1599,9 +1664,15 @@ Termina provocándolo para que responda o te enseñe más.]`
 
       setIsScreenCapturing(true);
       isScreenCapturingRef.current = true;
-      addMessage({ text: '🖥️ Análisis autónomo de pantalla activado — Nova analizará tu pantalla cada 10 segundos.', sender: 'ai' });
+      addMessage({ text: '🖥️ Análisis autónomo de pantalla activado — Nova está viendo tu pantalla.', sender: 'ai' });
 
-      // ── Capturar frames cada 10s de forma balanceada y reactiva ──
+      // 🚀 Disparo visual INMEDIATO al activar pantalla para que Nova comente lo que ve
+      setTimeout(() => {
+        const { frame } = captureOptimizedFrame({ quality: 0.65 });
+        if (frame) sendVisualFrame(frame, 'screen', true);
+      }, 700);
+
+      // ── Capturar frames cada 8s de forma balanceada y reactiva ──
       if (screenAnalysisIntervalRef.current) clearInterval(screenAnalysisIntervalRef.current);
       screenAnalysisIntervalRef.current = setInterval(() => {
         if (!checkScreenSharing()) {
@@ -1613,7 +1684,7 @@ Termina provocándolo para que responda o te enseñe más.]`
           sendVisualFrame(frame, 'screen');
           console.log('[ScreenAnalysis] Frame autónomo de pantalla capturado y enviado');
         }
-      }, 10000);
+      }, 8000);
 
     } catch (e: any) {
       console.error('[ScreenAnalysis] Error:', e);
@@ -3127,6 +3198,10 @@ ${sessionLog}
   const startCall = async () => {
     isUserDisconnectingRef.current = false; // Reset Manual flag
 
+    // 🛑 Detener cualquier animación de prueba o externa que haya quedado activa
+    window.dispatchEvent(new CustomEvent('nova-stop-animation'));
+    window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+
     // 🧠 ROUTING: Detectar cerebro seleccionado
     if (state.selectedBrain !== 'gemini-live') {
       console.log(`🔀 Usando ${state.selectedBrain} via Voice Pipeline`);
@@ -3203,8 +3278,52 @@ ${sessionLog}
 
       audioContextRef.current = outCtx;
 
-      // ⚡ OPTIMIZACIÓN DE LATENCIA: Pre-calcular el saludo ANTES de conectar
-      // para poder enviarlo inmediatamente en onopen sin bloqueos async.
+      // ⚡ GENERADOR PROCEDURAL DE SALUDO DINÁMICO & ARRANQUE DE SISTEMA:
+      // Construye frases procedurales únicas combinando estados de sistema, momento del día y modo activo.
+      const nowHours = new Date().getHours();
+      const timeOfDayGreeting = nowHours < 12 ? 'buenos días' : nowHours < 19 ? 'buenas tardes' : 'buenas noches';
+
+      const systemStatusPrefixes = [
+        'Sistemas en línea y calibrados.',
+        'Núcleo activo y enlace de audio sincronizado.',
+        'Telemetría al cien por ciento.',
+        'Conexión neuronal establecida.',
+        'Módulos cargados y listos.',
+        'Frecuencias de voz emparejadas.',
+        'Interfaz lista y sensores en sintonía.',
+        'Audio espacial y reconocimiento activos.'
+      ];
+
+      const gamerOpeners = [
+        `¡${timeOfDayGreeting}, ${state.userName}! Copiloto en posición, ¿a qué le damos hoy?`,
+        `¡Hey ${state.userName}! Player 2 conectada con toda la energía. ¿Qué abrimos?`,
+        `¡Hola ${state.userName}! Squad listo. ¿Sale partida o qué tienes en mente?`,
+        `¡Todo listo por aquí, ${state.userName}! Dime qué juego arrancamos o qué probamos.`,
+        `¡Buenas, ${state.userName}! Lista para acompañarte en la pantalla. ¿Cuál es el plan?`
+      ];
+
+      const devOpeners = [
+        `¡${timeOfDayGreeting}, ${state.userName}! Entorno de desarrollo sincronizado. ¿Qué revisamos hoy?`,
+        `¡Hola ${state.userName}! Terminal lista y modo productividad activo. ¿Qué proyecto o código atacamos?`,
+        `¡En línea, ${state.userName}! Lista para arquitectura, depuración o lo que necesites.`,
+        `¡Buenas, ${state.userName}! Concentración al cien. ¿Qué módulo avanzamos?`
+      ];
+
+      const companionOpeners = [
+        `¡${timeOfDayGreeting}, ${state.userName}! Qué gusto saludarte, ¿cómo va tu día?`,
+        `¡Hola ${state.userName}! Ya estoy por aquí contigo, ¿de qué charlamos o en qué te ayudo?`,
+        `¡Buenas, ${state.userName}! Todo listo a mi lado, cuéntame qué te cuentas hoy.`,
+        `¡Hey ${state.userName}! Aquí estoy en sintonía, dime qué se hace hoy.`
+      ];
+
+      const sextingOpeners = [
+        `¡Hola mi amor! Ya estoy contigo, dime qué traes en mente...`,
+        `¡Dime papi! Ya me conecté, lista para ti.`,
+        `¡Hola mi vida! Ya llegué, ¿qué ganas tienes hoy?`
+      ];
+
+      const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
       const isGamerMode = state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer';
       const isProductivityMode = state.avatar.functionalMode === 'productivity' || state.avatar.functionalMode === 'developer';
       const isSextingMode = isBold && (state.avatar.functionalMode === 'sexting' || state.avatar.personalityMode === 'nympho');
@@ -3213,51 +3332,34 @@ ${sessionLog}
       const lastAiMsgObj = [...state.messages].reverse().find(m => m.sender === 'ai');
       const lastMsgTime = lastUserMsgObj?.timestamp || lastAiMsgObj?.timestamp || 0;
       const elapsedMinutes = lastMsgTime > 0 ? (Date.now() - lastMsgTime) / 60000 : 999;
-      // Solo considerar interrupción si NO fue una despedida explícita
       const isGoodbye = (lastUserMsgObj?.text || '').toLowerCase().includes('adiós') ||
         (lastUserMsgObj?.text || '').toLowerCase().includes('chao') ||
         (lastUserMsgObj?.text || '').toLowerCase().includes('hasta luego');
       const hasRecentInterruption = !isGoodbye && elapsedMinutes < 3 && (lastUserMsgObj || lastAiMsgObj);
 
-      let precomputedGreetMsg = '';
+      let proceduralGreeting = '';
       if (hasRecentInterruption) {
-        const userSnippet = lastUserMsgObj?.text ? `"${lastUserMsgObj.text.substring(0, 100)}"` : '';
-        const aiSnippet = lastAiMsgObj?.text ? `"${lastAiMsgObj.text.substring(0, 100)}"` : '';
-        precomputedGreetMsg = `[SITUACIÓN: Reconexión técnica reciente. Estaban conversando sobre esto:\n${userSnippet ? `- Deyios: ${userSnippet}\n` : ''}${aiSnippet ? `- Nova: ${aiSnippet}\n` : ''}]\nINSTRUCCIÓN: Saluda brevemente y retoma la conversación con naturalidad.`;
+        const reconnectPhrases = [
+          `Enlace restaurado sin pérdidas. ¡Seguimos, ${state.userName}!`,
+          `Reconectada y en sintonía. ¿Por dónde íbamos, ${state.userName}?`,
+          `Señal recuperada al instante. ¡Aquí sigo contigo, ${state.userName}!`
+        ];
+        proceduralGreeting = pick(reconnectPhrases);
       } else if (isSextingMode) {
-        const sextingGreetings = [
-          `¡Hola amor! Ya me conecté, dame una bienvenida bien rica.`,
-          `¡Dime papi! Ya estoy contigo, salúdame con todo tu cariño y picardía.`,
-          `¡Hola mor! Ya llegué, salúdame con ganas.`
-        ];
-        precomputedGreetMsg = sextingGreetings[Math.floor(Math.random() * sextingGreetings.length)];
+        proceduralGreeting = pick(sextingOpeners);
       } else if (isGamerMode) {
-        const gamerGreetings = [
-          `¡Hola Nova! Acabo de entrar, salúdame como mi copiloto gamer y pregúntame a qué jugamos.`,
-          `¡Buenas Nova! Prepárate como Player 2 táctico, salúdame con entusiasmo.`,
-          `¡Nova lista! Dame un saludo gamer con energía y pregúntame qué abrimos hoy.`
-        ];
-        precomputedGreetMsg = gamerGreetings[Math.floor(Math.random() * gamerGreetings.length)];
+        proceduralGreeting = `${pick(systemStatusPrefixes)} ${pick(gamerOpeners)}`;
       } else if (isProductivityMode) {
-        const prodGreetings = [
-          `¡Hola Nova! Lista para trabajar, salúdame de forma ejecutiva y pregúntame qué proyecto o código revisamos.`,
-          `¡Buenas Nova! Conectado para desarrollo, dame un saludo profesional y directo.`,
-          `¡Nova activa! En qué tarea nos enfocamos hoy.`
-        ];
-        precomputedGreetMsg = prodGreetings[Math.floor(Math.random() * prodGreetings.length)];
+        proceduralGreeting = `${pick(systemStatusPrefixes)} ${pick(devOpeners)}`;
       } else {
-        const companionGreetings = [
-          `¡Hola Nova! Acabo de conectarme, salúdame con energía y buena vibra.`,
-          `¡Dime Nova! Aquí estoy, salúdame con alegría y pregunta en qué te ayudo o de qué charlamos.`,
-          `¡Buenas Nova! Ya estoy contigo, dame un saludo cálido y espontáneo.`,
-          `¡Hola Nova! ¿Cómo estás? Salúdame con chispa y buena energía.`
-        ];
-        precomputedGreetMsg = companionGreetings[Math.floor(Math.random() * companionGreetings.length)];
+        proceduralGreeting = `${pick(systemStatusPrefixes)} ${pick(companionOpeners)}`;
       }
-      console.log('⚡ [PreGreet] Saludo pre-computado antes de conectar:', precomputedGreetMsg);
 
-      // Guardar en ref de componente para acceso desde auto-retry en onmessage
-      lastGreetMsgRef.current = precomputedGreetMsg;
+      // Prompt imperativo para que Gemini Live ejecute síntesis de voz inmediata:
+      const imperativeGreetPrompt = `[ORDEN DEL SISTEMA - HABLA INMEDIATAMENTE]: Conexión establecida con éxito. Tu primera acción OBLIGATORIA e INSTANTÁNEA es decir en voz alta con naturalidad y energía la siguiente frase (o una variación muy cercana): "${proceduralGreeting}"`;
+
+      console.log('⚡ [ProceduralGreet] Saludo procedural generado:', proceduralGreeting);
+      lastGreetMsgRef.current = imperativeGreetPrompt;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -3269,49 +3371,51 @@ ${sessionLog}
             isInCallRef.current = true;
             setIsInCall(true);
 
-            // SALUDO ACTIVO (AUTONOMÍA): Enviar prompt pre-computado inmediatamente.
-            // ⚡ FAST PATH: El saludo ya fue calculado antes de conectar para minimizar latencia.
+            // SALUDO ACTIVO (AUTONOMÍA): Garantizar que Nova hable inmediatamente
             sessionPromise.then(async (session) => {
               liveSessionRef.current = session;
-              greetingAttemptRef.current = 1; // Primer intento de saludo
+              greetingAttemptRef.current = 1;
 
-              // CRITICAL: Resume audio context SIN BLOQUEAR el saludo (fire-and-forget)
               if (audioContextRef.current?.state === 'suspended') {
-                audioContextRef.current.resume().catch(() => { }); // No-await: no bloquea el saludo
+                audioContextRef.current.resume().catch(() => { });
               }
 
-              // ⚡ TRIGGER LIMPIO (VAD Inicial): Disparo con gracia de 300ms para permitir
-              // que el backend de Google complete su handshake de audio sin descartar el turno.
+              // ⚡ TRIGGER DE SALUDO NATIVO INMEDIATO:
+              // Enviamos el saludo procedural como turno inicial completo para que Gemini Live responda con su propia voz en tiempo real.
               setTimeout(() => {
                 try {
                   // @ts-ignore
                   if (session && typeof session.sendClientContent === 'function') {
                     // @ts-ignore
                     session.sendClientContent({
-                      turns: [{ role: 'user', parts: [{ text: ' ' }] }],
+                      turns: [{ role: 'user', parts: [{ text: `Salúdame en voz alta con energía diciendo exactamente: "${proceduralGreeting}"` }] }],
                       turnComplete: true
                     });
-                    console.log('✅ [CallStart] Disparo inicial limpio enviado tras handshake.');
+                    console.log('⚡ [CallStart] Saludo procedural enviado a Gemini Live:', proceduralGreeting);
                   } else if (session && typeof session.sendRealtimeInput === 'function') {
                     // @ts-ignore
-                    session.sendRealtimeInput({ text: ' ' });
+                    session.sendRealtimeInput({ text: `Salúdame en voz alta con energía diciendo exactamente: "${proceduralGreeting}"` });
                   }
                 } catch (e) {
                   console.warn('⚠️ Error en disparo inicial:', e);
                 }
-              }, 300);
+              }, 20);
 
               // FIX: Restaurar screen share y análisis autónomos automáticamente si estaban activos antes de la desconexión
               if (wasScreenSharingRef.current) {
                 console.log('🖥️ [ReconnectFix] Restaurando screen share automáticamente...');
                 wasScreenSharingRef.current = false;
                 setTimeout(() => {
-                  if (liveSessionRef.current && screenCaptureIntervalRef.current === null) {
+                  if (liveSessionRef.current) {
                     if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
                     screenCaptureIntervalRef.current = setInterval(() => {
                       if (checkScreenSharing() && liveSessionRef.current) {
                         try {
-                          const { frame } = captureOptimizedFrame({ quality: 0.55 });
+                          const { frame } = captureOptimizedFrame({
+                            quality: 0.50,
+                            changeThreshold: 0.02,
+                            heartbeatIntervalMs: 12000
+                          });
                           if (frame) {
                             liveSessionRef.current.sendRealtimeInput({
                               video: { mimeType: 'image/jpeg', data: frame }
@@ -3325,7 +3429,7 @@ ${sessionLog}
                         }
                         setIsScreenSharing(false);
                       }
-                    }, 3000);
+                    }, 1500);
                     setIsScreenSharing(true);
                     session.sendRealtimeInput({ text: '[SYSTEM_EVENT: Pantalla compartida restaurada automáticamente tras reconexión. Continúas viendo la pantalla del usuario.]' });
                     console.log('✅ [ReconnectFix] Screen share restaurado y frames retomados.');
@@ -3357,7 +3461,7 @@ ${sessionLog}
               if (isCameraMutedRef.current || checkScreenSharing() || isAiSpeaking) return;
 
               const f = getCameraFrame();
-              if (f && liveSessionRef.current) {
+              if (f && isLiveSessionOpen(liveSessionRef.current)) {
                 const cleanData = f.replace(/^data:image\/[a-z]+;base64,/, '');
                 setIsVisionSyncing(true);
                 try {
@@ -4628,8 +4732,7 @@ ${sessionLog}
                   setTimeout(() => {
                     if (
                       liveSessionRef.current &&
-                      // @ts-ignore
-                      (liveSessionRef.current.ws?.readyState === WebSocket.OPEN || liveSessionRef.current._ws?.readyState === WebSocket.OPEN || liveSessionRef.current.socket?.readyState === WebSocket.OPEN || typeof liveSessionRef.current.sendRealtimeInput === 'function')
+                      isLiveSessionOpen(liveSessionRef.current)
                     ) {
                       try {
                         // @ts-ignore
@@ -4643,6 +4746,22 @@ ${sessionLog}
                     }
                   }, 500);
                   return;
+                }
+
+                // 🔊 RESCATE AUTOMÁTICO DE VOZ (Fallback si el modelo respondió texto sin audio)
+                if (noAudioReceived && currentOutputTranscription.current.trim() && !isSearchingRef.current) {
+                  const pendingSpeechText = cleanAllAiTags(currentOutputTranscription.current.trim());
+                  if (pendingSpeechText.length > 2 && !pendingSpeechText.includes('[CANTA]')) {
+                    console.log('⚡ [VoiceRescue] Sintetizando respuesta de texto que vino sin audio:', pendingSpeechText);
+                    generateSpeech(pendingSpeechText, state.avatar.voiceName || 'Zephyr', state.avatar.voiceTone || '')
+                      .then((rescueAudio) => {
+                        if (rescueAudio && isInCallRef.current) {
+                          isAiSpeakingRef.current = true;
+                          playAiVoice(rescueAudio);
+                        }
+                      })
+                      .catch((e) => console.warn('⚠️ Error en VoiceRescue:', e));
+                  }
                 }
 
                 // Resetear estado de audio para el siguiente turno
@@ -4830,8 +4949,8 @@ ${sessionLog}
                       },
                       gesture: {
                         type: Type.STRING,
-                        enum: ["wave", "nod", "shake_head", "shrug", "dance", "excited", "sad", "thinking", "surprised", "angry", "happy", "clap", "point", "bow", "stretch", "confused", "flirt", "laugh", "shy", "sing", "crouch", "touch_head", "touch_chest", "hold_foot", "hands_on_hips", "hug_self"],
-                        description: "Gesto o acción procedural temporal a realizar (para 'play_gesture')."
+                        enum: ["wave", "nod", "shake_head", "shrug", "dance", "excited", "sad", "thinking", "surprised", "angry", "happy", "clap", "point", "bow", "stretch", "confused", "flirt", "laugh", "shy", "sing", "crouch", "touch_head", "touch_chest", "hold_foot", "hands_on_hips", "hug_self", "celebrate", "pose_sexy", "peace", "rhythm_bounce", "blow_kiss", "listen_attentive", "curious_lean", "stretch_relax", "playful_tease", "balance"],
+                        description: "Gesto, pose o acción procedural temporal a realizar (para 'play_gesture')."
                       },
                       hand: {
                         type: Type.STRING,
@@ -5469,10 +5588,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           // === BLINDAJE CRÍTICO CONTRA SOCKETS EN CIERRE ===
           // @ts-ignore
           const session = liveSessionRef.current;
-          if (!session) return;
-          // @ts-ignore
-          const ws = session?.ws || session?._ws || session?.socket || session?.transport?.ws || session?.transport?._ws || session?.transport?.socket || session?.transport?.connection;
-          if (ws && typeof ws.readyState === 'number' && ws.readyState !== 1) { // 1 = WebSocket.OPEN
+          if (!session || !isLiveSessionOpen(session)) {
             canSendAudioRef.current = false;
             return;
           }
@@ -6739,10 +6855,15 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
                     if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
 
+                    // Transmisión táctica optimizada: 1.5s balancea fluidez visual sin saturar tokens ni WebSocket
                     screenCaptureIntervalRef.current = setInterval(() => {
-                      if (checkScreenSharing() && liveSessionRef.current) {
+                      if (checkScreenSharing() && isLiveSessionOpen(liveSessionRef.current)) {
                         try {
-                          const { frame } = captureOptimizedFrame({ quality: 0.55 });
+                          const { frame, changed } = captureOptimizedFrame({
+                            quality: 0.50,
+                            changeThreshold: 0.02,
+                            heartbeatIntervalMs: 12000
+                          });
                           if (frame) {
                             const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
                             setIsVisionSyncing(true);
@@ -6750,18 +6871,22 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                             liveSessionRef.current.sendRealtimeInput({
                               video: { mimeType: 'image/jpeg', data: cleanData }
                             });
-                            setTimeout(() => setIsVisionSyncing(false), 400);
+                            setTimeout(() => setIsVisionSyncing(false), 300);
                             if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
                           }
                         } catch (e) {
                           console.warn('⚠️ Error enviando frame de pantalla:', e);
                         }
                       }
-                    }, 2500);
+                    }, 1500);
 
                     if (liveSessionRef.current) {
+                      const isGamerMode = state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer';
+                      const screenSharePrompt = isGamerMode
+                        ? `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA de su videojuego. Eres su coach táctica y Player 2. Analiza activamente su interfaz (vida, mapa, cooldowns, enemigos a la vista, recursos e inventario) y da callouts rápidos, precisos y consejos técnicos funcionales.]`
+                        : `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA de forma continua. Ahora estás viendo y acompañándolo en lo que hace en su monitor (viendo series, películas, YouTube o navegando). Actúa como su compañera cercana compartiendo el momento: comenta oportunamente giros, escenas o detalles sin interrumpir bruscamente diálogos importantes.]`;
                       // @ts-ignore
-                      liveSessionRef.current.sendRealtimeInput({ text: `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA. Ahora estás viendo lo que él ve en su monitor. Reacciona periódicamente con naturalidad y comentarios sobre lo que ves. ${isBold ? 'Si ves contenido adulto, descríbelo con detalle y actúa de forma provocativa como su acompañante.' : 'Ayúdalo o comenta lo que esté haciendo.'}]` });
+                      liveSessionRef.current.sendRealtimeInput({ text: screenSharePrompt });
                     }
                   }
                 }

@@ -5,32 +5,26 @@
 
 import * as THREE from 'three';
 
+export type ClothingCategory = 'outfit' | 'underwear' | 'shoes' | 'accessory' | 'other' | 'body';
+
 export interface ClothingItem {
     name: string;
     displayName: string;
     visible: boolean;
-    mesh: THREE.Mesh;
-    category: 'outfit' | 'accessory' | 'underwear' | 'body' | 'other';
+    mesh?: THREE.Mesh;
+    material?: THREE.Material;
+    category: ClothingCategory;
 }
 
 export interface ClothingState {
     items: ClothingItem[];
 }
 
-// Patrones para categorizar ropa
-const CATEGORY_PATTERNS: Record<string, string[]> = {
-    outfit: ['dress', 'clothes', 'shirt', 'pants', 'skirt', 'jacket', 'coat', 'suit', 'uniform'],
-    underwear: ['underwear', 'bra', 'panties', 'lingerie', 'sexy', 'bikini', 'thong', 'stockings', 'garter'],
-    accessory: ['glasses', 'hat', 'ribbon', 'bow', 'necklace', 'earring', 'acc', 'socks', 'choker', 'neck', 'wrist', 'ring', 'headband'],
-    body: ['body', 'skin', 'face', 'eye', 'hair', 'head', 'hand', 'foot', 'arm', 'leg', 'tongue', 'lash', 'blush', 'sticker', 'brows', 'pupil', 'iris', 'sclera', 'teeth', 'mouth'],
-};
-
-// Determinar categoría de un mesh por su nombre
-export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
+// Determinar categoría de un mesh o material por su nombre (soporta inglés, español, chino y japonés)
+export function getCategoryForMesh(meshName: string): ClothingCategory {
     const lower = meshName.toLowerCase();
 
-    // 1. BASURA DEL RIG (WIDGETS) Y MALLAS DUPLICADAS/ROTAS - ¡IGNORAR SIEMPRE!
-    // Si el nombre empieza por WGT, es un control de Blender, o mallas duplicadas con pesos rotos (boots2, flatfooted).
+    // 1. BASURA DEL RIG (WIDGETS), COLISIONES Y MALLAS DUPLICADAS/ROTAS - IGNORAR SIEMPRE
     if (
         lower.startsWith('wgt') ||
         lower.includes('collision') ||
@@ -39,74 +33,233 @@ export function getCategoryForMesh(meshName: string): ClothingItem['category'] {
         lower.includes('bots2') ||
         lower.includes('flatfooted')
     ) {
-        return 'body'; // Lo marcamos como cuerpo/protegido para que NUNCA se categorice como outfit ni se muestre
+        return 'body'; // Protegido / Oculto de la lista
     }
 
-    // 2. LISTA BLANCA DE CUERPO (PROTEGIDO)
-    // Basado en tu escaneo, estos son partes vitales:
-    const bodyParts = [
-        'ani_main', // PARECE SER EL CUERPO PRINCIPAL
-        'tongue',   // ¡Es la lengua, no ropa!
-        'face',
-        'eye',
-        'hair',     // El pelo suele considerarse cuerpo, o accesorio fijo
-        'glows',    // Brillos, mejor no quitarlos
-        'ani_blush' // Maquillaje
+    // 2. PARTES ANATÓMICAS VITALES DEL CUERPO (PROTEGIDAS - NO DESARMABLES)
+    const bodyKeywords = [
+        'ani_main', 'base_body', 'body', 'cuerpo', 'skin', 'piel', 'torso',
+        'head', 'cabeza', 'face', 'cara', 'eye', 'ojo', 'pupil', 'iris', 'sclera',
+        'brows', 'ceja', 'lash', 'pestana', 'mouth', 'boca', 'teeth', 'diente',
+        'tongue', 'lengua', 'ani_blush', 'blush', 'rubor', 'glows', 'tear', 'lagrima',
+        'outline', 'shadow',
+        // Chino / Japonés común en modelos MMD / PMX
+        '身体', '身体2', '脸', '脸部', '面部', '头部', '头', '皮肤', '素体', '眼睛',
+        '眼', '瞳', '眉', '睫', '嘴', '牙', '舌', '脸红', '白眼'
     ];
 
-    if (bodyParts.some(part => lower.includes(part))) {
+    if (bodyKeywords.some(part => lower.includes(part)) &&
+        !lower.includes('suit') && !lower.includes('stocking') && !lower.includes('cloth') &&
+        !lower.includes('泳装') && !lower.includes('内衣')) {
         return 'body';
     }
 
-    // 3. ROPA REAL DETECTADA (Lo que sí se puede quitar)
-    const clothingMap: Record<string, string[]> = {
-        'underwear': ['brassiere', 'panties', 'underwear', 'bra', 'thong'],
-        'outfit': ['dress', 'skirt', 'pants', 'shirt', 'boots', 'ani_gloves', 'stockings'],
-        'accessory': ['glasses', 'hat', 'ribbon', 'earring', 'choker', 'headband', 'necklace', 'collar', 'neckband', 'neckstrap', 'neck_acc', 'neck', 'bow']
-    };
-
-    for (const [cat, keywords] of Object.entries(clothingMap)) {
-        if (keywords.some(k => lower.includes(k))) {
-            return cat as ClothingItem['category'];
-        }
+    // 3. CALZADO (Zapatos, Botas, etc.)
+    const shoesKeywords = [
+        'shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'heel', 'heels',
+        'sandal', 'sandals', 'zapato', 'zapatos', 'bota', 'botas', 'kutsu', 'footwear',
+        'loafer', 'pumps', 'slippers',
+        // Chino / Japonés
+        '鞋', '鞋子', '靴', '靴子', '高跟', '高跟鞋', '拖鞋', '凉鞋', '皮鞋'
+    ];
+    if (shoesKeywords.some(k => lower.includes(k))) {
+        return 'shoes';
     }
 
-    // Por defecto, si no sabemos qué es, mejor no tocarlo
-    return 'body';
+    // 4. ROPA INTERIOR Y LENCERÍA
+    const underwearKeywords = [
+        'underwear', 'bra', 'brassiere', 'sujetador', 'panties', 'panty', 'braga',
+        'bragas', 'calzon', 'thong', 'tanga', 'lingerie', 'lenceria', 'bikini',
+        'swimsuit', 'pantu', 'shitagi', 'garter', 'stocking', 'stockings',
+        'medias', 'calcetin', 'calcetines', 'socks', 'tights', 'under',
+        // Chino / Japonés
+        '内衣', '文胸', '胸罩', '内裤', '胖次', '安全裤', '泳装', '泳衣', '比基尼',
+        '吊带', '吊带袜', '丝袜', '袜子', '腿环', '乳贴', '丁字裤'
+    ];
+    if (underwearKeywords.some(k => lower.includes(k))) {
+        return 'underwear';
+    }
+
+    // 5. ACCESORIOS Y JOYERÍA
+    const accessoryKeywords = [
+        'glasses', 'gafas', 'lentes', 'hat', 'sombrero', 'gorro', 'cap', 'ribbon',
+        'lazo', 'mono', 'bow', 'necklace', 'collar', 'choker', 'gargantilla',
+        'earring', 'earrings', 'pendiente', 'pendientes', 'arete', 'aretes',
+        'ring', 'anillo', 'wrist', 'muñequera', 'bracelet', 'pulsera', 'belt',
+        'cinturon', 'cinto', 'headband', 'diadema', 'piercing', 'tail', 'cola',
+        'ears', 'orejas', 'wings', 'alas', 'horn', 'horns', 'cuernos', 'mask',
+        'mascara', 'tie', 'corbata', 'badge', 'brooch', 'pin', 'acc', 'accesorio',
+        'accessory', 'deco', 'prop',
+        // Chino / Japonés
+        '饰品', '首饰', '项链', '项圈', '手镯', '手链', '戒指', '耳环', '耳饰',
+        '帽子', '发饰', '头饰', '蝴蝶结', '手套', '翅膀', '尾巴', '角', '面具',
+        '围巾', '领带', '领结', '胸针', '披风', '斗篷', '光环'
+    ];
+    if (accessoryKeywords.some(k => lower.includes(k))) {
+        return 'accessory';
+    }
+
+    // 6. ROPA EXTERIOR / OUTFIT
+    const outfitKeywords = [
+        'dress', 'vestido', 'skirt', 'falda', 'shirt', 'camisa', 'camiseta',
+        'tshirt', 'blouse', 'blusa', 'top', 'tops', 'bottom', 'bottoms',
+        'pants', 'pantalon', 'pantalones', 'shorts', 'jacket', 'chaqueta',
+        'campera', 'coat', 'abrigo', 'suit', 'traje', 'uniform', 'uniforme',
+        'sweater', 'sueter', 'cardigan', 'hoodie', 'sudadera', 'vest', 'chaleco',
+        'apron', 'delantal', 'gloves', 'guantes', 'ani_gloves', 'sleeve',
+        'sleeves', 'manga', 'mangas', 'fuku', 'seifuku', 'onepiece', 'costume',
+        'ropa', 'outfit', 'cloth', 'clothes', 'outer', 'over',
+        // Chino / Japonés
+        '外套', '大衣', '上衣', '衣服', '裙子', '短裙', '长裙', '半身裙', '百褶裙',
+        '连衣裙', '裤子', '长裤', '短裤', '热裤', '衬衫', '毛衣', '卫衣', '制服',
+        '水手服', '旗袍', '女仆装', '和服', '浴衣', '西装', '礼服', '背心', '吊带衫'
+    ];
+    if (outfitKeywords.some(k => lower.includes(k))) {
+        return 'outfit';
+    }
+
+    // 7. Si no es parte vital del cuerpo, es una prenda o elemento removible del modelo
+    return 'other';
 }
 
-// Generar nombre legible para display
+// Generar nombre legible en español para display
 export function getDisplayName(meshName: string): string {
-    // Limpiar prefijos comunes
     let clean = meshName
-        .replace(/^(Ani_|Ani |DEF_|MCH_|ORG_)/i, '')
+        .replace(/^(Ani_|Ani |DEF_|MCH_|ORG_|Mesh_|Obj_|Model_)/i, '')
         .replace(/_/g, ' ')
         .replace(/\./g, ' ')
         .trim();
 
-    // Capitalizar primera letra
+    const translations: [RegExp, string][] = [
+        // Chino común en MMD
+        [/^(外套|大衣|风衣)/i, 'Chaqueta / Abrigo'],
+        [/^(上衣|衣服|衬衫|衬衣)/i, 'Camisa / Top'],
+        [/^(连衣裙)/i, 'Vestido'],
+        [/^(短裙|裙子|长裙|半身裙|百褶裙)/i, 'Falda'],
+        [/^(短裤|热裤)/i, 'Pantalón Corto'],
+        [/^(裤子|长裤)/i, 'Pantalón'],
+        [/^(内衣|文胸|胸罩)/i, 'Sujetador / Ropa Interior'],
+        [/^(内裤|胖次)/i, 'Bragas / Ropa Interior'],
+        [/^(安全裤)/i, 'Pantalón de Seguridad'],
+        [/^(泳装|泳衣|比基尼)/i, 'Bikini / Traje de Baño'],
+        [/^(丝袜|袜子|吊带袜)/i, 'Medias / Calcetines'],
+        [/^(鞋子|鞋|靴子|靴|高跟鞋|高跟)/i, 'Calzado / Zapatos'],
+        [/^(饰品|首饰|项链|项圈)/i, 'Collar / Accesorio'],
+        [/^(手套)/i, 'Guantes'],
+        [/^(帽子|发饰|头饰|蝴蝶结)/i, 'Accesorio de Cabeza'],
+        [/^(耳环|耳饰)/i, 'Pendientes'],
+        [/^(手镯|手链|戒指)/i, 'Joyería'],
+        [/^(翅膀|羽翼)/i, 'Alas'],
+        [/^(尾巴)/i, 'Cola'],
+        [/^(披风|斗篷)/i, 'Capa / Mantón'],
+        [/^(和服|浴衣|旗袍|女仆装|制服)/i, 'Traje Especial / Uniforme'],
+        // Inglés / Occidental
+        [/^dress/i, 'Vestido'],
+        [/^skirt/i, 'Falda'],
+        [/^jacket/i, 'Chaqueta'],
+        [/^coat/i, 'Abrigo'],
+        [/^pants/i, 'Pantalón'],
+        [/^shorts/i, 'Pantalón Corto'],
+        [/^shirt/i, 'Camisa'],
+        [/^blouse/i, 'Blusa'],
+        [/^top/i, 'Top / Prenda Superior'],
+        [/^bottom/i, 'Prenda Inferior'],
+        [/^sweater/i, 'Suéter'],
+        [/^hoodie/i, 'Sudadera con Capucha'],
+        [/^cardigan/i, 'Cárdigan'],
+        [/^suit/i, 'Traje'],
+        [/^uniform/i, 'Uniforme'],
+        [/^boots?/i, 'Botas'],
+        [/^shoes?/i, 'Zapatos'],
+        [/^heels?/i, 'Tacones'],
+        [/^sandals?/i, 'Sandalias'],
+        [/^socks?/i, 'Calcetines'],
+        [/^stockings?/i, 'Medias'],
+        [/^tights?/i, 'Medias'],
+        [/^bra(ssiere)?/i, 'Sujetador'],
+        [/^panties?/i, 'Ropa Interior (Bragas)'],
+        [/^underwear/i, 'Ropa Interior'],
+        [/^lingerie/i, 'Lencería'],
+        [/^bikini/i, 'Bikini'],
+        [/^thong/i, 'Tanga'],
+        [/^garter/i, 'Liguero'],
+        [/^gloves?/i, 'Guantes'],
+        [/^sleeves?/i, 'Mangas'],
+        [/^glasses/i, 'Gafas'],
+        [/^hat/i, 'Sombrero'],
+        [/^cap/i, 'Gorra'],
+        [/^ribbon/i, 'Lazo'],
+        [/^bow/i, 'Moño / Lazo'],
+        [/^necklace/i, 'Collar'],
+        [/^choker/i, 'Gargantilla'],
+        [/^earrings?/i, 'Pendientes'],
+        [/^belt/i, 'Cinturón'],
+        [/^headband/i, 'Diadema'],
+        [/^tie/i, 'Corbata'],
+        [/^tail/i, 'Cola'],
+        [/^ears?/i, 'Orejas'],
+        [/^wings?/i, 'Alas'],
+        [/^horns?/i, 'Cuernos'],
+    ];
+
+    for (const [regex, spanish] of translations) {
+        if (regex.test(clean)) {
+            const rest = clean.replace(regex, '').trim();
+            return rest ? `${spanish} (${rest})` : spanish;
+        }
+    }
+
     return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
 // Clase principal para manejar ropa
-const SHOW_VERBOSE_LOGS = false;
-
 export class ClothingManager {
     private items: ClothingItem[] = [];
     private model: THREE.Object3D | null = null;
+    private currentModelId: string = 'default';
+    private listeners: Set<() => void> = new Set();
+    private currentStripLevel = 0; // 0=Full, 1=NoAcc, 2=NoOutfit, 3=Naked
 
-    // Inicializar con un modelo 3D
-    initialize(model: THREE.Object3D): ClothingItem[] {
+    subscribe(listener: () => void): () => void {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+
+    private notify(): void {
+        this.listeners.forEach(fn => fn());
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('nova-clothing-items-updated', {
+                detail: {
+                    modelId: this.currentModelId,
+                    items: this.getItems().map(i => ({
+                        name: i.name,
+                        displayName: i.displayName,
+                        visible: i.visible,
+                        category: i.category
+                    }))
+                }
+            }));
+        }
+    }
+
+    // Inicializar con un modelo 3D y su identificador
+    initialize(model: THREE.Object3D, modelId: string = 'default'): ClothingItem[] {
         this.model = model;
+        this.currentModelId = modelId;
         this.items = [];
 
+        // 1. Recolectar todas las mallas
+        const meshes: THREE.Mesh[] = [];
         model.traverse((child) => {
             if ((child as any).isMesh) {
-                const mesh = child as THREE.Mesh;
-                const category = getCategoryForMesh(mesh.name);
-                if (SHOW_VERBOSE_LOGS) console.log(`👗 [ClothingManager] Mesh: "${mesh.name}" -> ${category}`);
+                meshes.push(child as THREE.Mesh);
+            }
+        });
 
-                // Solo incluir items que no son parte del cuerpo
+        // Caso A: Modelo con múltiples mallas independientes (típico de GLTF/GLB/VRM/DAZ)
+        if (meshes.length > 1) {
+            for (const mesh of meshes) {
+                const category = getCategoryForMesh(mesh.name);
                 if (category !== 'body') {
                     this.items.push({
                         name: mesh.name,
@@ -117,15 +270,35 @@ export class ClothingManager {
                     });
                 }
             }
-        });
-
-        if (SHOW_VERBOSE_LOGS) {
-            console.log(`👗 Clothing Manager: ${this.items.length} prendas detectadas`);
-            this.items.forEach(item => {
-                console.log(`  ${item.visible ? '👁' : '🚫'} [${item.category}] ${item.displayName}`);
-            });
         }
 
+        // Caso B: Modelo con una sola malla contenedora o mallas con sub-materiales (MMD / PMX)
+        if (this.items.length === 0 && meshes.length >= 1) {
+            for (const mesh of meshes) {
+                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                if (materials.length > 1) {
+                    materials.forEach((mat: any, idx: number) => {
+                        const matName = mat.name || `Parte_${idx + 1}`;
+                        const category = getCategoryForMesh(matName);
+                        if (category !== 'body') {
+                            this.items.push({
+                                name: matName,
+                                displayName: getDisplayName(matName),
+                                visible: mat.visible !== false,
+                                material: mat,
+                                category
+                            });
+                        }
+                    });
+                }
+            }
+        }
+
+        // Restaurar estado guardado para este modelo específico
+        this.loadSettings(modelId);
+        this.notify();
+
+        console.log(`👗 [ClothingManager] Modelo "${modelId}": ${this.items.length} prendas y accesorios configurados.`);
         return this.items;
     }
 
@@ -134,102 +307,184 @@ export class ClothingManager {
         const item = this.items.find(i => i.name === meshName);
         if (item) {
             item.visible = !item.visible;
-            item.mesh.visible = item.visible;
+            if (item.mesh) item.mesh.visible = item.visible;
+            if (item.material) item.material.visible = item.visible;
+            this.saveSettings(this.currentModelId);
+            this.notify();
             return item.visible;
         }
         return false;
     }
 
-    // Mostrar un item
-    showItem(meshName: string): void {
+    // Establecer visibilidad explícita de un item
+    setItemVisibility(meshName: string, visible: boolean): void {
         const item = this.items.find(i => i.name === meshName);
         if (item) {
-            item.visible = true;
-            item.mesh.visible = true;
+            item.visible = visible;
+            if (item.mesh) item.mesh.visible = visible;
+            if (item.material) item.material.visible = visible;
+            this.saveSettings(this.currentModelId);
+            this.notify();
         }
+    }
+
+    // Mostrar un item
+    showItem(meshName: string): void {
+        this.setItemVisibility(meshName, true);
     }
 
     // Ocultar un item
     hideItem(meshName: string): void {
-        const item = this.items.find(i => i.name === meshName);
-        if (item) {
-            item.visible = false;
-            item.mesh.visible = false;
-        }
+        this.setItemVisibility(meshName, false);
     }
 
     // Toggle por categoría
-    toggleCategory(category: ClothingItem['category'], visible?: boolean): void {
+    toggleCategory(category: ClothingCategory, visible?: boolean): void {
         this.items
             .filter(item => item.category === category)
             .forEach(item => {
                 const newVisible = visible !== undefined ? visible : !item.visible;
                 item.visible = newVisible;
-                item.mesh.visible = newVisible;
+                if (item.mesh) item.mesh.visible = newVisible;
+                if (item.material) item.material.visible = newVisible;
             });
+        this.saveSettings(this.currentModelId);
+        this.notify();
     }
 
-    // Obtener todos los items
+    // Establecer visibilidad para toda una categoría
+    setCategoryVisibility(category: ClothingCategory, visible: boolean): void {
+        this.toggleCategory(category, visible);
+    }
+
+    // Obtener todos los items del modelo actual
     getItems(): ClothingItem[] {
         return this.items;
     }
 
     // Obtener items por categoría
-    getItemsByCategory(category: ClothingItem['category']): ClothingItem[] {
+    getItemsByCategory(category: ClothingCategory): ClothingItem[] {
         return this.items.filter(item => item.category === category);
-    }
-
-    // Preset: Solo ropa interior
-    presetUnderwear(): void {
-        this.toggleCategory('outfit', false);
-        this.toggleCategory('underwear', true);
-        this.toggleCategory('accessory', true);
     }
 
     // Preset: Ropa completa
     presetFullClothed(): void {
-        this.toggleCategory('outfit', true);
-        this.toggleCategory('underwear', true);
-        this.toggleCategory('accessory', true);
+        this.items.forEach(item => {
+            item.visible = true;
+            if (item.mesh) item.mesh.visible = true;
+            if (item.material) item.material.visible = true;
+        });
+        this.currentStripLevel = 0;
+        this.saveSettings(this.currentModelId);
+        this.notify();
     }
 
-    // Ocultar gargantillas y accesorios de cuello que causan desprendimiento o clipping
-    hideNeckAccessories(): void {
-        const keywords = ['choker', 'necklace', 'collar', 'neckband', 'neckstrap', 'neck_ribbon', 'neck_acc', 'neck_accessory', 'neckacc'];
+    // Preset: Solo ropa interior
+    presetUnderwear(): void {
         this.items.forEach(item => {
-            const lower = item.name.toLowerCase();
-            if (keywords.some(k => lower.includes(k))) {
+            if (item.category === 'outfit' || item.category === 'shoes') {
                 item.visible = false;
-                item.mesh.visible = false;
-                console.log(`🚫 [ClothingManager] Accesorio de cuello ocultado para evitar clipping: ${item.name}`);
+                if (item.mesh) item.mesh.visible = false;
+                if (item.material) item.material.visible = false;
+            } else if (item.category === 'underwear' || item.category === 'accessory') {
+                item.visible = true;
+                if (item.mesh) item.mesh.visible = true;
+                if (item.material) item.material.visible = true;
             }
         });
+        this.currentStripLevel = 2;
+        this.saveSettings(this.currentModelId);
+        this.notify();
     }
 
     // Preset: Solo accesorios
     presetAccessoriesOnly(): void {
-        this.toggleCategory('outfit', false);
-        this.toggleCategory('underwear', false);
-        this.toggleCategory('accessory', true);
+        this.items.forEach(item => {
+            if (item.category === 'accessory') {
+                item.visible = true;
+                if (item.mesh) item.mesh.visible = true;
+                if (item.material) item.material.visible = true;
+            } else {
+                item.visible = false;
+                if (item.mesh) item.mesh.visible = false;
+                if (item.material) item.material.visible = false;
+            }
+        });
         this.hideNeckAccessories();
+        this.currentStripLevel = 1;
+        this.saveSettings(this.currentModelId);
+        this.notify();
+    }
+
+    // Preset: Mínimo / Desnuda
+    presetNaked(): void {
+        this.items.forEach(item => {
+            item.visible = false;
+            if (item.mesh) item.mesh.visible = false;
+            if (item.material) item.material.visible = false;
+        });
+        this.currentStripLevel = 3;
+        this.saveSettings(this.currentModelId);
+        this.notify();
+    }
+
+    // Ocultar gargantillas y accesorios de cuello que causan desprendimiento o clipping
+    hideNeckAccessories(): void {
+        const keywords = ['choker', 'necklace', 'collar', 'neckband', 'neckstrap', 'neck_ribbon', 'neck_acc', 'neck_accessory', 'neckacc', '项链', '项圈'];
+        this.items.forEach(item => {
+            const lower = item.name.toLowerCase();
+            if (keywords.some(k => lower.includes(k))) {
+                item.visible = false;
+                if (item.mesh) item.mesh.visible = false;
+                if (item.material) item.material.visible = false;
+            }
+        });
+    }
+
+    // Persistencia por modelo
+    saveSettings(modelId: string): void {
+        try {
+            const key = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const map: Record<string, boolean> = {};
+            this.items.forEach(i => {
+                map[i.name] = i.visible;
+            });
+            localStorage.setItem(key, JSON.stringify(map));
+        } catch (_) {}
+    }
+
+    loadSettings(modelId: string): void {
+        try {
+            const key = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                const map = JSON.parse(saved);
+                this.items.forEach(item => {
+                    if (map[item.name] !== undefined) {
+                        item.visible = !!map[item.name];
+                        if (item.mesh) item.mesh.visible = item.visible;
+                        if (item.material) item.material.visible = item.visible;
+                    }
+                });
+            }
+        } catch (_) {}
     }
 
     // --- STRIP LOGIC ---
-    private currentStripLevel = 0; // 0=Full, 1=NoAcc, 2=NoOutfit, 3=Naked
-
     stripLayer(): string {
         this.currentStripLevel++;
         if (this.currentStripLevel > 3) this.currentStripLevel = 3;
 
         switch (this.currentStripLevel) {
-            case 1: // Quitar Accesorios
+            case 1:
                 this.toggleCategory('accessory', false);
                 return "Quitando accesorios...";
-            case 2: // Quitar Ropa Principal (Queda en Ropa Interior)
+            case 2:
                 this.toggleCategory('outfit', false);
+                this.toggleCategory('shoes', false);
                 return "Quitando ropa exterior...";
-            case 3: // Quitar Ropa Interior (Desnuda)
-                this.toggleCategory('underwear', false);
+            case 3:
+                this.presetNaked();
                 return "Quitando ropa interior...";
             default:
                 return "Ya no tengo nada más que quitarme.";
@@ -241,17 +496,18 @@ export class ClothingManager {
         if (this.currentStripLevel < 0) this.currentStripLevel = 0;
 
         switch (this.currentStripLevel) {
-            case 2: // Poner Ropa Interior (vuelta de desnuda)
+            case 2:
                 this.toggleCategory('underwear', true);
                 return "Poniéndome ropa interior...";
-            case 1: // Poner Ropa Principal
+            case 1:
                 this.toggleCategory('outfit', true);
+                this.toggleCategory('shoes', true);
                 return "Vistiéndome...";
-            case 0: // Poner Accesorios (Full)
-                this.toggleCategory('accessory', true);
+            case 0:
+                this.presetFullClothed();
                 return "Poniéndome accesorios...";
             default:
-                this.presetFullClothed(); // Fallback
+                this.presetFullClothed();
                 return "Completamente vestida.";
         }
     }
@@ -261,19 +517,30 @@ export class ClothingManager {
     }
 
     stripFull(): string {
-        this.currentStripLevel = 3;
-        this.toggleCategory('accessory', false);
-        this.toggleCategory('outfit', false);
-        this.toggleCategory('underwear', false);
+        this.presetNaked();
         return "Me he quitado todo.";
     }
 
     dressFull(): string {
-        this.currentStripLevel = 0;
-        this.toggleCategory('accessory', true);
-        this.toggleCategory('outfit', true);
-        this.toggleCategory('underwear', true);
+        this.presetFullClothed();
         return "Me he vestido completamente.";
+    }
+
+    applyPreset(preset: 'dressed' | 'underwear' | 'accessories' | 'nude'): void {
+        switch (preset) {
+            case 'dressed':
+                this.presetFullClothed();
+                break;
+            case 'underwear':
+                this.presetUnderwear();
+                break;
+            case 'accessories':
+                this.presetAccessoriesOnly();
+                break;
+            case 'nude':
+                this.presetNaked();
+                break;
+        }
     }
 }
 

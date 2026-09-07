@@ -157,8 +157,8 @@ export class AutonomyEngine {
 
     constructor(config: AutonomyConfig) {
         this.config = {
-            minIntervalMinutes: 12,
-            maxIntervalMinutes: 25,
+            minIntervalMinutes: 3,
+            maxIntervalMinutes: 7,
             enabled: true,
             ...config,
         };
@@ -185,7 +185,7 @@ export class AutonomyEngine {
         console.log('🤖 [AutonomyEngine] Detenido');
     }
 
-    /** Actualiza la configuración en caliente (ej. si el usuario cambia intereses) */
+    /** Actualiza la configuración en caliente (ej. si el usuario cambia intereses) sin reiniciar el temporizador */
     updateConfig(partial: Partial<AutonomyConfig>) {
         this.config = { ...this.config, ...partial };
     }
@@ -204,7 +204,7 @@ export class AutonomyEngine {
         const { minIntervalMinutes, maxIntervalMinutes } = this.config;
         const delayMs = randomBetween(minIntervalMinutes, maxIntervalMinutes) * 60 * 1000;
 
-        console.log(`🤖 [AutonomyEngine] Próxima intervención espontánea en ${Math.round(delayMs / 60000)} min`);
+        console.log(`🤖 [AutonomyEngine] Próxima intervención espontánea en ${(delayMs / 60000).toFixed(1)} min`);
 
         this.timerId = setTimeout(() => {
             if (this.isActive) {
@@ -219,8 +219,8 @@ export class AutonomyEngine {
         const silenceMs = now - this.lastSpeakTime;
         const silenceMin = silenceMs / 60000;
 
-        // Solo actuar si hay cierto silencio (al menos 2 min desde última interacción)
-        if (silenceMin < 2 && this.lastSpeakTime !== 0) {
+        // Solo actuar si hay cierto silencio (al menos 1.5 min desde última interacción si ya hubo una)
+        if (silenceMin < 1.5 && this.lastSpeakTime !== 0) {
             console.log(`🤖 [AutonomyEngine] Silencio de solo ${silenceMin.toFixed(1)} min — postponiendo`);
             return;
         }
@@ -228,11 +228,11 @@ export class AutonomyEngine {
         // Elegir tipo de acción según contexto
         const roll = Math.random();
 
-        if (roll < 0.40) {
-            // 40%: Dato curioso (frecuente y educativo)
+        if (roll < 0.35) {
+            // 35%: Dato curioso (frecuente y educativo)
             this.triggerCuriosityFact();
         } else if (roll < 0.60) {
-            // 20%: Pausa activa / Cuidado de farmeo y salud con Props 3D
+            // 25%: Pausa activa / Cuidado de farmeo y salud con Props 3D
             this.triggerHealthOrFarmingBreak();
         } else if (roll < 0.80 && this.config.hasCamera) {
             // 20%: Observación ambiental (solo si hay cámara)
@@ -244,8 +244,13 @@ export class AutonomyEngine {
     }
 
     private triggerHealthOrFarmingBreak() {
-        // En lugar de pausas activas genéricas, disparar observación o dato de interés gamer
-        this.triggerCuriosityFact();
+        const unused = HEALTH_AND_GAMING_BREAKS.filter(t => !this.usedFacts.has(t));
+        const template = unused.length > 0 ? pickRandom(unused) : pickRandom(HEALTH_AND_GAMING_BREAKS);
+        this.usedFacts.add(template);
+        if (this.usedFacts.size > 30) this.usedFacts.clear();
+
+        const message = template.replace(/{nombre}/g, this.config.userName);
+        this.config.onNovaSpeak(message, 'health_break');
     }
 
     private triggerCuriosityFact() {

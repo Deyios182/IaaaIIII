@@ -244,15 +244,33 @@ export class UniversalLipSync {
     update(delta: number, isSpeaking: boolean = false): void {
         const now = Date.now();
 
-        // Analizar audio si está disponible
+        // Si NO está hablando, asegurar silencio total y reset inmediato de boca
+        if (!isSpeaking) {
+            this.state.isSpeaking = false;
+            this.state.targetViseme = 'neutral';
+            this.state.currentViseme = 'neutral';
+            this.state.targetIntensity = 0;
+            this.state.intensity = THREE.MathUtils.lerp(this.state.intensity, 0, 0.25);
+
+            if (this.morphMeshes.length > 0 && this.availableMorphs.size > 0) {
+                this.applyMorphs(0);
+            }
+            if (!this.disableBoneManipulation) {
+                if (this.jawBone && this.jawOriginalRotation) {
+                    this.jawBone.rotation.x = THREE.MathUtils.lerp(this.jawBone.rotation.x, this.jawOriginalRotation.x, 0.25);
+                }
+                this.applyJawBone(0);
+            }
+            return;
+        }
+
+        // Analizar audio ÚNICAMENTE si está hablando activamente
         if (this.analyser && this.dataArray) {
             this.analyser.getByteFrequencyData(this.dataArray as any);
 
             // Calcular intensidad (Promedio de frecuencias)
             const average = this.dataArray.reduce((a, b) => a + b, 0) / this.dataArray.length;
 
-            // Umbral ajustado: Dividimos por un valor más bajo (90 en lugar de 180) para que voces suaves también muevan la boca.
-            // Usamos una curva no lineal (pow) para que responda mejor a cambios de volumen.
             let normalized = Math.min(average / 90, 1.0);
             this.state.targetIntensity = Math.pow(normalized, 1.2);
 
@@ -266,19 +284,11 @@ export class UniversalLipSync {
             }
         }
 
-        // Si se indica externamente que está hablando (ej: LLM generando texto)
-        if (isSpeaking) {
-            this.state.isSpeaking = true;
-            this.state.lastSpeakTime = now;
-            
-            // Si el analizador de audio no está dando datos (estamos probando el botón "Hablar"),
-            // darle un pequeño empujón de intensidad fijo para que abra un poquito la boca si no hay audio,
-            // pero sin el ciclo procedimental loco.
-            if (this.state.targetIntensity < 0.1 && !this.analyser) {
-                this.state.targetIntensity = 0.5;
-                if (this.state.targetViseme === 'neutral') {
-                    this.state.targetViseme = 'A';
-                }
+        // Si se indica externamente que está hablando pero no hay datos de audio
+        if (this.state.targetIntensity < 0.1 && !this.analyser) {
+            this.state.targetIntensity = 0.5;
+            if (this.state.targetViseme === 'neutral') {
+                this.state.targetViseme = 'A';
             }
         }
 

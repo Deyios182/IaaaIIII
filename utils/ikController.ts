@@ -275,10 +275,10 @@ export class IKController {
                 this.fingerBones.set(name, bone);
             }
 
-            // Match exacto o difuso para HEAD
-            const isDeformHead = name === 'j_bip_c_head' || name === 'mixamorighead' || name === 'def-head' || name === 'bip01_head';
-            const isExactHead = isDeformHead || name === 'head';
-            const isFuzzyHead = name.includes('head') && !name.includes('headtop') && !name.includes('hair') && !name.includes('accessory');
+            // Match exacto o difuso para HEAD (soporta VRM, Mixamo, Rigify y PMX/MMD '頭')
+            const isDeformHead = name === 'j_bip_c_head' || name === 'mixamorighead' || name === 'def-head' || name === 'bip01_head' || bone.name === '頭';
+            const isExactHead = isDeformHead || name === 'head' || bone.name === '頭';
+            const isFuzzyHead = (name.includes('head') || bone.name.includes('頭')) && !name.includes('headtop') && !name.includes('hair') && !name.includes('accessory');
             
             if (isExactHead || isFuzzyHead) {
                 if (isDeformHead || !this.headBone) {
@@ -293,31 +293,32 @@ export class IKController {
                     this.headPose.originalRot.copy(bone.rotation);
                     this.headPose.targetRot.copy(bone.rotation);
                     this.headPose.currentRot.copy(bone.rotation);
-                } else if (!this.dummyHeadBone && name === 'head') {
+                } else if (!this.dummyHeadBone && (name === 'head' || bone.name === '頭')) {
                     // Si ya tenemos el deformador, pero encontramos un "head" suelto, es el dummy
                     this.dummyHeadBone = bone;
                     this.dummyHeadOriginalQuat.copy(bone.quaternion);
                 }
             }
 
-            // Match exacto o difuso para NECK
-            const isExactNeck = name === 'neck' || name === 'j_bip_c_neck' || name === 'mixamorigneck' || name === 'def-neck' || name === 'bip01_neck';
-            if (isExactNeck || name.includes('neck')) {
+            // Match exacto o difuso para NECK (soporta VRM, Mixamo, Rigify y PMX/MMD '首')
+            const isExactNeck = name === 'neck' || name === 'j_bip_c_neck' || name === 'mixamorigneck' || name === 'def-neck' || name === 'bip01_neck' || bone.name === '首';
+            if (isExactNeck || name.includes('neck') || bone.name.includes('首')) {
                 if (isExactNeck || !this.neckBone) {
                     this.neckBone = bone;
                     this.neckOriginalQuat.copy(bone.quaternion);
                 }
             }
 
-            if (name.includes('eye') && !name.includes('master') && !name.includes('lid') && !name.includes('brow') && !name.includes('lash')) {
-                const isLeft  = name.includes('left')  || name.includes('_l') || name.endsWith('.l');
-                const isRight = name.includes('right') || name.includes('_r') || name.endsWith('.r');
+            const isEyeBone = (name.includes('eye') || bone.name.includes('目')) && !name.includes('master') && !name.includes('lid') && !name.includes('brow') && !name.includes('lash');
+            if (isEyeBone) {
+                const isLeft  = name.includes('left')  || name.includes('_l') || name.endsWith('.l') || bone.name.includes('左');
+                const isRight = name.includes('right') || name.includes('_r') || name.endsWith('.r') || bone.name.includes('右');
 
-                if (isLeft && (!this.leftEye || name === 'def-eye.l' || name === 'eye.l' || name === 'def-eye_iris.l')) {
+                if (isLeft && (!this.leftEye || name === 'def-eye.l' || name === 'eye.l' || name === 'def-eye_iris.l' || bone.name === '左目')) {
                     this.leftEye = bone;
                     this.leftEyeOriginalQuat.copy(bone.quaternion);
                 }
-                if (isRight && (!this.rightEye || name === 'def-eye.r' || name === 'eye.r' || name === 'def-eye_iris.r')) {
+                if (isRight && (!this.rightEye || name === 'def-eye.r' || name === 'eye.r' || name === 'def-eye_iris.r' || bone.name === '右目')) {
                     this.rightEye = bone;
                     this.rightEyeOriginalQuat.copy(bone.quaternion);
                 }
@@ -561,10 +562,15 @@ export class IKController {
     resetAllLimbs(): void {
         if (!this.fullBodyReady) return;
         this.leftArm.targetRot.copy(this.leftArm.originalRot);
+        this.leftArm.active = false;
         this.rightArm.targetRot.copy(this.rightArm.originalRot);
+        this.rightArm.active = false;
         this.leftForeArm.targetRot.copy(this.leftForeArm.originalRot);
+        this.leftForeArm.active = false;
         this.rightForeArm.targetRot.copy(this.rightForeArm.originalRot);
+        this.rightForeArm.active = false;
         this.headPose.targetRot.copy(this.headPose.originalRot);
+        this.headPose.active = false;
         
         // Reset a offset 0 y desactivar para dar control al mixer
         this.torso.targetRot.set(0, 0, 0);
@@ -739,16 +745,17 @@ export class IKController {
     update(delta: number, skipLimbs: boolean = false): void {
         this.idleTime += delta;
 
-        // Interpolaciones suaves de todos los limbs
-        if (!skipLimbs) {
-            this.updateLimbs(delta);
-        }
-
         // ── GUARD: No actualizar cabeza/cuello hasta que el Idle esté estabilizado ─────────────────
         // El AnimationMixer necesita ~30 frames para alcanzar su pose estable.
         // Si el IK mueve la cabeza antes, capturará un ángulo incorrecto del bind pose de Blender
         // y producirá la cabeza girada 90° hacia atrás al hablar.
-        if (!this.isCalibrated) return;
+        if (!this.isCalibrated) {
+            if (this.idleTime > 0.5) {
+                this.recalibrateBindPose();
+            } else {
+                return;
+            }
+        }
 
         // Auto-retorno de piernas al reposo
         if (this.leftLeg.active && this.leftLegTimer > 0) {
@@ -904,7 +911,7 @@ export class IKController {
     }
 
     private interpolateLimb(limb: LimbIKState, speed: number): void {
-        if (!limb.bone) return;
+        if (!limb.bone || !limb.active) return;
 
         // Slerp gradual usando cuaterniones para evitar gimbal lock y deformaciones en rigs de Rigify
         const targetQuat = new THREE.Quaternion().setFromEuler(limb.targetRot);

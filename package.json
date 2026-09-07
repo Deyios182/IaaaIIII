@@ -54,6 +54,8 @@
     "@supabase/supabase-js": "^2.89.0",
     "@vladmandic/face-api": "^1.7.15",
     "face-api.js": "^0.22.2",
+    "jszip": "^3.10.1",
+    "mmd-parser": "^1.0.4",
     "postprocessing": "^6.38.2",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

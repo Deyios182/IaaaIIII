@@ -15,6 +15,7 @@ import AvatarStudio from './screens/AvatarStudio';
 import { AppState, MemoryRetention, ConversationStyle, PersonEntry } from './types';
 import AvatarViewer3D from './components/AvatarViewer3D';
 import { loadAllMemory } from './services/MemoryService';
+import { modelStore } from './utils/modelStore';
 // 🤖 Gym — lazy loaded para aislar dependencias (rapier WASM)
 const GymLauncher = lazy(() => import('./gym/GymLauncher'));
 
@@ -88,8 +89,11 @@ const loadState = (): AppState => {
         console.warn('⚠️ Avatar URL problemática detectada, restaurando default.');
       }
 
-      // MODELO FIJO: siempre usar grokani_lipsync.glb para evitar bugs de cambio de modelo
+      // MODELO DEFAULT: grokani_lipsync.glb si no hay uno válido
       const CANONICAL_MODEL = '/models/grokani_lipsync.glb';
+      const validModelUrl = (parsed.avatar?.modelUrl && !isBrokenUrl && !isCrashingModel)
+        ? parsed.avatar.modelUrl
+        : CANONICAL_MODEL;
 
       return {
         ...getDefaultState(),
@@ -98,7 +102,7 @@ const loadState = (): AppState => {
         avatar: {
           ...getDefaultState().avatar,
           ...parsed.avatar,
-          modelUrl: CANONICAL_MODEL // siempre forzar el modelo estáble
+          modelUrl: validModelUrl
         },
         // Asegurar que el perfil de usuario existe y está actualizado
         knownPeople: (() => {
@@ -144,6 +148,14 @@ const AppContent: React.FC<{
   const location = useLocation();
   const isDashboardRoute = location.pathname === '/';
   const isAvatarStudioRoute = location.pathname === '/avatar-studio';
+
+  // 🛑 Al volver al Dashboard (o al salir de Avatar Studio), asegurar que el avatar vuelva a Idle y no quede atrapado en animaciones de prueba
+  useEffect(() => {
+    if (isDashboardRoute) {
+      window.dispatchEvent(new CustomEvent('nova-stop-animation'));
+      window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+    }
+  }, [isDashboardRoute]);
 
   return (
     <div className={`flex h-screen w-full bg-background-dark text-white overflow-hidden transition-colors duration-1000 ${state.avatar.isBoldMode ? 'selection:bg-pink-500' : 'selection:bg-primary'}`}>
@@ -248,6 +260,16 @@ const App: React.FC = () => {
         console.log('🐾 Mini Mode:', isMini);
       });
     }
+  }, []);
+
+  // Restaurar modelo 3D guardado por el usuario en IndexedDB (PMX/GLB/VRM)
+  useEffect(() => {
+    modelStore.loadModel().then(saved => {
+      if (saved) {
+        console.log('💾 Modelo 3D de usuario restaurado desde IndexedDB:', saved.info.fileName);
+        updateAvatar({ modelUrl: saved.url });
+      }
+    }).catch(err => console.warn('No se pudo restaurar modelo desde IndexedDB:', err));
   }, []);
 
   // Guardar en localStorage cada vez que cambie el estado
