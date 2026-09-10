@@ -428,6 +428,9 @@ export class IKController {
 
             this.movementListener = (e: Event) => {
                 const { limb, target } = (e as CustomEvent<{ limb: LimbType; target: LimbTarget }>).detail;
+                if ((this as any)._lastLimbTargets?.[limb] === target) return;
+                (this as any)._lastLimbTargets = (this as any)._lastLimbTargets || {};
+                (this as any)._lastLimbTargets[limb] = target;
                 console.log(`🦾 [IKController] aiko-movement → ${limb} : ${target}`);
                 this.setLimbTarget(limb, target);
             };

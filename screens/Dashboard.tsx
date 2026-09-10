@@ -1137,6 +1137,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const emptyTurnCountRef = useRef<number>(0); // Contador de turnos vacíos consecutivos
   const lastGreetMsgRef = useRef<string>(''); // Guarda el saludo (contexto en system prompt)
   const lastGreetPhraseRef = useRef<string>(''); // Solo la frase pura de saludo (sin meta-instrucciones)
+  const reconnectContextRef = useRef<string>(''); // Resumen contextual de la charla reciente para inyectar tras reconexión
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSpeakingRef = useRef<boolean>(false);
   const cadenceAnalyzerRef = useRef<VoiceCadenceAnalyzer>(new VoiceCadenceAnalyzer());
@@ -1914,8 +1915,8 @@ Transcripción de la sesión:
 ${sessionLog}
 `;
 
-    // 1. Intento Primario: OpenRouter (Gratis y verificado con Ox Alpha)
-    if (openRouterKey) {
+    // 1. Intento Primario: OpenRouter (Solo si hay clave configurada válida)
+    if (openRouterKey && openRouterKey !== 'undefined' && openRouterKey.startsWith('sk-or-')) {
       try {
         const orResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -1974,6 +1975,8 @@ ${sessionLog}
       } catch (e: any) {
         if (e?.status === 429 || e?.message?.includes('429') || e?.message?.includes('Quota')) {
           console.warn('ℹ️ [MemoryService] Cuota de Gemini en descanso. Consolidación pospuesta para la siguiente sesión.');
+        } else if (e?.status === 503 || e?.code === 503 || e?.message?.includes('503') || e?.message?.includes('high demand') || e?.message?.includes('UNAVAILABLE')) {
+          console.warn('ℹ️ [MemoryService] Gemini 2.5 Flash con alta demanda temporal (503). Consolidación pospuesta.');
         } else {
           console.warn('⚠️ [MemoryService] Error en consolidación:', e);
         }
@@ -3005,37 +3008,54 @@ ${sessionLog}
       const effectiveDuration = buffer.duration / (source.playbackRate.value || 1.0);
       nextStartTimeRef.current = startTime + effectiveDuration;
 
+      // Safety watchdog: si por cualquier desincronización el source no finaliza limpiamente, liberar el micrófono
+      const safetyTimeoutMs = Math.round((effectiveDuration + 0.4) * 1000);
+      setTimeout(() => {
+        if (aiAudioSourcesRef.current.length === 0 && isAiSpeakingRef.current) {
+          setIsAiSpeaking(false);
+          isAiSpeakingRef.current = false;
+          canSendAudioRef.current = true;
+        }
+      }, safetyTimeoutMs);
+
       source.onended = () => {
         // Eliminar este source del array cuando termine
         aiAudioSourcesRef.current = aiAudioSourcesRef.current.filter(s => s !== source);
-        if (ctx.currentTime >= nextStartTimeRef.current - 0.1 && aiAudioSourcesRef.current.length === 0) {
-          setIsAiSpeaking(false);
-          isAiSpeakingRef.current = false;
+        if (aiAudioSourcesRef.current.length === 0) {
+          const remainingDelay = Math.max(0, (nextStartTimeRef.current - ctx.currentTime) * 1000);
+          setTimeout(() => {
+            if (aiAudioSourcesRef.current.length === 0) {
+              setIsAiSpeaking(false);
+              isAiSpeakingRef.current = false;
+              canSendAudioRef.current = true; // 🎙️ Reabrir micrófono inmediatamente
 
-          // 👋 Si había una despedida en curso y Nova terminó de hablar su audio por completo:
-          if (isPendingHangupRef.current && isInCallRef.current) {
-            console.log('👋 [GracefulHangup] Nova terminó su despedida. Cerrando llamada suavemente...');
-            setTimeout(() => {
+              // 👋 Si había una despedida en curso y Nova terminó de hablar su audio por completo:
               if (isPendingHangupRef.current && isInCallRef.current) {
-                isPendingHangupRef.current = false;
-                if (hangupSafetyTimerRef.current) clearTimeout(hangupSafetyTimerRef.current);
-                endCallRef.current();
+                console.log('👋 [GracefulHangup] Nova terminó su despedida. Cerrando llamada suavemente...');
+                setTimeout(() => {
+                  if (isPendingHangupRef.current && isInCallRef.current) {
+                    isPendingHangupRef.current = false;
+                    if (hangupSafetyTimerRef.current) clearTimeout(hangupSafetyTimerRef.current);
+                    endCallRef.current();
+                  }
+                }, 900); // 900ms para permitir que el avatar termine de animar la boca
               }
-            }, 900); // 900ms para permitir que el avatar termine de animar la boca
-          }
 
-          // Restaurar audio del sistema
-          if (systemGainNodeRef.current && isInCallRef.current) {
-            systemGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
-            systemGainNodeRef.current.gain.setTargetAtTime(1.0, ctx.currentTime, 0.2);
-            console.log('🔊 DUCKING IMPERATIVO: DESACTIVADO');
-          }
+              // Restaurar audio del sistema
+              if (systemGainNodeRef.current && isInCallRef.current) {
+                systemGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
+                systemGainNodeRef.current.gain.setTargetAtTime(1.0, ctx.currentTime, 0.2);
+                console.log('🔊 DUCKING IMPERATIVO: DESACTIVADO');
+              }
+            }
+          }, Math.min(remainingDelay, 120));
         }
       };
     } catch (e) {
       console.error('Error reproduciendo audio:', e);
       setIsAiSpeaking(false);
       isAiSpeakingRef.current = false;
+      canSendAudioRef.current = true;
     }
   };
 
@@ -3422,6 +3442,8 @@ ${sessionLog}
       lastCallDisconnectTimeRef.current = 0;
 
       let proceduralGreeting = '';
+      reconnectContextRef.current = '';
+
       if (hasRecentInterruption) {
         const reconnectPhrases = [
           `¡Uy, perdón! Se me cayó la conexión un momento, pero ya estoy de vuelta. ¿Qué me decías?`,
@@ -3430,6 +3452,18 @@ ${sessionLog}
           `¡Ya estoy aquí de vuelta! Disculpa el corte, ¿seguimos con lo que hablábamos, ${state.userName}?`
         ];
         proceduralGreeting = pick(reconnectPhrases);
+
+        // Extraer los últimos mensajes relevantes de la sesión para mantener hilo conversacional continuo
+        const recentConversationTurns = state.messages
+          .filter(m => m.text && !m.text.startsWith('🔄') && !m.text.startsWith('🚫') && !m.text.startsWith('🔍') && !m.text.startsWith('['))
+          .slice(-4);
+
+        if (recentConversationTurns.length > 0) {
+          const historySummary = recentConversationTurns
+            .map(m => `${m.sender === 'user' ? state.userName : 'Nova'}: "${m.text.substring(0, 100)}"`)
+            .join(' | ');
+          reconnectContextRef.current = `[CONTEXTO DE RECONEXIÓN: La llamada se cortó brevemente. Justo antes hablaban de: ${historySummary}. Mantén el hilo de este tema si ${state.userName} continúa la conversación.]`;
+        }
       } else if (isSextingMode) {
         proceduralGreeting = pick(sextingOpeners);
       } else if (isGamerMode) {
@@ -3563,6 +3597,7 @@ ${sessionLog}
 
               // 🎤 DISPARAR SALUDO con frase pura (no el prompt imperativo completo)
               const greetPhrase = lastGreetPhraseRef.current;
+              const reconnectContext = reconnectContextRef.current;
               if (greetPhrase && liveSessionRef.current) {
                 setTimeout(() => {
                   try {
@@ -3571,6 +3606,21 @@ ${sessionLog}
                       // y no causa conflicto con el system instruction
                       // @ts-ignore
                       liveSessionRef.current.sendRealtimeInput({ text: greetPhrase });
+
+                      // Si hubo reconexión, proveer inmediatamente el contexto reciente sin romper la voz
+                      if (reconnectContext) {
+                        setTimeout(() => {
+                          try {
+                            if (liveSessionRef.current && isLiveSessionOpen(liveSessionRef.current)) {
+                              console.log('🔄 [LiveSession] Inyectando contexto de reconexión al modelo:', reconnectContext);
+                              // @ts-ignore
+                              liveSessionRef.current.sendRealtimeInput({ text: reconnectContext });
+                            }
+                          } catch (e) {
+                            console.warn('⚠️ [ReconnectContext] Error inyectando contexto:', e);
+                          }
+                        }, 1200);
+                      }
                     }
                   } catch (e) {
                     console.warn('⚠️ [Greeting] Error enviando saludo inicial:', e);
@@ -3624,46 +3674,7 @@ ${sessionLog}
             }
 
             if (toolCallsToProcess.length > 0) {
-              const now = Date.now();
-              const timeSinceLastToolCall = now - lastToolCallTimeRef.current;
-
-              if (timeSinceLastToolCall < 5000) {
-                console.warn(`⏳ [Rate Limiting] Bloqueando llamada a herramientas. Transcurrido: ${timeSinceLastToolCall}ms`);
-                for (const fc of toolCallsToProcess) {
-                  if (fc) {
-                    const callId = (fc as any).id;
-                    const response = { result: "Sistema ocupado, intenta en un momento." };
-
-                    if (callId) {
-                      try {
-                        // @ts-ignore
-                        liveSessionRef.current?.sendToolResponse({
-                          functionResponses: [{
-                            id: callId,
-                            name: fc.name,
-                            response: { output: response }
-                          }]
-                        });
-                      } catch (e) {
-                        // @ts-ignore
-                        liveSessionRef.current?.sendClientContent({
-                          turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] Sistema ocupado, intenta en un momento.` }] }],
-                          turnComplete: true
-                        });
-                      }
-                    } else {
-                      // @ts-ignore
-                      liveSessionRef.current?.sendClientContent({
-                        turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] Sistema ocupado, intenta en un momento.` }] }],
-                        turnComplete: true
-                      });
-                    }
-                  }
-                }
-                return;
-              }
-
-              lastToolCallTimeRef.current = now;
+              lastToolCallTimeRef.current = Date.now();
 
               for (const fc of toolCallsToProcess) {
                 if (fc) {
@@ -3731,12 +3742,19 @@ ${sessionLog}
                       setAgentState(AgentState.THINKING);
                       setEmotion('thinking');
 
-                      // 1. Buscar en la memoria local activa (caché de sesión en tiempo real + recordatorios)
+                      // 1. Buscar en la memoria local activa (caché de sesión en tiempo real + recordatorios + conversación reciente)
                       const reminderFacts: string[] = novaMemory.reminders
                         ? novaMemory.reminders.map(r => `Recordatorio (${r.completed ? 'completado' : 'pendiente'}): ${r.message}`)
                         : [];
 
+                      // Incorporar los intercambios recientes de la conversación activa
+                      const recentTurns = state.messages
+                        .filter(m => m.text && !m.text.startsWith('🔄') && !m.text.startsWith('🚫') && !m.text.startsWith('🔍') && !m.text.startsWith('['))
+                        .slice(-8)
+                        .map(m => `Conversación reciente (${m.sender === 'user' ? state.userName : 'Nova'}): "${m.text.trim()}"`);
+
                       const localFacts: string[] = [
+                        ...recentTurns,
                         `El usuario se llama ${state.userName}`,
                         ...pendingFactsRef.current.map(f => f.content),
                         ...novaMemory.facts,
@@ -3747,48 +3765,36 @@ ${sessionLog}
                       ];
 
                       const queryLower = query.toLowerCase();
-                      const queryWords = queryLower.split(/\s+/).filter((w: string) => w.length > 2);
-                      const localResults = localFacts.filter(fact => {
-                        const factLower = fact.toLowerCase();
-                        // Coincidencia por palabras clave o frase completa
-                        return factLower.includes(queryLower) || queryWords.some((word: string) => factLower.includes(word));
-                      });
+                      const isAskingAboutRecent = /reciente|habl[aá]bamos|conversaci[oó]n|dijiste|dije|anterior|momento|prueba/i.test(queryLower);
 
-                      // 2. Buscar en Supabase (largo plazo + recordatorios pendientes) con timeout de seguridad (max 1800ms)
-                      // para evitar que la red congele la llamada o bloquee el WebSocket de Gemini Live
-                      const dbPromise = (async () => {
+                      // Si pregunta por la conversación reciente, los turnos recientes son prioritarios
+                      let localResults: string[] = [];
+                      if (isAskingAboutRecent && recentTurns.length > 0) {
+                        localResults = [...recentTurns.slice(-4)];
+                      } else {
+                        const stopWords = new Set(['que', 'qué', 'de', 'la', 'el', 'en', 'un', 'una', 'los', 'las', 'por', 'para', 'con', 'sobre', 'sobre']);
+                        const queryWords = queryLower.split(/\s+/).filter((w: string) => w.length > 2 && !stopWords.has(w));
+                        localResults = localFacts.filter(fact => {
+                          const factLower = fact.toLowerCase();
+                          return factLower.includes(queryLower) || (queryWords.length > 0 && queryWords.some((word: string) => factLower.includes(word)));
+                        });
+                      }
+
+                      // 2. Buscar en Supabase solo si se necesitan más datos, con timeout estricto de 450ms
+                      // para que la llamada de voz nunca se congele ni se retrase.
+                      let dbResults: string[] = [];
+                      if (localResults.length < 3) {
                         try {
-                          const results = await searchFacts(query, 5);
-                          return results;
+                          const dbPromise = searchFacts(query, 3);
+                          const timeoutPromise = new Promise<string[]>((res) => setTimeout(() => res([]), 450));
+                          dbResults = await Promise.race([dbPromise, timeoutPromise]);
                         } catch (e) {
-                          console.warn('⚠️ [SearchMemory] Timeout/error en searchFacts:', e);
-                          return [];
-                        }
-                      })();
-
-                      const timeoutPromise = new Promise<string[]>((resolve) =>
-                        setTimeout(() => {
-                          console.warn('⚡ [SearchMemory] Supabase tardó >1800ms, continuando con memoria local...');
-                          resolve([]);
-                        }, 1800)
-                      );
-
-                      const dbResults = await Promise.race([dbPromise, timeoutPromise]);
-                      let dbReminders: string[] = [];
-                      if (queryLower.includes('recordatorio') || queryLower.includes('pendiente') || queryLower.includes('tarea') || queryLower.includes('recuerd')) {
-                        try {
-                          const rems = await Promise.race([
-                            getPendingReminders(),
-                            new Promise<any[]>((res) => setTimeout(() => res([]), 1000))
-                          ]);
-                          dbReminders = rems.map(r => `Recordatorio pendiente: ${r.message} (programado para: ${new Date(r.trigger_time).toLocaleString()})`);
-                        } catch (e) {
-                          console.warn('⚠️ Error al buscar recordatorios pendientes en DB:', e);
+                          dbResults = [];
                         }
                       }
 
                       // 3. Combinar sin duplicados
-                      const combinedResults = Array.from(new Set([...localResults, ...dbResults, ...dbReminders]));
+                      const combinedResults = Array.from(new Set([...localResults, ...dbResults]));
 
                       if (combinedResults.length > 0) {
                         toolResult = `Recuerdos/Recordatorios relevantes encontrados:\n${combinedResults.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\nUsa esta información en tu respuesta de forma amigable.`;
@@ -4148,11 +4154,11 @@ ${sessionLog}
               const text = msg.serverContent.inputTranscription.text.trim();
 
               // 🔇 FILTRO DE RUIDO Y ALUCINACIONES:
-              // Ignorar únicamente tags de ruido de Vosk o cadenas totalmente vacías/sin letras
+              // Ignorar únicamente tags de ruido de Vosk o cadenas totalmente vacías/sin contenido alfanumérico
               const isNoiseTag = text.includes('<noise>') || text.includes('<silence>') || text.includes('<unknown>');
-              const hasLetters = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(text);
+              const hasContent = /[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]/.test(text);
 
-              if (hasLetters && !isNoiseTag) {
+              if (hasContent && !isNoiseTag) {
                 const now = performance.now();
                 if (userSpeechStartRef.current === 0) {
                   userSpeechStartRef.current = now;
@@ -4867,15 +4873,21 @@ ${sessionLog}
             // Cuando Nova termina de hablar, reactivamos el micrófono tras un pequeño buffer
             if (msg.serverContent?.turnComplete) {
               const now = performance.now();
-              const turnDuration = userSpeechEndRef.current > 0 ? Math.round(now - userSpeechEndRef.current) : 0;
-              console.log(
-                `%c📊 ${getLogTimestamp()} [RESUMEN DE TURNO] 🎙️ Duración total de turno: ${turnDuration} ms | TTFA: ${latencyStatsRef.current.ttfa} ms | Nube Gemini: ${latencyStatsRef.current.cloudTime} ms`,
-                'color: #ffaa00; font-weight: bold; font-size: 11px; background: #2b1d00; padding: 2px 6px; border-radius: 4px;'
-              );
+              const hasActivity = userSpeechEndRef.current > 0 || firstAudioReceivedRef.current || currentOutputTranscription.current.trim().length > 0;
+              if (hasActivity) {
+                const turnDuration = userSpeechEndRef.current > 0 ? Math.round(now - userSpeechEndRef.current) : 0;
+                console.log(
+                  `%c📊 ${getLogTimestamp()} [RESUMEN DE TURNO] 🎙️ Duración total de turno: ${turnDuration} ms | TTFA: ${latencyStatsRef.current.ttfa} ms | Nube Gemini: ${latencyStatsRef.current.cloudTime} ms`,
+                  'color: #ffaa00; font-weight: bold; font-size: 11px; background: #2b1d00; padding: 2px 6px; border-radius: 4px;'
+                );
+              }
 
               setTimeout(() => {
-                // Resetear isAiSpeaking para reabrir el micrófono
-                isAiSpeakingRef.current = false;
+                // Resetear isAiSpeaking para reabrir el micrófono solo si no hay audio reproduciéndose activamente
+                if (aiAudioSourcesRef.current.length === 0) {
+                  isAiSpeakingRef.current = false;
+                  setIsAiSpeaking(false);
+                }
 
                 const noAudioReceived = !firstAudioReceivedRef.current;
                 const noUserSpeech = userSpeechEndRef.current === 0;
@@ -4914,6 +4926,7 @@ ${sessionLog}
                 firstAudioReceivedRef.current = false;
                 userSpeechStartRef.current = 0;
                 userSpeechEndRef.current = 0;
+                latencyStatsRef.current = { ttfa: 0, cloudTime: 0 };
               }, 400);
 
               // 🔌 CIERRE ELEGANTE: Si Nova se estaba despidiendo, cortar la llamada solo cuando terminó de hablar
@@ -5711,20 +5724,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
             if (speechConsecutiveFramesRef.current >= 3) {
               console.log('🛑 [Voice Barge-In] Usuario interrumpió con voz deliberada (Pitch:', speechInfo.pitch.toFixed(1), 'Hz)');
-              stopAiAudio(true);
-
-              // 🔌 INTERRUPCIÓN EXPLÍCITA AL SERVIDOR
-              try {
-                // @ts-ignore
-                if (typeof liveSessionRef.current?.sendClientContent === 'function') {
-                  // @ts-ignore
-                  liveSessionRef.current.sendClientContent({
-                    turns: [],
-                    turnComplete: true
-                  });
-                  console.log('📡 [Voice Barge-In] Señal de interrupción enviada a Gemini Live.');
-                }
-              } catch (e) { }
+              stopAiAudio(true); // Detiene de inmediato el audio y restaura isAiSpeakingRef = false
 
               speechConsecutiveFramesRef.current = 0;
             }
@@ -5833,17 +5833,26 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             }
           }
 
-          // 🎙️ TRANSMISIÓN INTELIGENTE (Audio Crudo continuo a Gemini Live)
-          if (!liveSessionRef.current || !isInCallRef.current || !canSendAudioRef.current) return;
+          // 🎙️ TRANSMISIÓN INTELIGENTE (Audio agrupado a 16kHz en chunks óptimos de ~128ms para Gemini Live)
+          if (!liveSessionRef.current || !isInCallRef.current) {
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
+            return;
+          }
 
           // 🔇 MUTE MANUAL: Si el usuario silenció el micrófono, no enviamos audio
-          if (isMicMutedRef.current) return;
+          if (isMicMutedRef.current) {
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
+            return;
+          }
 
           // 🛡️ DUCKING / ANTI-AUTO-INTERRUPCIÓN:
-          // Si Nova está hablando activamente (isAiSpeaking), silenciamos o atenuamos al 100%
-          // el audio que va hacia Gemini Live para que no se escuche a sí misma ni se interrumpa.
-          if (isAiSpeakingRef.current) {
-            // Nova está hablando → Drop packet para evitar feedback loop / eco
+          // Si Nova está hablando activamente (isAiSpeaking), silenciamos únicamente si NO hay voz humana (anti-eco),
+          // pero si el usuario habla (speechInfo.isSpeech), dejamos pasar el audio para permitir interrupción natural.
+          if (isAiSpeakingRef.current && !speechInfo.isSpeech) {
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
             return;
           }
 
@@ -5851,26 +5860,46 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           // @ts-ignore
           const session = liveSessionRef.current;
           if (!session || !isLiveSessionOpen(session)) {
-            canSendAudioRef.current = false;
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
             return;
           }
 
-          lastChunkSentRef.current = performance.now();
+          pcmAccumulator.push(i16);
+          accumulatedSampleCount += i16.length;
 
-          try {
-            // @ts-ignore
-            if (typeof session?.sendRealtimeInput === 'function') {
-              session.sendRealtimeInput({
-                audio: {
-                  data: encodeBase64(new Uint8Array(i16.buffer)),
-                  mimeType: 'audio/pcm;rate=16000'
-                }
-              });
+          const nowAudio = performance.now();
+          // Agrupar en paquetes de ~128ms (2048 muestras a 16kHz) o forzar si pasaron >= 140ms
+          // Esto reduce los mensajes WebSocket de 125/segundo a ~7.5/segundo, eliminando
+          // la sobrecarga de buffer que causaba desconexiones 1011 cada 30-50 segundos.
+          if (accumulatedSampleCount >= CHUNK_SAMPLE_THRESHOLD || (nowAudio - lastAudioSendTime >= 140 && accumulatedSampleCount > 0)) {
+            lastAudioSendTime = nowAudio;
+            lastChunkSentRef.current = nowAudio;
+
+            const merged = new Int16Array(accumulatedSampleCount);
+            let offset = 0;
+            for (let j = 0; j < pcmAccumulator.length; j++) {
+              merged.set(pcmAccumulator[j], offset);
+              offset += pcmAccumulator[j].length;
             }
-          } catch (err: any) {
-            // Error al enviar audio — bloquear para no saturar el socket con errores
-            canSendAudioRef.current = false;
-            return;
+            pcmAccumulator = [];
+            accumulatedSampleCount = 0;
+
+            try {
+              // @ts-ignore
+              if (typeof session?.sendRealtimeInput === 'function') {
+                session.sendRealtimeInput({
+                  audio: {
+                    data: encodeBase64(new Uint8Array(merged.buffer)),
+                    mimeType: 'audio/pcm;rate=16000'
+                  }
+                });
+              }
+            } catch (err: any) {
+              pcmAccumulator = [];
+              accumulatedSampleCount = 0;
+              return;
+            }
           }
         } catch (err: any) {
           // Error en procesamiento de frame — no bloquear canSendAudioRef para permitir recuperación

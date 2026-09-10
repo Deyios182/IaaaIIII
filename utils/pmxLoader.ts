@@ -1027,15 +1027,20 @@ function loadMeshWithMMDLoader(
                   m.depthTest = true;
                   m.alphaTest = 0;
                 } else if (m.transparent) {
-                  if (m.opacity !== undefined && m.opacity < 0.85) {
-                    // Otros materiales con transparencia real intencional (velos, encajes) → blend correcto
+                  const isDeliberateSheer = /veil|lace|glass|lens|crystal|sheer|trans|纱|透|レース|ベール/i.test(mName) || (m.opacity !== undefined && m.opacity < 0.65);
+                  if (isDeliberateSheer) {
+                    // Solo telas explícitamente transparentes (velos, encajes finos)
+                    m.transparent = true;
                     m.alphaTest = 0.05;
                     m.depthWrite = false;
                   } else {
+                    // Todas las demás partes con transparencia (faldas, bordes de mangas, adornos, lazos):
+                    // FORZAR CUTOUT: transparent=false + alphaTest + depthWrite=true
+                    // Esto erradica el fallo clásico de ver a través de la ropa, el cuerpo o el fondo.
                     m.transparent = false;
                     m.opacity = 1.0;
                     m.depthWrite = true;
-                    m.alphaTest = m.map ? 0.15 : 0;
+                    m.alphaTest = 0.2;
                   }
                 } else {
                   m.transparent = false;
@@ -1141,27 +1146,19 @@ function loadMeshWithMMDLoader(
             group.add(overlayMesh);
           }
 
-          // Eliminar los grupos de overlay de la malla base reconstruyendo sus grupos
-          const baseMatIndexMap = new Map<number, number>();
-          const newBaseMats: any[] = [];
-          baseIndices.forEach((origIdx) => {
-            const mat = child.material[origIdx];
-            if (mat) {
-              const newIdx = newBaseMats.length;
-              newBaseMats.push(mat);
-              baseMatIndexMap.set(origIdx, newIdx);
+          // En la malla base, ocultamos los materiales de overlay sin eliminar elementos del array
+          // de materiales ni alterar geo.groups. Esto previene que loaders de texturas asíncronos
+          // de Three.js / MMDLoader fallen buscando groups[materialIndex].start.
+          overlayIndices.forEach((origIdx) => {
+            const m = child.material[origIdx];
+            if (m) {
+              m.visible = false;
+              m.opacity = 0;
+              m.transparent = true;
+              m.depthWrite = false;
+              m.depthTest = false;
             }
           });
-
-          // Reconstruir los grupos de la geometría base (solo los no-overlays)
-          const origGroups = [...geo.groups];
-          geo.clearGroups();
-          origGroups.forEach((g: any) => {
-            if (g && baseMatIndexMap.has(g.materialIndex)) {
-              geo.addGroup(g.start, g.count, baseMatIndexMap.get(g.materialIndex)!);
-            }
-          });
-          child.material = newBaseMats;
           child.renderOrder = 0;
 
           console.log(`👁️ [PMXLoader] Overlays faciales separados: ${overlayIndices.length} materiales → "${overlayMesh.name}"`);

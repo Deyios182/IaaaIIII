@@ -150,6 +150,7 @@ export class AutonomyEngine {
     private config: Required<AutonomyConfig>;
     private timerId: ReturnType<typeof setTimeout> | null = null;
     private lastSpeakTime: number = 0;
+    private lastRescheduleTime: number = 0;
     private isActive: boolean = false;
 
     // Rastreo de hechos ya usados para no repetir
@@ -192,9 +193,11 @@ export class AutonomyEngine {
 
     /** Notifica al engine que el usuario acaba de hablar (resetea el timer) */
     onUserActivity() {
-        this.lastSpeakTime = Date.now();
-        // Reprogramar para dar espacio al usuario
-        if (this.isActive) {
+        const now = Date.now();
+        this.lastSpeakTime = now;
+        // Debounce: Solo reprogramar si pasaron al menos 30s desde la última reprogramación
+        if (this.isActive && (now - this.lastRescheduleTime > 30000)) {
+            this.lastRescheduleTime = now;
             if (this.timerId) clearTimeout(this.timerId);
             this.scheduleNextAction();
         }

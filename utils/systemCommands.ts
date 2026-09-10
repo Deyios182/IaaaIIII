@@ -65,9 +65,9 @@ export function detectSystemCommand(text: string): SystemCommand {
 
     const startCallRegex = /(?:inicia|iniciar|comienza|comenzar|activa|activar|pon|abre|abrir|hacer|haz)\s+(?:la\s+)?(?:llamada|videollamada|video|conexi[oó]n)/i;
     const startCallPhrases = /(?:hey|hola|ok)\s+nova/i;
-    const startCallDirect = /(?:nova\s+)?(?:despierta|con[eé]ctate|act[ií]vate)/i;
+    const startCallDirect = /(?:nova\s+)?(?:despierta|(?<!des)con[eé]ctate|act[ií]vate)/i;
 
-    if (startCallRegex.test(lowerText) || startCallPhrases.test(lowerText) || startCallDirect.test(lowerText)) {
+    if (!lowerText.includes('descon') && (startCallRegex.test(lowerText) || startCallPhrases.test(lowerText) || startCallDirect.test(lowerText))) {
         return { type: 'startCall' };
     }
 

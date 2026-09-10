@@ -1184,8 +1184,8 @@ function AvatarModelInner({
                     const name = child.name.toLowerCase();
 
                     // DETECCIÓN DE PARTES ESPECIALES
-                    // CRÍTICO: Ocultar el blush o sombras por defecto - cubre toda la cara o ensucia el cuello
-                    if (name.includes('blush') || name.includes('shadow') || name.includes('sombra')) {
+                    // CRÍTICO: Ocultar el blush o sombras de sticker por defecto en modelos no-PMX (cubre toda la cara o ensucia el cuello)
+                    if (!isPMX && (name.includes('blush') || name.includes('sombra') || (name.includes('shadow') && (name.includes('face') || name.includes('decal'))))) {
                         if (SHOW_VERBOSE_LOGS) console.log('😊 Ocultando mesh especial (blush/shadow):', child.name);
                         child.visible = false;
                     } else if (name.includes('sticker001 1') || name.includes('sticker001_1')) {

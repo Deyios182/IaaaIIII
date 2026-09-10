@@ -36,6 +36,8 @@ const getLogTimestamp = (): string => {
     return `[${h}:${m}:${s}.${ms}]`;
 };
 
+
+
 let cachedVoskModelPromise: Promise<any> | null = null;
 const getOrLoadVoskModel = () => {
     if (!cachedVoskModelPromise) {
