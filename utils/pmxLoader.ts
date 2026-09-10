@@ -1,22 +1,25 @@
 /**
- * PMX / MMD Avatar Loader
- * Carga modelos .pmx y paquetes .zip (con .pmx y texturas)
- * para renderizar avatares nativos de MikuMikuDance en Three.js.
+ * PMX / MMD / FBX / GLTF Avatar Loader
+ * Carga modelos .pmx, .fbx, .glb y paquetes .zip / .rar / .7z / .tar.gz
+ * para renderizar avatares en Three.js con soporte universal de texturas y materiales.
  */
 
 import * as THREE from 'three';
 import { MMDLoader, CCDIKSolver } from 'three-stdlib';
-import JSZip from 'jszip';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { extractArchive, isSupportedArchive } from './archiveExtractor';
 
 export interface PMXModelResult {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
-  isPMX: true;
+  isPMX: boolean;
 }
 
 /**
- * Carga un modelo PMX desde una URL o un archivo Blob/File
- * Si es un ZIP, descomprime las texturas y crea Object URLs en memoria para que MMDLoader las resuelva.
+ * Carga un modelo (PMX, FBX, GLTF) desde una URL o un archivo Blob/File.
+ * Si es un paquete comprimido (ZIP/RAR/7z), descomprime las texturas y crea
+ * Object URLs en memoria para que el loader correspondiente las resuelva automáticamente.
  */
 export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelResult> {
   let fileBuffer: ArrayBuffer;
@@ -42,120 +45,30 @@ export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelRe
     fileName = urlOrFile.name;
   }
 
-  const isZip = fileName.toLowerCase().endsWith('.zip');
+  const isArchive = isSupportedArchive(fileName);
 
-  if (isZip) {
-    console.log(`📦 [PMXLoader] Descomprimiendo paquete ZIP de modelo PMX: ${fileName}`);
+  if (isArchive) {
+    console.log(`📦 [ModelLoader] Descomprimiendo paquete de modelo: ${fileName}`);
 
-    // Intentamos cargar el ZIP soportando codificaciones asiáticas comunes (GBK/GB2312, Shift-JIS, UTF-8)
-    // usando la API nativa de TextDecoder del navegador (sin depender del módulo Buffer de Node)
-    let zip: JSZip;
-    try {
-      zip = await JSZip.loadAsync(fileBuffer, {
-        decodeFileName: (bytes: Uint8Array) => {
-          try {
-            // Intentar UTF-8 estricto
-            return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-          } catch {
-            try {
-              // Intentar GBK (Chino simplificado, estándar en modelos ZZZ/Genshin/Honkai)
-              return new TextDecoder('gbk', { fatal: true }).decode(bytes);
-            } catch {
-              try {
-                // Intentar Shift-JIS (Japonés, estándar en modelos MMD originales)
-                return new TextDecoder('shift_jis', { fatal: true }).decode(bytes);
-              } catch {
-                try {
-                  return new TextDecoder('windows-1252').decode(bytes);
-                } catch {
-                  return new TextDecoder().decode(bytes);
-                }
-              }
-            }
-          }
-        }
-      });
-    } catch (e) {
-      console.warn('⚠️ [PMXLoader] Falló carga con decodificador personalizado, reintentando por defecto:', e);
-      zip = await JSZip.loadAsync(fileBuffer);
-    }
+    // Extrae ZIP / RAR / 7z / tar / gz en un mapa normalizado
+    const { fileMap: blobMap, modelPath, modelType, secondaryModelPath } = await extractArchive(fileBuffer, fileName);
 
-    // Mapeo de archivos dentro del zip a Blob URLs
+    // Convertir Blob map a URL map para el URLModifier de Three.js
     const fileMap = new Map<string, string>();
-    let pmxPath = '';
-
-    // 1. Primer pase: buscar .pmx o .pmd
-    for (const relativePath of Object.keys(zip.files)) {
-      const entry = zip.files[relativePath];
-      if (entry.dir) continue;
-
-      const lower = relativePath.toLowerCase();
-      if (!pmxPath && (lower.endsWith('.pmx') || lower.endsWith('.pmd') || lower.includes('.pmx') || lower.includes('.pmd'))) {
-        pmxPath = relativePath;
-      }
+    for (const [key, blob] of blobMap.entries()) {
+      const url = URL.createObjectURL(blob);
+      blobUrls.push(url);
+      fileMap.set(key, url);
     }
 
-    // 2. Si no encontró por extensión (por corrupción de nombre), buscar por firma mágica en los primeros bytes
-    if (!pmxPath) {
-      for (const relativePath of Object.keys(zip.files)) {
-        const entry = zip.files[relativePath];
-        if (entry.dir) continue;
-        try {
-          const slice = await entry.async('uint8array');
-          // Firma PMX: "PMX " (0x50, 0x4D, 0x58, 0x20) o PMD: "Pmd" (0x50, 0x6D, 0x64)
-          if (slice.length >= 4) {
-            if (slice[0] === 0x50 && slice[1] === 0x4D && slice[2] === 0x58 && slice[3] === 0x20) {
-              pmxPath = relativePath;
-              console.log(`🌸 [PMXLoader] Modelo PMX identificado por firma mágica: ${relativePath}`);
-              break;
-            }
-            if (slice[0] === 0x50 && slice[1] === 0x6D && slice[2] === 0x64) {
-              pmxPath = relativePath;
-              console.log(`🌸 [PMXLoader] Modelo PMD identificado por firma mágica: ${relativePath}`);
-              break;
-            }
-          }
-        } catch {
-          // continuar
-        }
-      }
-    }
+    console.log(`🌸 [ModelLoader] Modelo ${modelType.toUpperCase()} encontrado en archivo: ${modelPath}`);
 
-    if (!pmxPath) {
-      const filesFound = Object.keys(zip.files).slice(0, 10).join(', ');
-      throw new Error(`El archivo ZIP no contiene ningún modelo .pmx o .pmd. Archivos encontrados: [${filesFound}...]`);
-    }
+    // Determinar la subcarpeta donde reside el modelo dentro del archivo
+    const modelDir = modelPath.includes('/') ? modelPath.substring(0, modelPath.lastIndexOf('/') + 1) : '';
 
-    // Extraer todos los archivos a Blob URLs
-    for (const relativePath of Object.keys(zip.files)) {
-      const entry = zip.files[relativePath];
-      if (entry.dir) continue;
-
-      const fileData = await entry.async('blob');
-      const blobUrl = URL.createObjectURL(fileData);
-      blobUrls.push(blobUrl);
-
-      // Guardar con ruta normalizada
-      const cleanPath = relativePath.replace(/\\/g, '/');
-      fileMap.set(cleanPath, blobUrl);
-      fileMap.set(cleanPath.toLowerCase(), blobUrl);
-
-      // Guardar también solo por nombre de archivo base para búsquedas relativas
-      const baseName = cleanPath.split('/').pop() || cleanPath;
-      fileMap.set(baseName, blobUrl);
-      fileMap.set(baseName.toLowerCase(), blobUrl);
-    }
-
-    console.log(`🌸 [PMXLoader] Modelo PMX encontrado en ZIP: ${pmxPath}`);
-
-    // Determinar la subcarpeta donde reside el PMX dentro del ZIP
-    const pmxDir = pmxPath.includes('/') ? pmxPath.substring(0, pmxPath.lastIndexOf('/') + 1) : '';
-
-    // Configurar URLModifier para que MMDLoader obtenga las texturas de la memoria del ZIP
+    // Configurar URLModifier para que los loaders obtengan las texturas de la memoria
     manager.setURLModifier((requestedUrl: string) => {
-      if (requestedUrl.startsWith('data:')) {
-        return requestedUrl;
-      }
+      if (requestedUrl.startsWith('data:')) return requestedUrl;
 
       // Limpiar URL: Extraer ruta real tras el host o blob
       let cleanReq = requestedUrl;
@@ -173,51 +86,110 @@ export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelRe
       const lowerReq = cleanReq.toLowerCase();
       const lowerBase = baseReq.toLowerCase();
 
-      // 1. Coincidencia exacta con la ruta guardada en el ZIP
+      // 1. Coincidencia exacta
       if (fileMap.has(cleanReq)) return fileMap.get(cleanReq)!;
       if (fileMap.has(lowerReq)) return fileMap.get(lowerReq)!;
 
-      // 2. Coincidencia relativa a la carpeta del archivo PMX dentro del ZIP
-      if (pmxDir) {
-        const fullRel = (pmxDir + cleanReq).replace(/\\/g, '/');
+      // 2. Relativa a la carpeta del modelo
+      if (modelDir) {
+        const fullRel = (modelDir + cleanReq).replace(/\\/g, '/');
         if (fileMap.has(fullRel)) return fileMap.get(fullRel)!;
         if (fileMap.has(fullRel.toLowerCase())) return fileMap.get(fullRel.toLowerCase())!;
       }
 
-      // 3. Coincidencia por nombre base de archivo
+      // 3. Por nombre base
       if (fileMap.has(baseReq)) return fileMap.get(baseReq)!;
       if (fileMap.has(lowerBase)) return fileMap.get(lowerBase)!;
 
-      // 4. Búsqueda si alguna ruta en el ZIP termina con la ruta solicitada o su nombre base
+      // 4. Búsqueda parcial
       for (const [key, url] of fileMap.entries()) {
         if (key.endsWith('/' + lowerReq) || key.endsWith('/' + lowerBase) || key === lowerReq || key === lowerBase) {
           return url;
         }
       }
 
-      // Si ya era un blob URL registrado (ej. el del propio PMX), devolverlo
-      if (requestedUrl.startsWith('blob:') && blobUrls.includes(requestedUrl)) {
-        return requestedUrl;
+      // 5. Coincidencia ignorando extensión (ej: sink2.bmp -> sink2.png / sink22.png)
+      const baseNoExt = lowerBase.replace(/\.[^/.]+$/, '');
+      for (const [key, url] of fileMap.entries()) {
+        const keyBaseNoExt = (key.split('/').pop() || key).toLowerCase().replace(/\.[^/.]+$/, '');
+        if (keyBaseNoExt === baseNoExt) {
+          console.log(`🔄 [ModelLoader] Textura resuelta por extensión alternativa: "${requestedUrl}" -> "${key}"`);
+          return url;
+        }
       }
 
-      console.warn(`[PMXLoader] Textura no encontrada en ZIP: ${requestedUrl} (limpia: ${cleanReq})`);
+      // 6. Coincidencia inteligente para piel / cuerpo (ej: Body.png / skin.png -> skin.bmp / bodytoon.bmp)
+      if (lowerBase.includes('body') || lowerBase.includes('skin') || lowerBase.includes('肌') || lowerBase.includes('face') || lowerBase.includes('颜')) {
+        for (const [key, url] of fileMap.entries()) {
+          const lKey = key.toLowerCase();
+          if (lKey.includes('skin.bmp') || lKey.includes('skin.png') || lKey.includes('body.bmp') || lKey.includes('bodytoon') || lKey.includes('body.png') || lKey.includes('_skin')) {
+            console.log(`✨ [ModelLoader] Textura de piel/cuerpo mapeada inteligentemente: "${requestedUrl}" -> "${key}"`);
+            return url;
+          }
+        }
+      }
+
+      // 7. Coincidencia difusa para nombres con variantes (sink2 -> sink22, 1010浣 -> starby1010浣)
+      for (const [key, url] of fileMap.entries()) {
+        const lKey = key.toLowerCase();
+        if (baseNoExt.startsWith('sink') && lKey.includes('sink')) {
+          console.log(`🔄 [ModelLoader] Textura mapeada por prefijo: "${requestedUrl}" -> "${key}"`);
+          return url;
+        }
+        if (lowerBase.includes('1010') && lKey.includes('1010')) {
+          console.log(`🔄 [ModelLoader] Textura mapeada por patrón: "${requestedUrl}" -> "${key}"`);
+          return url;
+        }
+      }
+
+      if (requestedUrl.startsWith('blob:') && blobUrls.includes(requestedUrl)) return requestedUrl;
+
+      // Si todo falla y es una textura de piel/cuerpo, usar cualquier textura de piel disponible
+      if (lowerBase.includes('body') || lowerBase.includes('skin')) {
+        for (const [key, url] of fileMap.entries()) {
+          if (key.toLowerCase().includes('skin')) {
+            console.log(`✨ [ModelLoader] Textura de piel fallback aplicada: "${key}"`);
+            return url;
+          }
+        }
+      }
+
+      console.warn(`[ModelLoader] Textura no encontrada en archivo: ${requestedUrl} (limpia: ${cleanReq})`);
       return requestedUrl;
     });
 
-    const pmxBlob = await zip.files[pmxPath].async('blob');
-    const pmxBlobUrl = URL.createObjectURL(pmxBlob);
-    blobUrls.push(pmxBlobUrl);
+    // Ignorar errores de texturas faltantes no críticas para no abortar la carga del modelo
+    manager.onError = (url) => {
+      console.warn(`⚠️ [ModelLoader] Textura accesoria omitida: ${url}`);
+    };
 
-    const isPmd = pmxPath.toLowerCase().endsWith('.pmd');
-    return await loadMeshWithMMDLoader(pmxBlobUrl, manager, isPmd ? 'pmd' : 'pmx');
+    const modelBlobUrl = fileMap.get(modelPath) || fileMap.get(modelPath.toLowerCase()) || '';
+    if (!modelBlobUrl) throw new Error(`No se pudo obtener Blob URL del modelo: ${modelPath}`);
+
+    if (modelType === 'fbx') {
+      const secondaryBlobUrl = secondaryModelPath ? (fileMap.get(secondaryModelPath) || fileMap.get(secondaryModelPath.toLowerCase())) : undefined;
+      return await loadMeshWithFBXLoader(modelBlobUrl, manager, secondaryBlobUrl, fileMap);
+    } else if (modelType === 'glb' || modelType === 'gltf') {
+      return await loadMeshWithGLTFLoader(modelBlobUrl, manager);
+    } else {
+      const isPmd = modelType === 'pmd';
+      return await loadMeshWithMMDLoader(modelBlobUrl, manager, isPmd ? 'pmd' : 'pmx', fileMap);
+    }
   } else {
-    // Archivo PMX directo
+    // Archivo directo sin comprimir
+    const lowerName = fileName.toLowerCase();
     const blob = new Blob([fileBuffer]);
     const blobUrl = URL.createObjectURL(blob);
     blobUrls.push(blobUrl);
 
-    const isPmd = fileName.toLowerCase().endsWith('.pmd');
-    return await loadMeshWithMMDLoader(blobUrl, manager, isPmd ? 'pmd' : 'pmx');
+    if (lowerName.endsWith('.fbx')) {
+      return await loadMeshWithFBXLoader(blobUrl, manager);
+    } else if (lowerName.endsWith('.glb') || lowerName.endsWith('.gltf')) {
+      return await loadMeshWithGLTFLoader(blobUrl, manager);
+    } else {
+      const isPmd = lowerName.endsWith('.pmd');
+      return await loadMeshWithMMDLoader(blobUrl, manager, isPmd ? 'pmd' : 'pmx');
+    }
   }
 }
 
@@ -436,20 +408,414 @@ export class PmxAnimationController {
   }
 }
 
+const _sharedTextureLoader = new THREE.TextureLoader();
+
 /**
- * Genera un gradiente suave y rico para sombreado anime (Cel-Shading),
- * con sombras cálidas y vivas en lugar de tonos grisáceos/planos.
+ * Inyecta sombreado realista con dispersión subsuperficial (Subsurface Scattering / SSS Wrap)
+ * y Half-Lambert adaptativo en MeshStandardMaterial via onBeforeCompile.
+ * Elimina completamente el aspecto de "plasticina / plastilina" (sombras cortadas duras y brillos plásticos)
+ * produciendo piel suave y viva con rubor cálido en la penumbra, pelo sedoso y telas aterciopeladas.
  */
-function createSmoothToonGradient(): THREE.DataTexture {
-  const colors = new Uint8Array([
-    160, 130, 140, 255,  // Sombra anime cálida y rica (elimina palidez grisácea)
-    215, 200, 205, 255,  // Medio tono suave y definido
-    255, 255, 255, 255   // Luz limpia y viva
-  ]);
-  const texture = new THREE.DataTexture(colors, 3, 1, THREE.RGBAFormat);
+function applyRealisticSSSShader(mat: THREE.MeshStandardMaterial, category: 'skin' | 'hair' | 'cloth') {
+  mat.customProgramCacheKey = () => `sss_v3_${category}`;
+
+  mat.onBeforeCompile = (shader) => {
+    // 1. Modificar el cálculo de irradiance en RE_Direct_Physical de lights_physical_pars_fragment
+    let replacement = '';
+    if (category === 'skin') {
+      replacement = `
+        float rawDotNL = dot( geometryNormal, directLight.direction );
+        // Wrap Half-Lambert suave para piel viva y translúcida (elimina corte duro de plasticina)
+        float dotNL = saturate( ( rawDotNL + 0.38 ) / 1.38 );
+        // Dispersión subcutánea cálida (rubor melocotón/coral suave en la penumbra de transición)
+        float sssFactor = smoothstep( -0.25, 0.20, rawDotNL ) * ( 1.0 - smoothstep( 0.05, 0.55, rawDotNL ) );
+        vec3 sssBlush = vec3( 0.22, 0.08, 0.04 ) * ( sssFactor * 0.45 );
+        vec3 irradiance = ( dotNL * directLight.color ) + ( sssBlush * directLight.color );
+      `;
+    } else if (category === 'hair') {
+      replacement = `
+        float rawDotNL = dot( geometryNormal, directLight.direction );
+        // Difusión translúcida para pelo sedoso y orgánico
+        float dotNL = saturate( ( rawDotNL + 0.28 ) / 1.28 );
+        float hairScatter = smoothstep( -0.20, 0.25, rawDotNL ) * ( 1.0 - smoothstep( 0.05, 0.50, rawDotNL ) );
+        vec3 hairBlush = vec3( 0.10, 0.05, 0.02 ) * ( hairScatter * 0.30 );
+        vec3 irradiance = ( dotNL * directLight.color ) + ( hairBlush * directLight.color );
+      `;
+    } else { // cloth
+      replacement = `
+        float rawDotNL = dot( geometryNormal, directLight.direction );
+        // Caída de luz suave y aterciopelada en tejidos textiles (sin sombras rígidas de arcilla/plasticina)
+        float dotNL = saturate( ( rawDotNL + 0.22 ) / 1.22 );
+        vec3 irradiance = dotNL * directLight.color;
+      `;
+    }
+
+    const directLightRegex = /float\s+dotNL\s*=\s*saturate\(\s*dot\(\s*geometryNormal\s*,\s*directLight\.direction\s*\)\s*\);\s*vec3\s+irradiance\s*=\s*dotNL\s*\*\s*directLight\.color;/;
+    if (directLightRegex.test(shader.fragmentShader)) {
+      shader.fragmentShader = shader.fragmentShader.replace(directLightRegex, replacement);
+    }
+
+    // 2. Para piel, atenuar el specular directo para que no brille como plástico aceitoso
+    if (category === 'skin') {
+      const specRegex = /reflectedLight\.directSpecular\s*\+=\s*irradiance\s*\*\s*BRDF_GGX_Multiscatter\(\s*directLight\.direction\s*,\s*geometryViewDir\s*,\s*geometryNormal\s*,\s*material\s*\);/;
+      const specReplacement = 'reflectedLight.directSpecular += ( directLight.color * ( dotNL * 0.35 ) ) * BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, material );';
+      if (specRegex.test(shader.fragmentShader)) {
+        shader.fragmentShader = shader.fragmentShader.replace(specRegex, specReplacement);
+      }
+    }
+  };
+}
+
+/**
+ * Busca texturas complementarias genuinas (Normal Maps, Roughness Maps, Emissive Maps)
+ * dentro del archivo descomprimido para potenciar el realismo y profundidad 3D.
+ * Excluye máscaras y mapas empaquetados que corrompen las normales o causan texturas negras.
+ */
+function findCompanionTexture(
+  materialName: string,
+  mapUrl: string | undefined,
+  type: 'normal' | 'roughness' | 'emissive',
+  fileMap?: Map<string, string>
+): string | undefined {
+  if (!fileMap || fileMap.size === 0) return undefined;
+
+  const extractStem = (str: string): string => {
+    let clean = str.replace(/\\/g, '/').split('/').pop() || str;
+    clean = clean.split('?')[0].split('#')[0];
+    clean = clean.replace(/\.[^/.]+$/, ''); // quitar extensión
+    // quitar sufijos comunes de diffuse / albedo
+    clean = clean.replace(/([_-])?(diffuse|diff|basecolor|albedo|col|color|d)$/i, '');
+    return clean.toLowerCase();
+  };
+
+  const stems: string[] = [];
+  if (materialName) stems.push(extractStem(materialName));
+  if (mapUrl) stems.push(extractStem(mapUrl));
+
+  // Palabras prohibidas que NUNCA son mapas normales o roughness PBR estándar en Three.js
+  const forbiddenMasks = ['mask', 'sdf', 'wenli', 'ao', 'light', 'shadow', 'flow', 'ramp', 'curve', 'star'];
+
+  if (type === 'normal') {
+    for (const [key, url] of fileMap.entries()) {
+      const kl = key.toLowerCase();
+      if (forbiddenMasks.some(bad => kl.includes(bad))) continue;
+
+      const isNormalFile = /(_n|_norm|_normal|_nrm)\.(png|jpg|jpeg|tga|bmp|dds)$/i.test(kl);
+      if (!isNormalFile) continue;
+
+      for (const stem of stems) {
+        if (!stem || stem.length < 2) continue;
+        const keyFile = (key.replace(/\\/g, '/').split('/').pop() || key).toLowerCase().replace(/\.[^/.]+$/, '');
+        if (keyFile.startsWith(stem)) {
+          return url;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  if (type === 'roughness') {
+    for (const [key, url] of fileMap.entries()) {
+      const kl = key.toLowerCase();
+      if (forbiddenMasks.some(bad => kl.includes(bad))) continue;
+
+      const isRoughnessFile = /(_roughness|_rough|_r)\.(png|jpg|jpeg|tga|bmp|dds)$/i.test(kl);
+      if (!isRoughnessFile) continue;
+
+      for (const stem of stems) {
+        if (!stem || stem.length < 2) continue;
+        const keyFile = (key.replace(/\\/g, '/').split('/').pop() || key).toLowerCase().replace(/\.[^/.]+$/, '');
+        if (keyFile.startsWith(stem)) {
+          return url;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  if (type === 'emissive') {
+    for (const [key, url] of fileMap.entries()) {
+      const kl = key.toLowerCase();
+      const isEmissiveFile = /(_em|_emission|_emit|_emissive)\.(png|jpg|jpeg|tga|bmp|dds)$/i.test(kl);
+      if (!isEmissiveFile) continue;
+
+      for (const stem of stems) {
+        if (!stem || stem.length < 2) continue;
+        const keyFile = (key.replace(/\\/g, '/').split('/').pop() || key).toLowerCase().replace(/\.[^/.]+$/, '');
+        if (keyFile.startsWith(stem) || kl.includes(stem)) {
+          return url;
+        }
+      }
+      if (stems.some(s => s.includes('lucy') || s.includes('hdmf') || s.includes('head') || s.includes('body'))) {
+        if (kl.includes('hdmf_em') || kl.includes('_em.png')) {
+          return url;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * Convierte y calibra materiales de modelos PMX/FBX a MeshStandardMaterial (PBR realista con SSS)
+ * con propiedades físicas ajustadas por semántica anatómica (piel aterciopelada viva, pelo sedoso,
+ * telas mate con caída suave, cuero y metales reflectantes), evitando totalmente texturas negras
+ * y el aspecto artificial de plasticina.
+ */
+function upgradeMaterialToRealisticPBR(
+  oldMat: any,
+  meshName: string,
+  fileMap?: Map<string, string>
+): THREE.MeshStandardMaterial {
+  const matName = (oldMat.name || '').toLowerCase();
+  const mName = (meshName || '').toLowerCase();
+  const fullId = `${matName} ${mName}`;
+
+  // 1. Detección semántica de partes
+  const isEye = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼|ハイライト|catchlight/i.test(fullId);
+  const isSkin = !isEye && /body|skin|肌|体|颜|顔|face|head|cheek|arm|leg|foot|hand|ani_main|ani_body/i.test(fullId);
+  const isHair = !isEye && /hair|bangs|tail|ponytail|kaminoke|strand|髪|发|毛|辮/i.test(fullId);
+  const isMetal = !isEye && /metal|gold|silver|iron|steel|brass|chain|ring|buckle|金|银|铁|金属/i.test(fullId);
+  const isLeather = !isEye && /leather|belt|boot|shoe|strap|革|皮|靴/i.test(fullId);
+  const isDecal = !isEye && (/sticker|tattoo|mark|wenli/i.test(fullId) || (!/eye|shirome|白目/i.test(fullId) && /blush|shadow|sombra/i.test(fullId)));
+  const isCloth = !isSkin && !isHair && !isEye && !isMetal && !isDecal;
+
+  // 2. Parámetros PBR físicamente basados (calibrados para aspecto orgánico y natural, sin plasticina)
+  let roughness = 0.72;
+  let metalness = 0.0;
+  let envMapIntensity = 0.20;
+
+  if (isSkin) {
+    roughness = 0.68; // Piel aterciopelada y suave (sin brillo aceitoso de plástico)
+    metalness = 0.0;
+    envMapIntensity = 0.18;
+  } else if (isHair) {
+    roughness = 0.44; // Cabello sedoso y orgánico con brillo longitudinal sutil
+    metalness = 0.0;
+    envMapIntensity = 0.35;
+  } else if (isEye) {
+    roughness = 0.04; // Córnea húmeda cristalina con catchlights nítidos
+    metalness = 0.0;
+    envMapIntensity = 1.0;
+  } else if (isMetal) {
+    roughness = 0.22; // Metal pulido
+    metalness = 0.85;
+    envMapIntensity = 0.90;
+  } else if (isLeather) {
+    roughness = 0.45;
+    metalness = 0.05;
+    envMapIntensity = 0.35;
+  } else if (isCloth) {
+    roughness = 0.76; // Tejido textil mate y suave
+    metalness = 0.0;
+    envMapIntensity = 0.15;
+  }
+
+  // 3. Preparar texturas difusas (sRGB y filtrado anisotrópico 16x para máxima nitidez)
+  let baseMap = oldMat.map;
+  let mapSrc: string | undefined = undefined;
+  if (baseMap) {
+    baseMap.colorSpace = THREE.SRGBColorSpace;
+    baseMap.anisotropy = 16;
+    baseMap.minFilter = THREE.LinearMipmapLinearFilter;
+    baseMap.magFilter = THREE.LinearFilter;
+    baseMap.generateMipmaps = true;
+    baseMap.needsUpdate = true;
+    mapSrc = (baseMap.image as any)?.src || baseMap.name;
+  }
+
+  // 4. Color base: 100% pureza si hay textura para que el arte original no se oscurezca ni altere
+  let color = oldMat.color ? oldMat.color.clone() : new THREE.Color(1, 1, 1);
+  if (!baseMap && isSkin) {
+    color.setHex(0xffdfd0); // Tono carne cálido si no tiene textura
+  } else if (baseMap) {
+    color.setRGB(1.0, 1.0, 1.0);
+  }
+
+  // 5. Configurar transparencia y alphaTest
+  let transparent = false;
+  let opacity = oldMat.opacity !== undefined ? oldMat.opacity : 1.0;
+  let alphaTest = 0;
+  let depthWrite = true;
+
+  if (isEye) {
+    // Córnea / Iris / Ojos: Siempre sólidos y con depthWrite=true
+    transparent = false;
+    opacity = 1.0;
+    depthWrite = true;
+    alphaTest = 0;
+  } else if (isSkin) {
+    // La piel debe ser siempre sólida y opaca para evitar Z-fighting o huecos negros
+    transparent = false;
+    opacity = 1.0;
+    depthWrite = true;
+    alphaTest = 0;
+  } else if (isHair) {
+    // Cabello: CUTOUT mode (transparent=false + alphaTest) - renderiza en el pass opaco con depth correcto
+    // transparent=true + depthWrite=true causaba que el pelo se viera a través de sí mismo por el Z-sorting
+    transparent = false;
+    alphaTest = 0.15;
+    depthWrite = true;
+  } else if (isDecal) {
+    transparent = true;
+    depthWrite = false;
+    alphaTest = 0.02;
+  } else {
+    // Ropa / accesorios: opacos por defecto para evitar sorting glitches
+    if (oldMat.transparent && oldMat.opacity < 0.95) {
+      transparent = true;
+      opacity = oldMat.opacity;
+      alphaTest = 0.05;
+      depthWrite = false; // FIX: blend transparency REQUIERE depthWrite=false
+    } else {
+      transparent = false;
+      opacity = 1.0;
+      depthWrite = true;
+      alphaTest = 0;
+    }
+  }
+
+  // 6. Instanciar MeshStandardMaterial con DoubleSide universal (previene caras negras invertidas)
+  const stdMat = new THREE.MeshStandardMaterial({
+    name: oldMat.name || meshName,
+    map: baseMap,
+    color,
+    roughness,
+    metalness,
+    envMapIntensity,
+    transparent,
+    opacity,
+    alphaTest,
+    depthWrite,
+    side: THREE.DoubleSide
+  });
+
+  // Marcar material como calibrado para protegerlo de sobreescrituras en otros módulos
+  stdMat.userData.isCalibrated = true;
+
+  if (isDecal) {
+    stdMat.polygonOffset = true;
+    stdMat.polygonOffsetFactor = -4;
+    stdMat.polygonOffsetUnits = -4;
+  }
+
+  // Emissive a negro por defecto para evitar quemar o descolorar el modelo
+  stdMat.emissive.setRGB(0, 0, 0);
+
+  // 7. Descubrimiento y enlace de texturas complementarias genuinas
+  if (fileMap && fileMap.size > 0) {
+    const normalUrl = findCompanionTexture(oldMat.name, mapSrc, 'normal', fileMap);
+    if (normalUrl) {
+      try {
+        const normTex = _sharedTextureLoader.load(normalUrl);
+        normTex.colorSpace = THREE.NoColorSpace;
+        normTex.wrapS = THREE.RepeatWrapping;
+        normTex.wrapT = THREE.RepeatWrapping;
+        normTex.anisotropy = 16;
+        normTex.minFilter = THREE.LinearMipmapLinearFilter;
+        normTex.magFilter = THREE.LinearFilter;
+        stdMat.normalMap = normTex;
+        stdMat.normalScale = new THREE.Vector2(0.50, 0.50);
+        console.log(`✨ [ModelLoader] Normal Map genuino vinculado a "${stdMat.name}": ${normalUrl.slice(-30)}`);
+      } catch (e) {
+        console.warn(`[ModelLoader] Error cargando normal map:`, e);
+      }
+    }
+
+    const roughUrl = findCompanionTexture(oldMat.name, mapSrc, 'roughness', fileMap);
+    if (roughUrl) {
+      try {
+        const rTex = _sharedTextureLoader.load(roughUrl);
+        rTex.colorSpace = THREE.NoColorSpace;
+        rTex.anisotropy = 16;
+        stdMat.roughnessMap = rTex;
+        // NOTA CRÍTICA: JAMÁS asignar metalnessMap aquí; hace que los modelos se vuelvan negros
+        console.log(`✨ [ModelLoader] Roughness Map vinculado a "${stdMat.name}"`);
+      } catch (e) {
+        console.warn(`[ModelLoader] Error cargando roughness map:`, e);
+      }
+    }
+
+    const emissiveUrl = findCompanionTexture(oldMat.name, mapSrc, 'emissive', fileMap);
+    if (emissiveUrl) {
+      try {
+        const emTex = _sharedTextureLoader.load(emissiveUrl);
+        emTex.colorSpace = THREE.SRGBColorSpace;
+        emTex.anisotropy = 16;
+        stdMat.emissiveMap = emTex;
+        stdMat.emissive = new THREE.Color(0xffffff);
+        console.log(`💡 [ModelLoader] Emissive Map vinculado a "${stdMat.name}"`);
+      } catch (e) {
+        console.warn(`[ModelLoader] Error cargando emissive map:`, e);
+      }
+    }
+  }
+
+  // 8. Inyección de Shader SSS (Subsurface Scattering Wrap) para realismo orgánico sin aspecto de plasticina
+  if (isSkin) {
+    applyRealisticSSSShader(stdMat, 'skin');
+  } else if (isHair) {
+    applyRealisticSSSShader(stdMat, 'hair');
+  } else if (isCloth) {
+    applyRealisticSSSShader(stdMat, 'cloth');
+  }
+
+  // Liberar recursos del material anterior
+  if (typeof oldMat.dispose === 'function') {
+    oldMat.dispose();
+  }
+
+  return stdMat;
+}
+
+/**
+ * Genera un gradiente continuo de 256 texeles con interpolación bilineal (LinearFilter).
+ * Implementa una curva Half-Lambert fotográfica con dispersión subsuperficial (SSS)
+ * que baña la penumbra de las sombras con un rubor cálido y aterciopelado (melocotón/coral),
+ * eliminando el aspecto de plasticina y las sombras duras de comic.
+ */
+function createPhotorealisticSSSGradient(): THREE.DataTexture {
+  const width = 256;
+  const data = new Uint8Array(width * 4);
+
+  for (let i = 0; i < width; i++) {
+    const x = i / (width - 1); // 0.0 (lado de sombra completa) a 1.0 (lado de luz frontal)
+
+    let r: number, g: number, b: number;
+
+    if (x < 0.45) {
+      // Sombra suave ambiental (base 140 a 195)
+      const t = x / 0.45;
+      r = THREE.MathUtils.lerp(140, 195, t);
+      g = THREE.MathUtils.lerp(125, 175, t);
+      b = THREE.MathUtils.lerp(135, 180, t);
+    } else if (x < 0.70) {
+      // Penumbra con SSS cálido (rubor de dispersión subcutánea)
+      const t = (x - 0.45) / 0.25;
+      r = THREE.MathUtils.lerp(195, 245, t);
+      g = THREE.MathUtils.lerp(175, 220, t);
+      b = THREE.MathUtils.lerp(180, 220, t);
+    } else {
+      // Luz directa limpia y viva
+      const t = (x - 0.70) / 0.30;
+      r = THREE.MathUtils.lerp(245, 255, t);
+      g = THREE.MathUtils.lerp(220, 255, t);
+      b = THREE.MathUtils.lerp(220, 255, t);
+    }
+
+    const idx = i * 4;
+    data[idx] = Math.round(r);
+    data[idx + 1] = Math.round(g);
+    data[idx + 2] = Math.round(b);
+    data[idx + 3] = 255;
+  }
+
+  const texture = new THREE.DataTexture(data, width, 1, THREE.RGBAFormat);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.NearestFilter;
-  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
   return texture;
@@ -458,7 +824,12 @@ function createSmoothToonGradient(): THREE.DataTexture {
 /**
  * Carga un SkinnedMesh mediante MMDLoader y lo envuelve en un THREE.Group
  */
-function loadMeshWithMMDLoader(url: string, manager: THREE.LoadingManager, forcedExtension: 'pmx' | 'pmd' = 'pmx'): Promise<PMXModelResult> {
+function loadMeshWithMMDLoader(
+  url: string,
+  manager: THREE.LoadingManager,
+  forcedExtension: 'pmx' | 'pmd' = 'pmx',
+  fileMap?: Map<string, string>
+): Promise<PMXModelResult> {
   return new Promise((resolve, reject) => {
     const loader = new MMDLoader(manager);
 
@@ -479,8 +850,6 @@ function loadMeshWithMMDLoader(url: string, manager: THREE.LoadingManager, force
 
       return forcedExtension;
     };
-
-    const cleanToonGradient = createSmoothToonGradient();
 
     // Silenciar advertencias de propiedades de material obsoletas de Three.js r150+ durante la carga de MMD
     const origWarn = console.warn;
@@ -525,72 +894,274 @@ function loadMeshWithMMDLoader(url: string, manager: THREE.LoadingManager, force
           console.warn(`⚠️ [PMXLoader] No se pudo inicializar PmxAnimationController:`, ikErr);
         }
 
-        // Ajustar materiales para evitar palidez excesiva, sobreexposición y shadow acne
+        // Preservar y calibrar materiales nativos de MMDLoader con gradiente SSS fotográfico continuo
+        const photorealisticGradient = createPhotorealisticSSSGradient();
+
         mesh.traverse((child: any) => {
           if (child.isMesh) {
             child.castShadow = true;
-            // Desactivar receiveShadow en el modelo anime para eliminar Shadow Acne (rayas negras de autosilueta)
             child.receiveShadow = false;
 
             if (child.material) {
               const mats = Array.isArray(child.material) ? child.material : [child.material];
               mats.forEach((m: any) => {
-                if (m) {
-                  // Reemplazar gradiente toon por uno con contraste y sombras limpias
-                  m.gradientMap = cleanToonGradient;
+                if (!m) return;
 
-                  // 1. Espacio de color sRGB y filtrado anisotrópico para máxima nitidez y saturación
-                  if (m.map) {
-                    m.map.colorSpace = THREE.SRGBColorSpace;
-                    m.map.anisotropy = 16;
-                    m.map.minFilter = THREE.LinearMipmapLinearFilter;
-                    m.map.magFilter = THREE.LinearFilter;
-                    const img = m.map.image as any;
-                    if (img && (img.width > 0 || img.data)) {
-                      m.map.generateMipmaps = true;
-                      m.map.needsUpdate = true;
-                    } else {
-                      m.map.needsUpdate = false;
-                    }
+                // Marcar como calibrado para que AvatarViewer3D jamás lo sobreescriba con roughness=1.0
+                m.userData = m.userData || {};
+                m.userData.isCalibrated = true;
+
+                // 1. Asignar el gradiente SSS continuo (256 texeles con LinearFilter)
+                // Convierte la iluminación toon en una caída Half-Lambert fotográfica continua y suave,
+                // con rubor subcutáneo cálido en la penumbra y sin cortes duros de plasticina.
+                if ('gradientMap' in m) {
+                  m.gradientMap = photorealisticGradient;
+                }
+
+                // 2. Espacio de color sRGB y filtrado anisotrópico 16x para máxima nitidez y viveza
+                if (m.map) {
+                  m.map.colorSpace = THREE.SRGBColorSpace;
+                  m.map.anisotropy = 16;
+                  m.map.minFilter = THREE.LinearMipmapLinearFilter;
+                  m.map.magFilter = THREE.LinearFilter;
+                  const img = m.map.image as any;
+                  if (img && (img.width > 0 || img.data)) {
+                    m.map.generateMipmaps = true;
+                    m.map.needsUpdate = true;
                   }
+                }
 
-                  // FIX CRÍTICO: MMDLoader asigna el color 'ambient' de MMD como 'emissive' en Three.js.
-                  // Con las luces de Three.js (ambientLight + directionalLight), un emissive no nulo
-                  // actúa como fluorescencia blanca y quema las texturas haciendo que el modelo se vea plano y blanquecino.
-                  if (m.emissive) {
-                    m.emissive.setRGB(0, 0, 0);
+                // 3. MMDLoader asigna el color 'ambient' de MMD como 'emissive' en Three.js.
+                // Con las luces de Three.js, un emissive no nulo actúa como fluorescencia blanca y lava las texturas.
+                if (m.emissive) {
+                  m.emissive.setRGB(0, 0, 0);
+                }
+
+                // 4. Si hay textura, mantener color difuso al 100% de pureza (blanco neutro)
+                // para que el arte original del modelo no sufra tintes oscuros
+                if (m.color && m.map) {
+                  m.color.setRGB(1.0, 1.0, 1.0);
+                }
+
+                // 5. Reflejos especulares suaves y calibrados
+                if (m.specular) {
+                  const nameLower = (m.name || child.name || '').toLowerCase();
+                  if (nameLower.includes('eye') || nameLower.includes('pupil') || nameLower.includes('cornea')) {
+                    m.specular.setRGB(0.5, 0.5, 0.5);
+                    m.shininess = 60;
+                  } else if (nameLower.includes('metal') || nameLower.includes('gold') || nameLower.includes('silver')) {
+                    m.specular.setRGB(0.6, 0.6, 0.6);
+                    m.shininess = 80;
+                  } else {
+                    m.specular.setRGB(0.08, 0.08, 0.08);
+                    m.shininess = 25;
                   }
+                }
 
-                  // 2. Preservar pureza y viveza de la textura sin tintes que la apaguen
+                // 6. Configuración de caras y profundidad calibrada para modelos PMX:
+                // - Sombras: SIEMPRE FrontSide para que las caras invertidas NUNCA proyecten sombras negras sobre el cuerpo (shadow acne)
+                m.shadowSide = THREE.FrontSide;
+
+                const mName = (m.name || child.name || '').toLowerCase();
+                const isEyeMat = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼/i.test(mName);
+                const isFacialOverlay = !isEyeMat && /tear|gag|eyeline|highlight|catchlight|涙|ハイライト/i.test(mName);
+                const isSkinOrFace = !isEyeMat && !isFacialOverlay && /skin|body|肌|体|颜|face|head|human|mouth|teeth|tongue|唇|歯|牙|舌|口/i.test(mName);
+                const isDecal = !isEyeMat && !isFacialOverlay && (/tattoo|紋|sticker/i.test(mName) || (!/eye|shirome|白目/i.test(mName) && /blush|shadow|decal/i.test(mName)));
+                const isClothing = /swim|dress|skirt|cloth|clothes|clothing|outfit|suit|pants|shorts|socks|stocking|bottom|top|corset|underwear|bra|panty|panties|lingerie|bikini|服|衣服|上衣|外套|衣装|スカート|裾|ドレス|ワンピース|ワンピ|コルセット|パンツ|ブラ|内衣|文胸|胸罩|内裤|胖次|安全裤|泳装|泳衣|比基尼|裙|褲襪|膝襪/i.test(mName);
+
+                if (isDecal || isFacialOverlay) {
+                  // Tatuajes / Calcomanías sobre la piel / Lágrimas / Expresiones / Delineado de ojos superpuesto:
+                  m.side = THREE.FrontSide;
+                  m.transparent = true;
+                  m.depthWrite = false;
+                  m.polygonOffset = true;
+                  m.polygonOffsetFactor = -1.0;
+                  m.polygonOffsetUnits = -1.0;
+                  m.alphaTest = 0.05;
+                } else {
+                  // Piel, ropa, accesorios, cabello, ojos: DoubleSide universal para que NUNCA se vean negros
+                  m.side = THREE.DoubleSide;
+                  m.polygonOffset = false;
+                }
+
+                // 7. Configuración de transparencia y alphaTest limpia para MMD
+                const isHairMat = !isEyeMat && !isFacialOverlay && /hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛/i.test(mName);
+                if (isEyeMat) {
+                  // Ojos / Esclera / Córnea / Iris: SIEMPRE 100% sólidos, opacos y visibles
+                  m.transparent = false;
+                  m.opacity = 1.0;
+                  m.depthWrite = true;
+                  m.depthTest = true;
+                  m.alphaTest = 0;
+                  m.polygonOffset = true;
+                  m.polygonOffsetFactor = -2.0;
+                  m.polygonOffsetUnits = -2.0;
+
+                  // Si la esclera/ojo no tiene textura o vino oscuro, forzar blanco puro
                   if (m.color) {
-                    if (m.map) {
+                    if (!m.map || (m.color.r < 0.2 && m.color.g < 0.2 && m.color.b < 0.2 && !mName.includes('pupil') && !mName.includes('瞳'))) {
                       m.color.setRGB(1.0, 1.0, 1.0);
                     }
                   }
-
-                  // 3. Especular controlado anime: evita película blanca deslumbrante sobre la piel
-                  if (m.specular) {
-                    m.specular.setRGB(0.04, 0.04, 0.04);
+                  // Darle una suave luz ambiental propia (emissive tenue) para que jamás se vea una cuenca negra en sombras
+                  if (m.emissive) {
+                    m.emissive.setRGB(0.18, 0.18, 0.18);
                   }
-                  m.shininess = 30;
-
-                  // Evitar Z-Fighting de outlines
-                  if (m.side === THREE.DoubleSide) {
-                    m.side = THREE.FrontSide;
-                  }
-
-                  // Si el material tiene mapa difuso con transparencia, asegurar alphaTest para no glitchar profundidad
-                  if (m.transparent && m.map) {
+                } else if (isHairMat) {
+                  // Pelo MMD → CUTOUT: elimina artefactos de Z-sorting (ver a través del pelo)
+                  m.transparent = false;
+                  m.alphaTest = 0.15;
+                  m.depthWrite = true;
+                } else if (isFacialOverlay) {
+                  // Ya configurado arriba (transparent=true, depthWrite=false)
+                } else if (isSkinOrFace) {
+                  // Piel, rostro, cabeza y globos oculares integrados: SIEMPRE 100% sólidos y opacos
+                  m.transparent = false;
+                  m.opacity = 1.0;
+                  m.depthWrite = true;
+                  m.depthTest = true;
+                  m.alphaTest = 0;
+                } else if (m.transparent) {
+                  if (m.opacity !== undefined && m.opacity < 0.85) {
+                    // Otros materiales con transparencia real intencional (velos, encajes) → blend correcto
                     m.alphaTest = 0.05;
+                    m.depthWrite = false;
+                  } else {
+                    m.transparent = false;
+                    m.opacity = 1.0;
                     m.depthWrite = true;
+                    m.alphaTest = m.map ? 0.15 : 0;
                   }
-
-                  m.needsUpdate = true;
+                } else {
+                  m.transparent = false;
+                  m.opacity = 1.0;
+                  m.depthWrite = true;
                 }
+
+                // 8. Buscar si hay mapa emisivo genuino (como T_HDMF_EM.png)
+                if (fileMap && fileMap.size > 0) {
+                  const emissiveUrl = findCompanionTexture(m.name, (m.map?.image as any)?.src || m.name, 'emissive', fileMap);
+                  if (emissiveUrl) {
+                    try {
+                      const emTex = _sharedTextureLoader.load(emissiveUrl);
+                      emTex.colorSpace = THREE.SRGBColorSpace;
+                      m.emissiveMap = emTex;
+                      m.emissive = new THREE.Color(0xffffff);
+                      console.log(`💡 [PMXLoader] Emissive Map vinculado a "${m.name}": ${emissiveUrl.slice(-30)}`);
+                    } catch (e) {
+                      console.warn(`[PMXLoader] Error vinculando emissive map:`, e);
+                    }
+                  }
+                }
+
+                m.needsUpdate = true;
               });
             }
           }
         });
+
+        // ── SEPARACIÓN DE OVERLAYS FACIALES EN SUB-MESH INDEPENDIENTE ──────────────────────────────
+        // En Three.js, una sola SkinnedMesh con multi-material renderiza los grupos en orden de
+        // geometry.groups. Los materiales transparentes (tear/gag/eyeline) pueden bloquear el Z-buffer
+        // de los grupos de ojo aunque tengan depthWrite=false — porque el renderer mezcla opaque y
+        // transparent render queues en el mismo draw call list. La solución definitiva es extraer
+        // todos los grupos de overlay a una nueva SkinnedMesh que comparta el mismo esqueleto,
+        // y darle renderOrder=1 para que se dibuje DESPUÉS de que los ojos ya estén en el Z-buffer.
+        mesh.traverse((child: any) => {
+          if (!child.isSkinnedMesh) return;
+          if (!Array.isArray(child.material)) return;
+          const geo = child.geometry;
+          if (!geo || !geo.groups || geo.groups.length === 0) return;
+
+          const OVERLAY_RE = /tear|gag|eyeline|highlight|catchlight|涙|ハイライト/i;
+          const overlayIndices: number[] = [];
+          const baseIndices: number[] = [];
+
+          child.material.forEach((m: any, i: number) => {
+            const mName = (m?.name || '').toLowerCase();
+            if (OVERLAY_RE.test(mName)) {
+              overlayIndices.push(i);
+            } else {
+              baseIndices.push(i);
+            }
+          });
+
+          if (overlayIndices.length === 0) return; // Nada que separar en este modelo
+
+          // Construir la nueva geometría de overlays con solo los grupos correspondientes
+          const overlayGeo = geo.clone();
+          overlayGeo.clearGroups();
+
+          const overlayMats: any[] = [];
+          // Mapear cada origIdx al nuevo índice de material en la sub-mesh
+          const overlayMatIndexMap = new Map<number, number>();
+          overlayIndices.forEach((origIdx) => {
+            const mat = child.material[origIdx];
+            if (mat) {
+              const clonedMat = mat.clone();
+              clonedMat.transparent = true;
+              clonedMat.depthWrite = false;
+              clonedMat.alphaTest = 0.05;
+              clonedMat.needsUpdate = true;
+              const newIdx = overlayMats.length;
+              overlayMats.push(clonedMat);
+              overlayMatIndexMap.set(origIdx, newIdx);
+            }
+          });
+
+          if (overlayMats.length === 0) return;
+
+          // Añadir a overlayGeo todos los grupos cuyo materialIndex esté en overlayIndices
+          geo.groups.forEach((g: any) => {
+            if (g && overlayMatIndexMap.has(g.materialIndex)) {
+              overlayGeo.addGroup(g.start, g.count, overlayMatIndexMap.get(g.materialIndex)!);
+            }
+          });
+
+          // Crear la sub-mesh que comparte el esqueleto
+          const overlayMesh = new THREE.SkinnedMesh(overlayGeo, overlayMats);
+          overlayMesh.name = `${child.name}_FacialOverlays`;
+          overlayMesh.skeleton = child.skeleton;
+          overlayMesh.bindMatrix = child.bindMatrix.clone();
+          overlayMesh.bindMatrixInverse = child.bindMatrixInverse.clone();
+          overlayMesh.castShadow = false;
+          overlayMesh.receiveShadow = false;
+          overlayMesh.renderOrder = 2; // Dibujarse DESPUÉS de la malla base (donde están los ojos)
+          overlayMesh.frustumCulled = false;
+
+          // Añadir la sub-mesh como hermana al mismo padre
+          if (child.parent) {
+            child.parent.add(overlayMesh);
+          } else {
+            group.add(overlayMesh);
+          }
+
+          // Eliminar los grupos de overlay de la malla base reconstruyendo sus grupos
+          const baseMatIndexMap = new Map<number, number>();
+          const newBaseMats: any[] = [];
+          baseIndices.forEach((origIdx) => {
+            const mat = child.material[origIdx];
+            if (mat) {
+              const newIdx = newBaseMats.length;
+              newBaseMats.push(mat);
+              baseMatIndexMap.set(origIdx, newIdx);
+            }
+          });
+
+          // Reconstruir los grupos de la geometría base (solo los no-overlays)
+          const origGroups = [...geo.groups];
+          geo.clearGroups();
+          origGroups.forEach((g: any) => {
+            if (g && baseMatIndexMap.has(g.materialIndex)) {
+              geo.addGroup(g.start, g.count, baseMatIndexMap.get(g.materialIndex)!);
+            }
+          });
+          child.material = newBaseMats;
+          child.renderOrder = 0;
+
+          console.log(`👁️ [PMXLoader] Overlays faciales separados: ${overlayIndices.length} materiales → "${overlayMesh.name}"`);
+        });
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
 
         resolve({
           scene: group,
@@ -607,3 +1178,103 @@ function loadMeshWithMMDLoader(url: string, manager: THREE.LoadingManager, force
     );
   });
 }
+
+/**
+ * Carga un modelo FBX (con posibles mallas secundarias _SMM como accesorios)
+ * y normaliza su escala y materiales para Three.js.
+ */
+async function loadMeshWithFBXLoader(
+  url: string,
+  manager: THREE.LoadingManager,
+  secondaryFbxUrl?: string,
+  fileMap?: Map<string, string>
+): Promise<PMXModelResult> {
+  const loader = new FBXLoader(manager);
+  const fbx = await new Promise<THREE.Group>((resolve, reject) => {
+    loader.load(url, resolve, undefined, reject);
+  });
+
+  // Si hay una malla secundaria (como _SMM.fbx para accesorios o armas de Lucy), cargar e incorporar
+  if (secondaryFbxUrl) {
+    try {
+      const smmFbx = await new Promise<THREE.Group>((resolve, reject) => {
+        loader.load(secondaryFbxUrl, resolve, undefined, reject);
+      });
+      fbx.add(smmFbx);
+      console.log(`🗡️ [FBXLoader] Malla accesoria secundaria vinculada al modelo.`);
+    } catch (smmErr) {
+      console.warn(`⚠️ [FBXLoader] No se pudo cargar malla secundaria opcional:`, smmErr);
+    }
+  }
+
+  // Normalizar escala de FBX:
+  // FBX de Unreal Engine / ZZZ mide comúnmente ~160-180 unidades (centímetros).
+  // Dado que el wrapper de AvatarViewer3D aplica scale=2.5 para modelos no-PMX,
+  // normalizamos la altura del grupo a ~0.7 unidades para que 0.7 * 2.5 = 1.75m en pantalla.
+  const box = new THREE.Box3().setFromObject(fbx);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  console.log(`📦 [FBXLoader] Dimensiones FBX detectadas: x=${size.x.toFixed(2)}, y=${size.y.toFixed(2)}, z=${size.z.toFixed(2)}`);
+
+  if (size.y > 10) {
+    const targetHeight = 0.7;
+    const scaleFactor = targetHeight / size.y;
+    fbx.scale.set(scaleFactor, scaleFactor, scaleFactor);
+    console.log(`📏 [FBXLoader] Modelo FBX normalizado con factor: ${scaleFactor.toFixed(5)}`);
+  }
+
+  // Configurar sombras y materiales PBR realistas
+  fbx.traverse((child: any) => {
+    if (child.isMesh || child.isSkinnedMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map(m => upgradeMaterialToRealisticPBR(m, child.name, fileMap));
+        } else {
+          child.material = upgradeMaterialToRealisticPBR(child.material, child.name, fileMap);
+        }
+      }
+    }
+  });
+
+  return {
+    scene: fbx,
+    animations: fbx.animations || [],
+    isPMX: false
+  };
+}
+
+/**
+ * Carga un modelo GLTF/GLB dentro de un paquete comprimido
+ */
+async function loadMeshWithGLTFLoader(
+  url: string,
+  manager: THREE.LoadingManager,
+  fileMap?: Map<string, string>
+): Promise<PMXModelResult> {
+  const loader = new GLTFLoader(manager);
+  const gltf = await new Promise<any>((resolve, reject) => {
+    loader.load(url, resolve, undefined, reject);
+  });
+
+  const scene = gltf.scene || gltf.scenes[0];
+  if (scene) {
+    scene.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map((m: any) => upgradeMaterialToRealisticPBR(m, child.name, fileMap));
+        } else {
+          child.material = upgradeMaterialToRealisticPBR(child.material, child.name, fileMap);
+        }
+      }
+    });
+  }
+
+  return {
+    scene,
+    animations: gltf.animations || [],
+    isPMX: false
+  };
+}
+

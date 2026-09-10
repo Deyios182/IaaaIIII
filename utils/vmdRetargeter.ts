@@ -60,6 +60,171 @@ const MORPH_ALIASES: Record<string, string[]> = {
   '照れ': ['blush', 'fcl_all_shy']
 };
 
+/**
+ * Lista exhaustiva de nombres de morphs faciales y de expresión válidos en MMD / VRM / ARKit.
+ * ÚNICAMENTE estos morphs deben ser animados por un archivo VMD de baile o expresión.
+ */
+const KNOWN_FACIAL_NAMES = new Set([
+  // Ojos / Mirada MMD
+  'まばたき', '笑い', 'ウィンク', 'ウインク', 'ウィンク右', 'ウインク右', 'ウィンク２', 'なごみ',
+  'びっくり', 'じと目', '瞳小', '瞳大', '瞳縦', '恐れ', 'キリッ', '真面目', '悲しい', '泣き',
+  'より目', '白目', 'ハイライト消し', 'ぐるぐる', 'ハート', '星目', '丸目', '目閉じ', '目開け',
+  // Cejas MMD
+  '怒り', '困り', 'にこり', '下', '上', '前', '眉頭', '眉間', '眉上げ', '眉下げ', '真面目',
+  // Boca / Vocales MMD
+  'あ', 'い', 'う', 'え', 'お', 'ワ', 'わ', 'にやり', '口角上げ', '口角下げ', 'ん', 'へ',
+  '▲', 'ω', '口横広げ', '舌', 'べー', '歯', '口開け', '口閉じ',
+  // Expresiones / Efectos faciales MMD
+  'ほほ染め', '照れ', '赤面', '涙', '汗', '青ざめ', '照れ２'
+]);
+
+/**
+ * Verifica si un morph pertenece inequívocamente a expresiones faciales, labios u ojos.
+ * Cualquier morph que no sea facial (como ropa, cuerpo o daño) será descartado.
+ */
+export function isFacialMorph(name: string): boolean {
+  if (!name) return false;
+  const raw = name.trim().replace(/\s+/g, '');
+  const n = name.toLowerCase().trim();
+
+  // 1. Coincidencia directa en lista MMD
+  if (KNOWN_FACIAL_NAMES.has(raw) || KNOWN_FACIAL_NAMES.has(normalizeMmdBoneName(raw))) {
+    return true;
+  }
+
+  // 2. Patrones kanji/caracteres faciales específicos
+  if (
+    raw.includes('目') || raw.includes('瞳') || raw.includes('まばたき') || raw.includes('ウィンク') ||
+    raw.includes('眉') || raw.includes('口') || raw.includes('舌') || raw.includes('歯') ||
+    raw.includes('笑') || raw.includes('怒') || raw.includes('困') || raw.includes('照') ||
+    raw.includes('涙') || raw.includes('汗') || raw.includes('赤面') || raw.includes('青ざめ') ||
+    (raw.includes('耳') && !raw.includes('耳飾') && !raw.includes('耳飾り'))
+  ) {
+    // Si contiene términos de ropa o desnudez a pesar de tener un kanji común, no es facial
+    if (isClothingOrNudityMorph(name)) return false;
+    return true;
+  }
+
+  // 3. Nombres estándar en inglés (VRM / GLTF / ARKit / Mixamo)
+  const facialTerms = [
+    'blink', 'wink', 'eye', 'pupil', 'iris', 'squint', 'wide', 'lookat',
+    'brow', 'eyebrow',
+    'viseme', 'mouth', 'lip', 'jaw', 'tongue', 'teeth', 'smile', 'frown',
+    'pout', 'sneer', 'cheek', 'fun', 'joy', 'sorrow', 'angry', 'surprised',
+    'neutral', 'blush', 'shy', 'tear', 'sweat', 'catear', 'foxear'
+  ];
+
+  for (const term of facialTerms) {
+    if (n.includes(term)) {
+      if (isClothingOrNudityMorph(name)) return false;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detecta si un morph es de desnudez, desvestir, rotura, daño o eliminación de ropa
+ * (Cast-Off / 脱衣 / 服破れ / 破れ / 透け / ブラ下げ / 服消し / 去衣).
+ * NUNCA deben incluirse en animaciones de baile para evitar que el avatar quede desnudo o la ropa se rompa.
+ */
+export function isClothingOrNudityMorph(morphName: string): boolean {
+  if (!morphName) return false;
+  const n = morphName.toLowerCase().trim();
+  const raw = morphName.trim().replace(/\s+/g, '');
+
+  // 1. Desnudez directa / Cast Off / Strip (japonés, chino, inglés)
+  if (
+    raw.includes('脱衣') || raw.includes('全裸') || raw.includes('裸') || raw.includes('半裸') ||
+    raw.includes('ぬぎ') || raw.includes('脱ぎ') || raw.includes('キャストオフ') ||
+    raw.includes('去衣') || raw.includes('赤脚') || raw.includes('素体') || raw.includes('全脱') ||
+    raw.includes('半脱') || raw.includes('脱') ||
+    raw.includes('脱裙') || raw.includes('去裙') || raw.includes('去内衣') || raw.includes('脱内衣') ||
+    raw.includes('去胖次') || raw.includes('脱胖次') || raw.includes('脱外套') || raw.includes('去外套') ||
+    n.includes('castoff') || n.includes('cast_off') || n.includes('cast-off') ||
+    n.includes('strip') || n.includes('undress') || n.includes('nude') || n.includes('naked')
+  ) {
+    return true;
+  }
+
+  // 2. Rotura, Daño, Desgarro, Desgaste de ropa (服破れ, 破れ, 破損, ダメージ, tear, rip, damage)
+  // Causa directa del desgarro en corsés, faldas y vestidos
+  if (
+    raw.includes('破れ') || raw.includes('破') || raw.includes('裂け') || raw.includes('裂') ||
+    raw.includes('破損') || raw.includes('損') || raw.includes('ダメージ') || raw.includes('傷') ||
+    raw.includes('破绽') || raw.includes('破綻') ||
+    n.includes('tear') || n.includes('rip') || n.includes('damage') || n.includes('broken') || n.includes('torn')
+  ) {
+    return true;
+  }
+
+  // 3. Transparencia de ropa / Ver a través (透け, 透ける, 半透明, seethrough)
+  if (
+    raw.includes('透け') || raw.includes('透ける') || raw.includes('透') ||
+    raw.includes('半透明') || n.includes('seethrough') || n.includes('see_through') || n.includes('translucent')
+  ) {
+    return true;
+  }
+
+  // 4. Modificaciones corporales de pecho / pezones que atraviesan la ropa
+  if (
+    raw.includes('胸出し') || raw.includes('乳出し') || raw.includes('胸揉み') || raw.includes('胸消し') ||
+    raw.includes('乳首') || raw.includes('ニップル') || raw.includes('胸小') || raw.includes('胸大') ||
+    raw.includes('巨乳') || raw.includes('小乳') || raw.includes('胸平') || raw.includes('胸縮小') ||
+    raw.includes('胸拡大') || raw.includes('おっぱい') || n.includes('nipple') || n.includes('areola')
+  ) {
+    return true;
+  }
+
+  // 5. Acciones de bajar, descolocar, levantar o quitar prendas (下げ, ずらし, めくり, 捲り, 外し, 露出)
+  if (
+    raw.includes('露出') || raw.includes('肌出し') || raw.includes('出し') ||
+    raw.includes('下げ') || raw.includes('ずらし') || raw.includes('めくり') || raw.includes('捲り') ||
+    raw.includes('外し') || raw.includes('はずし') || raw.includes('解') ||
+    n.includes('pull_down') || n.includes('shift') || n.includes('expose') || n.includes('reveal')
+  ) {
+    return true;
+  }
+
+  // 6. Acciones de ocultar/quitar o toggles (japonés, chino, inglés)
+  const hasRemovalAction =
+    raw.includes('消し') || raw.includes('消') || raw.includes('非表示') ||
+    n.includes('off') || raw.includes('オフ') || raw.includes('なし') || raw.includes('無し') ||
+    raw.includes('去') || raw.includes('隐藏') ||
+    n.includes('hide') || n.includes('remove') || n.includes('delete') || n.includes('no_') || n.startsWith('no');
+
+  // 7. Términos exhaustivos de prendas, vestidos, faldas, corsés, lencería, trajes de baño y calzado
+  const clothingTerms = [
+    // Japonés
+    'スカート', 'ワンピ', 'ワンピース', 'ドレス', '服', '衣服', '衣装', '上着', '下着',
+    'パンツ', 'ショーツ', 'ブラ', 'ブラジャー', '水着', 'ビキニ', 'パッツ', 'キャミソール',
+    'コルセット', 'レオタード', 'セーラー', 'ガーター', 'リボン', 'フリル', 'パニエ',
+    '靴', 'ブーツ', 'シューズ', '素足', '靴下', 'ソックス', 'タイツ', 'ストッキング',
+    '手袋', 'グローブ', '袖', 'カフス', '帽子', 'マント', 'ケープ', 'エプロン',
+    '装身具', 'アクセ', '制服', '帯', 'ベルト', 'チョーカー',
+    // Chino
+    '外套', '大衣', '上衣', '裙', '裙子', '短裙', '长裙', '半身裙', '百褶裙', '连衣裙',
+    '水手服', '制服', '泳衣', '泳装', '比基尼', '内衣', '文胸', '胸罩', '内裤', '胖次',
+    '安全裤', '鞋', '鞋子', '靴', '靴子', '袜', '袜子', '丝袜', '手套', '斗篷', '披风',
+    '饰品', '神之眼', '胸甲', '肩甲', '腰饰', '腿环', '袖子', '领结', '领带', '吊带',
+    // Inglés
+    'corset', 'leotard', 'sailor', 'cloth', 'clothes', 'clothing', 'dress', 'skirt', 'coat', 'jacket', 'pant', 'pants',
+    'bra', 'brassiere', 'underwear', 'lingerie', 'panties', 'panty', 'thong', 'bikini',
+    'swimsuit', 'swimwear', 'swim', 'shoe', 'shoes', 'boot', 'boots', 'sock', 'socks', 'stocking',
+    'stockings', 'tights', 'glove', 'gloves', 'sleeve', 'sleeves', 'hat', 'cap', 'cape',
+    'cloak', 'apron', 'outfit', 'uniform', 'top', 'bottom', 'shorts', 'short', 'garter', 'ribbon'
+  ];
+
+  for (const term of clothingTerms) {
+    if (raw.includes(term) || n.includes(term.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return hasRemovalAction;
+}
+
 export function retargetVmdToAnimationClip(
   buffer: ArrayBuffer,
   options: RetargetVmdOptions
@@ -365,7 +530,9 @@ export function retargetVmdToAnimationClip(
                      targetBone.toLowerCase().includes('boob') ||
                      targetBone.toLowerCase().includes('bust') ||
                      targetBone.toLowerCase().includes('oppai') ||
-                     targetBone.includes('胸');
+                     targetBone.includes('胸') ||
+                     targetBone.includes('おっぱい') ||
+                     targetBone.includes('乳');
       const isHips = targetBone.toLowerCase().includes('hip') ||
                      targetBone.toLowerCase().includes('pelvis') ||
                      mmdBoneName === 'センター' ||
@@ -373,7 +540,9 @@ export function retargetVmdToAnimationClip(
                      mmdBoneName === 'グルーブ' ||
                      mmdBoneName === '下半身';
       const isIkTarget = isMmdIkBone(mmdBoneName) || normalizeMmdBoneName(targetBone).toUpperCase().includes('IK');
-      const shouldIncludePos = !isBreast && (isNativeMMDBone || isHips || isIkTarget);
+      const isRootOrHipsOrIk = isHips || isIkTarget || mmdBoneName === '全ての親' || mmdBoneName === 'センター' || mmdBoneName === 'グルーブ';
+      // NUNCA incluir pistas de posición para huesos que no sean pelvis/hips/root/IK (evita desplazar ropa o desmembrar el esqueleto)
+      const shouldIncludePos = !isBreast && isRootOrHipsOrIk;
 
       if (shouldIncludePos && hasNonZeroPosition && times.length > 0) {
         tracks.push(new THREE.VectorKeyframeTrack(`${targetBone}.position`, times, posValues));
@@ -386,6 +555,11 @@ export function retargetVmdToAnimationClip(
       for (const m of vmd.morphs) {
         const mName = m.morphName ? normalizeMmdBoneName(m.morphName) : '';
         if (!mName) continue;
+        // FILTRO CRÍTICO WHITELIST: SOLO procesar morphs faciales genuinos (ojos, cejas, boca, visemas, rubor)
+        // NUNCA procesar morphs de ropa, prendas, corsé, falda, rotura, daño o desnudez
+        if (!isFacialMorph(mName) || isClothingOrNudityMorph(mName)) {
+          continue;
+        }
         if (!morphGroups.has(mName)) morphGroups.set(mName, []);
         morphGroups.get(mName)!.push({ frameNum: m.frameNum, weight: m.weight });
       }
@@ -426,11 +600,12 @@ export function retargetVmdToAnimationClip(
             matchedIndex = dict[normM];
           }
 
-          // 1c. Coincidencia case-insensitive o búsqueda en dictKeys
+          // 1c. Coincidencia case-insensitive o búsqueda en dictKeys (exclusivo para faciales)
           if (matchedIndex === undefined && dictKeys.length > 0) {
             const lowerM = mName.toLowerCase().trim();
             const normM = normalizeMmdBoneName(mName);
             const foundKey = dictKeys.find(k => {
+              if (isClothingOrNudityMorph(k) || !isFacialMorph(k)) return false;
               const kl = k.toLowerCase().trim();
               return kl === lowerM || normalizeMmdBoneName(k) === normM;
             });
@@ -443,8 +618,10 @@ export function retargetVmdToAnimationClip(
             if (aliases) {
               for (const alias of aliases) {
                 const foundKey = dictKeys.find(k => {
+                  if (isClothingOrNudityMorph(k) || !isFacialMorph(k)) return false;
                   const kl = k.toLowerCase();
-                  return kl === alias || kl.includes(alias);
+                  // Si el alias es corto (ej: 'a', 'i', 'u', 'e', 'o', '下', '上'), exigir coincidencia exacta para no emparejar palabras por accidente
+                  return alias.length <= 2 ? kl === alias : (kl === alias || kl.includes(alias));
                 });
                 if (foundKey) {
                   matchedIndex = dict[foundKey];
@@ -454,7 +631,14 @@ export function retargetVmdToAnimationClip(
             }
           }
 
+          // Verificación de seguridad adicional: asegurar que la clave emparejada en el modelo no sea de ropa ni daño
           if (matchedIndex !== undefined) {
+            const matchedKey = dictKeys.find(k => dict[k] === matchedIndex);
+            if (matchedKey && (isClothingOrNudityMorph(matchedKey) || !isFacialMorph(matchedKey))) {
+              console.log(`🛡️ [VMDRetargeter] Omitiendo morph destino no facial o de ropa "${matchedKey}"`);
+              continue;
+            }
+
             // Generar track indexado numéricamente a la malla
             tracks.push(new THREE.NumberKeyframeTrack(
               `${mesh.name}.morphTargetInfluences[${matchedIndex}]`,

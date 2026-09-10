@@ -420,10 +420,13 @@ export class GestureRegistry {
   // Overrides de gestos: standardGestureId (ej: 'wave') -> animationName cargada en AnimationStore
   private gestureOverrides: Map<string, string> = new Map();
 
+  private userGestures: Map<string, GestureDefinition> = new Map();
+
   constructor() {
     this.initStandardGestures();
     if (typeof window !== 'undefined') {
       try {
+        this.loadUserGesturesFromStorage();
         this.loadOverridesFromStorage();
         animationStore.subscribe(() => {
           this.syncFromAnimationStore();
@@ -431,6 +434,89 @@ export class GestureRegistry {
         this.syncFromAnimationStore();
       } catch (_) {}
     }
+  }
+
+  private loadUserGesturesFromStorage(): void {
+    try {
+      const stored = localStorage.getItem('nova_user_gestures');
+      if (stored) {
+        const parsed: GestureDefinition[] = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(g => {
+            if (g && g.id) {
+              const cleanId = g.id.toLowerCase().replace(/[\s-]/g, '_');
+              const def = { ...g, id: cleanId };
+              this.userGestures.set(cleanId, def);
+              this.standardGestures.set(cleanId, def);
+              this.aliasMap.set(cleanId, cleanId);
+              (g.aliases || []).forEach(alias => {
+                this.aliasMap.set(alias.toLowerCase().replace(/[\s-]/g, '_'), cleanId);
+              });
+            }
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  private saveUserGesturesToStorage(): void {
+    try {
+      const list = Array.from(this.userGestures.values());
+      localStorage.setItem('nova_user_gestures', JSON.stringify(list));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nova-gestures-updated'));
+      }
+    } catch (_) {}
+  }
+
+  /**
+   * Registra o actualiza un gesto creado por el usuario en el catálogo
+   */
+  addUserGesture(gesture: GestureDefinition, initialAnimationName?: string): void {
+    const cleanId = gesture.id.toLowerCase().replace(/[\s-]/g, '_');
+    const def: GestureDefinition = {
+      ...gesture,
+      id: cleanId,
+      aliases: Array.from(new Set([cleanId, ...(gesture.aliases || []).map(a => a.toLowerCase().replace(/[\s-]/g, '_'))])),
+      defaultDuration: gesture.defaultDuration || 3.0,
+      icon: gesture.icon || '✨'
+    };
+
+    this.userGestures.set(cleanId, def);
+    this.standardGestures.set(cleanId, def);
+    this.aliasMap.set(cleanId, cleanId);
+    def.aliases.forEach(alias => {
+      this.aliasMap.set(alias, cleanId);
+    });
+
+    this.saveUserGesturesToStorage();
+
+    if (initialAnimationName) {
+      this.setGestureOverride(cleanId, initialAnimationName);
+    }
+
+    console.log(`✨ [GestureRegistry] Gesto de usuario registrado: "${def.name}" (${cleanId})`);
+  }
+
+  /**
+   * Elimina un gesto creado por el usuario
+   */
+  removeUserGesture(gestureId: string): void {
+    const cleanId = gestureId.toLowerCase().replace(/[\s-]/g, '_');
+    if (this.userGestures.has(cleanId)) {
+      this.userGestures.delete(cleanId);
+      this.standardGestures.delete(cleanId);
+      this.removeGestureOverride(cleanId);
+      this.saveUserGesturesToStorage();
+      console.log(`🗑️ [GestureRegistry] Gesto de usuario eliminado: ${cleanId}`);
+    }
+  }
+
+  /**
+   * Verifica si un gesto fue creado por el usuario
+   */
+  isUserGesture(gestureId: string): boolean {
+    return this.userGestures.has(gestureId.toLowerCase().replace(/[\s-]/g, '_'));
   }
 
   private loadOverridesFromStorage(): void {
@@ -467,6 +553,15 @@ export class GestureRegistry {
 
       g.aliases.forEach(alias => {
         this.aliasMap.set(alias.toLowerCase().replace(/[\s-]/g, '_'), g.id);
+      });
+    });
+
+    // Re-aplicar gestos de usuario en memoria
+    this.userGestures.forEach(g => {
+      this.standardGestures.set(g.id, g);
+      this.aliasMap.set(g.id, g.id);
+      g.aliases.forEach(alias => {
+        this.aliasMap.set(alias, g.id);
       });
     });
   }

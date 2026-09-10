@@ -74,33 +74,35 @@ export class MaterialManager {
             if (ref.category === 'skin') {
                 // Piel: Forzar DoubleSide para que el interior del cuello no se vea negro ni transparente si la malla se flexiona
                 mat.side = THREE.DoubleSide;
-                if (!mat.roughnessMap && mat.roughness < 0.3) mat.roughness = 0.45;
-                if (!mat.metalnessMap && mat.metalness > 0.3) mat.metalness = 0.1;
+                if (!mat.roughnessMap && mat.roughness < 0.50) mat.roughness = 0.62;
+                if (!mat.metalnessMap) mat.metalness = 0.0;
+                mat.envMapIntensity = 0.30;
 
                 // Tono carne solo si es blanco puro SIN textura (modelo sin pintar)
                 if (mat.color.r > 0.9 && mat.color.g > 0.9 && mat.color.b > 0.9 && !hasColorMap) {
-                    mat.color.setHex(0xffe0bd);
+                    mat.color.setHex(0xffdfd0);
                 }
                 mat.needsUpdate = true;
-                console.log('🧍 Skin material optimizado (DoubleSide):', ref.mesh.name);
+                console.log('🧍 Skin material optimizado (PBR realista):', ref.mesh.name);
             }
 
-            // Cabello: Solo ajustar si no tiene mapa de roughness propio
+            // Cabello: Brillo sedoso longitudinal con micro-reflexión física
             if (ref.category === 'hair') {
                 mat.side = THREE.DoubleSide;
-                if (!mat.roughnessMap) mat.roughness = Math.min(mat.roughness, 0.4);
-                if (!mat.metalnessMap) mat.metalness = Math.max(mat.metalness, 0.1);
+                if (!mat.roughnessMap) mat.roughness = 0.38;
+                if (!mat.metalnessMap) mat.metalness = 0.08;
+                mat.envMapIntensity = 0.55;
                 mat.needsUpdate = true;
-                console.log('💇 Hair material optimizado:', ref.mesh.name);
+                console.log('💇 Hair material optimizado (PBR sedoso):', ref.mesh.name);
             }
 
-            // Ojos: Configuración equilibrada sin destruir texturas pintadas
+            // Ojos: Córnea ultra transparente y reflectante con catchlights vivos
             if (ref.category === 'eyes') {
-                if (!mat.roughnessMap) mat.roughness = 0.3;
-                mat.metalness = Math.min(mat.metalness, 0.15);
-                mat.envMapIntensity = 0.8;
+                if (!mat.roughnessMap) mat.roughness = 0.06;
+                mat.metalness = 0.0;
+                mat.envMapIntensity = 1.0;
                 mat.needsUpdate = true;
-                console.log('👁️ Eye material optimizado (Toned down):', ref.mesh.name);
+                console.log('👁️ Eye material optimizado (Catchlight cristalino):', ref.mesh.name);
             }
 
             // ROPA: RESPETAR texturas originales siempre y asegurar DoubleSide

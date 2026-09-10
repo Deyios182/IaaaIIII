@@ -129,24 +129,24 @@ export function detectSystemCommand(text: string): SystemCommand {
     // Cámara
     const cameraPatterns = [
         // Face / Cara
-        { regex: /(?:sube|muestra|pon|enfoca)\s+(?:la\s+)?(?:cara|rostro)|primer\s+plano|mírame\s+a\s+los\s+ojos/i, type: 'controlCamera', target: 'face' },
+        { regex: /(?:sube|muestra|pon|enfoca|vista\s+(?:de\s+)?)(?:la\s+)?(?:cara|rostro)|primer\s+plano|mírame\s+a\s+los\s+ojos/i, type: 'controlCamera', target: 'face' },
         { regex: /^la\s+cara$/i, type: 'controlCamera', target: 'face' }, // Frase exacta simple
 
         // Full Body / Cuerpo Completo
-        { regex: /cuerpo\s+(?:entero|completo)|aléjate|vista\s+completa|full\s+body/i, type: 'controlCamera', target: 'full' },
+        { regex: /(?:vista\s+(?:de\s+)?)?cuerpo\s+(?:entero|completo)|aléjate|vista\s+completa|full\s+body/i, type: 'controlCamera', target: 'full' },
 
         // Selfie
-        { regex: /ponte\s+(?:en\s+)?selfie|tómate\s+una\s+foto|modo\s+selfie/i, type: 'controlCamera', target: 'selfie' },
+        { regex: /(?:vista\s+(?:de\s+)?)?selfie|ponte\s+(?:en\s+)?selfie|tómate\s+una\s+foto|modo\s+selfie/i, type: 'controlCamera', target: 'selfie' },
         { regex: /^selfie$/i, type: 'controlCamera', target: 'selfie' },
 
-        // Body / Torso
-        { regex: /enfoca\s+(?:el\s+)?cuerpo|medio\s+cuerpo|torso/i, type: 'controlCamera', target: 'body' },
+        // Body / Torso / Medio cuerpo
+        { regex: /(?:vista\s+(?:de\s+)?)?(?:enfoca\s+(?:el\s+)?)?cuerpo|medio\s+cuerpo|torso/i, type: 'controlCamera', target: 'body' },
+
+        // Back / Espalda / Vista de atrás
+        { regex: /(?:vista\s+(?:de\s+)?)?(?:espalda|atr[aá]s|trasero|posterior)|giro\s+completo|date\s+(?:la\s+)?vuelta|volt[eé]ate/i, type: 'controlCamera', target: 'back' },
 
         // Default / Reset
-        { regex: /vista\s+normal|restablece\s+cámara|posición\s+inicial|reset\s+c[áa]mara/i, type: 'controlCamera', target: 'default' },
-
-        // Back / Espalda
-        { regex: /espalda|atrás|trasero|posterior|giro\s+completo|date\s+(?:la\s+)?vuelta|voltéate/i, type: 'controlCamera', target: 'back' },
+        { regex: /vista\s+normal|restablece\s+c[áa]mara|posici[óo]n\s+inicial|reset\s+c[áa]mara/i, type: 'controlCamera', target: 'default' },
     ];
 
     for (const pattern of cameraPatterns) {
@@ -268,6 +268,27 @@ export function detectSystemCommand(text: string): SystemCommand {
     }
 
     // Control Corporal / Gestos 3D directos
+
+    // 🎵 DETECCIÓN ESPECÍFICA DE BAILE CON NOMBRE DE ANIMACIÓN
+    // Si el usuario dice "baila el Wantiti", "pon el Low Cortisol Loop", etc.,
+    // extraemos el nombre de la animación para que el sistema la busque directamente.
+    const danceWithNameMatch = text.match(
+        /(?:baila|bailar|reproduce|pon|haz)\s+(?:el\s+|la\s+|un\s+)?(?:baile\s+)?(?:de\s+|del\s+)?(.{3,50})$/i
+    );
+    if (danceWithNameMatch && danceWithNameMatch[1]) {
+        const animName = danceWithNameMatch[1].trim();
+        // Filtrar casos donde lo capturado es generico ("dance", "baile", "paso")
+        const genericWords = ['baile', 'baile', 'paso', 'ritmo', 'danza', 'algo', 'eso', 'esto', 'nuevo'];
+        const isGeneric = genericWords.some(w => animName.toLowerCase() === w);
+        if (!isGeneric && animName.length >= 3) {
+            return {
+                type: 'controlBody' as any,
+                target: 'play_gesture',
+                message: animName, // Nombre exacto de la animación — el resolveAction la buscara en el store
+            };
+        }
+    }
+
     const bodyPatterns: Array<{ regex: RegExp; actionType: string; gesture?: string; limb?: string; target?: string; walkDirection?: string }> = [
         { regex: /(?:saluda|salúdame|mueve\s+la\s+mano|di\s+hola\s+con\s+la\s+mano)/i, actionType: 'play_gesture', gesture: 'wave' },
         { regex: /(?:asiente|asentir|asiente\s+con\s+la\s+cabeza|di\s+que\s+s[íi]\s+con\s+la\s+cabeza)/i, actionType: 'play_gesture', gesture: 'nod' },

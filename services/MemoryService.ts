@@ -102,7 +102,6 @@ export function normalizeEmbedding(vector: number[]): number[] {
 const embeddingCache = new Map<string, number[]>();
 const MAX_EMBEDDING_CACHE_SIZE = 500;
 
-// ==================== TRANSFORMERS.JS LOCAL NEURAL EMBEDDINGS ====================
 let neuralPipelinePromise: Promise<any> | null = null;
 
 async function getLocalNeuralPipeline() {
@@ -129,6 +128,14 @@ async function getLocalNeuralPipeline() {
     }
     return neuralPipelinePromise;
 }
+
+export function preloadNeuralPipeline(): void {
+    getLocalNeuralPipeline().catch((err) => {
+        console.warn('⚠️ [MemoryService] Fallo en precalentamiento de pipeline neuronal:', err);
+    });
+}
+
+
 
 /**
  * Inferencia semántica neuronal local (Xenova/all-MiniLM-L6-v2).

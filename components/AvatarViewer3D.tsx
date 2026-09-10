@@ -18,9 +18,11 @@ import { InteractionSystem } from '../utils/interactionSystem';
 import { MaterialManager } from '../utils/materialManager';
 import { ProceduralAnimator } from '../utils/proceduralAnimations';
 import { gestureRegistry } from '../utils/gestureRegistry';
+import { idleOverrideRegistry, type IdleSlotId } from '../utils/idleOverrideRegistry';
 import { getPropManager } from '../utils/propManager';
 import { isMixamoAnimation, isGenericFKAnimation, retargetMixamoClip, getModelBoneNames } from '../utils/mixamoRetargeter';
 import { loadVmdAnimationClip, loadVmdCameraClip, MmdLegIkController } from '../utils/vmdLoader';
+import { isClothingOrNudityMorph, isFacialMorph } from '../utils/vmdRetargeter';
 import { loadPMXModel, type PMXModelResult } from '../utils/pmxLoader';
 import { SimplexNoise } from '../utils/perlin';
 import { AvatarInteractionLayer, type InteractionLayerRef } from './AvatarInteractionLayer';
@@ -405,6 +407,36 @@ function AvatarModelInner({
     const prevIdleStateRef = useRef<IdleState>('relaxed');
     // Ref to track speech gestures smoothly
     const speechGesturePhaseRef = useRef<number>(0);
+    const prevSpeechStyleRef = useRef<number>(-1);
+    const activeOverrideSlotRef = useRef<string | null>(null);
+    // 🔒 Dedup: evita que la misma acción se dispare dos veces en <300ms (bug doble load)
+    const lastExecutedActionRef = useRef<{ name: string; ts: number }>({ name: '', ts: 0 });
+
+    // Helper para reproducir una animación de override para un slot de idle o habla
+    const checkAndTriggerSlotOverride = useCallback((slotId: IdleSlotId, loop: boolean = false) => {
+        const animName = idleOverrideRegistry.getOverride(slotId);
+        if (!animName) return false;
+
+        const storedAnim = animationStore.get(animName);
+        if (storedAnim) {
+            activeOverrideSlotRef.current = slotId;
+            window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                detail: {
+                    url: storedAnim.url,
+                    name: storedAnim.name,
+                    type: storedAnim.type,
+                    autoplay: true,
+                    loop
+                }
+            }));
+            return true;
+        } else if (animationManagerRef.current?.hasAnimation(animName)) {
+            activeOverrideSlotRef.current = slotId;
+            animationManagerRef.current.play(animName, { priority: 10, loop });
+            return true;
+        }
+        return false;
+    }, []);
 
     useEffect(() => {
         // Limpiar animaciones guardadas viejas/descalibradas
@@ -615,6 +647,15 @@ function AvatarModelInner({
             proceduralAnimatorRef.current?.stop();
             return;
         }
+
+        // 🔒 DEDUP: Ignorar la misma acción si ya se ejecutó hace menos de 300ms
+        // Esto evita el bug de doble-carga cuando IKController y gesture parser disparan simultáneamente
+        const now = Date.now();
+        const last = lastExecutedActionRef.current;
+        if (last.name === actionName && (now - last.ts) < 300) {
+            return; // Duplicado ignorado
+        }
+        lastExecutedActionRef.current = { name: actionName, ts: now };
 
         let cleanAction = actionName;
         const lower = cleanAction.toLowerCase();
@@ -869,6 +910,11 @@ function AvatarModelInner({
                     if (child.material) {
                         const meshName = child.name.toLowerCase();
                         const fixMaterial = (mat: THREE.Material) => {
+                            // FIX CRÍTICO: Los modelos PMX/MMD/calibrados ya tienen sus materiales calibrados con PBR realista y SSS
+                            // (MeshStandardMaterial con Normal Maps, rugosidad aterciopelada y reflejos calculados).
+                            // NO sobreescribir con roughness=1.0 ni envMapIntensity=0.1 (que los vuelve pálidos y planos).
+                            if (isPMX || (mat as any).userData?.isCalibrated) return;
+
                             // DEBUG: Log para ver qué meshes estamos procesando
                             if (SHOW_VERBOSE_LOGS) console.log('🎨 Procesando material:', child.name, 'tipo:', mat.type);
 
@@ -914,28 +960,28 @@ function AvatarModelInner({
                                     mat.alphaTest = 0.01; // Descartar píxeles casi transparentes
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('✨ Configurado como DECAL:', child.name);
-                            } else if (meshName.includes('eye')) {
-                                // OJOS: Mantener brillantes
+                            } else if (meshName.includes('eye') && !meshName.includes('eyebrow') && !meshName.includes('eyelash')) {
+                                // OJOS: Córnea brillante y húmeda con catchlights vivos
                                 mat.side = THREE.DoubleSide;
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    mat.roughness = 1.0;
+                                    mat.roughness = 0.05;        // FIX: córnea cristalina (0 = espejo, evita ojos negros)
                                     mat.metalness = 0.0;
-                                    mat.envMapIntensity = 0.0;
+                                    mat.envMapIntensity = 0.70;  // FIX: reflejo de entorno visible (sin esto quedan negros)
                                     // Mantener emissive intacto
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('👁️ Configurado como OJO:', child.name);
                             } else if (isSkin) {
                                 // PIEL/CUERPO: Material mate suave (Anime)
-                                // CRÍTICO: FrontSide para evitar Z-fighting de las caras internas (cuello negro)
-                                mat.side = THREE.FrontSide;
+                                // CRÍTICO: DoubleSide para evitar caras negras al flexionar (cuello, axilas)
+                                mat.side = THREE.DoubleSide;
                                 mat.transparent = false;
                                 mat.depthWrite = true;
                                 mat.polygonOffset = false;
 
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    mat.roughness = 1.0;         // Completamente mate
+                                    mat.roughness = 0.78;        // FIX: mate suave, no totalmente negro en sombras
                                     mat.metalness = 0.0;         // Nada metálico
-                                    mat.envMapIntensity = 0.1;   // Casi sin reflejo de entorno
+                                    mat.envMapIntensity = 0.18;  // FIX: mínimo reflejo de entorno para evitar negro total
 
                                     // Restaurar aoMapIntensity para evitar sombras sucias
                                     mat.aoMapIntensity = 0.5;
@@ -958,19 +1004,39 @@ function AvatarModelInner({
                             } else {
                                 // Ropa, pelo, accesorios, etc. (Anime)
                                 mat.side = THREE.DoubleSide;
-                                // Preservar transparencia original para encajes y ropa interior
-                                if (mat.transparent) {
-                                    mat.depthWrite = false;
-                                    mat.alphaTest = 0.3; // Cortar píxeles casi transparentes
-                                } else {
-                                    mat.depthWrite = true;
-                                }
                                 mat.polygonOffset = false;
 
+                                // Detectar si es pelo (necesita CUTOUT en vez de BLEND para evitar ver a través)
+                                const isHairMesh = (
+                                    meshName.includes('hair') || meshName.includes('pelo') ||
+                                    meshName.includes('strand') || meshName.includes('bangs') ||
+                                    meshName.includes('ponytail') || meshName.includes('braid') ||
+                                    meshName.includes('kaminoke') || meshName.includes('前发') ||
+                                    meshName.includes('后发') || meshName.includes('刘海')
+                                );
+
+                                if (mat.transparent) {
+                                    if (isHairMesh) {
+                                        // ✅ PELO → modo CUTOUT: renderiza en el pass opaco con depth correcto
+                                        // Elimina COMPLETAMENTE el artefacto de "ver a través del pelo"
+                                        mat.transparent = false;
+                                        mat.alphaTest = 0.15; // Cortar bordes semitransparentes del pelo
+                                        mat.depthWrite = true;
+                                    } else {
+                                        // ✅ Ropa/encajes con transparencia real → BLEND correcto
+                                        // depthWrite=false es el único modo correcto para blend transparency
+                                        mat.alphaTest = 0.05;
+                                        mat.depthWrite = false;
+                                    }
+                                } else {
+                                    mat.alphaTest = 0;
+                                    mat.depthWrite = true;
+                                }
+
                                 if (mat instanceof THREE.MeshStandardMaterial) {
-                                    mat.roughness = 1.0; // Pelo/ropa mate
-                                    mat.metalness = 0.0; // Nada metálico (corrige el pelo rojo metálico)
-                                    mat.envMapIntensity = 0.1;
+                                    mat.roughness = 0.80;
+                                    mat.metalness = 0.0;
+                                    mat.envMapIntensity = 0.12;
                                     mat.needsUpdate = true;
                                 }
                                 if (SHOW_VERBOSE_LOGS) console.log('👕 Configurado como OTRO:', child.name);
@@ -979,6 +1045,82 @@ function AvatarModelInner({
                         if (Array.isArray(child.material)) child.material.forEach(fixMaterial);
                         else fixMaterial(child.material);
                     }
+                }
+            });
+
+            // 1.1 FIX UNIVERSAL DE TRANSPARENCIA Y CARAS NEGRAS (Aplica a TODOS los modelos: PMX, FBX, GLTF, VRM)
+            // Resuelve:
+            // a) "Se ve transparente / a través": mallas de pelo o mallas opacas que Three.js marca con transparent=true
+            //    provocando fallos de Z-sorting. Se forza CUTOUT (alphaTest > 0, transparent=false, depthWrite=true).
+            // b) "Se ven negros por el otro lado": caras invertidas o de un solo lado (FrontSide) que quedan negras al rotar.
+            modelRef.current.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                    const mName = (child.name || '').toLowerCase();
+                    const mats = Array.isArray(child.material) ? child.material : [child.material];
+                    mats.forEach((mat: any) => {
+                        if (!mat) return;
+                        const matName = (mat.name || '').toLowerCase();
+                        const isEye = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼|ハイライト|catchlight/i.test(matName) || /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼|ハイライト|catchlight/i.test(mName);
+                        const isDecal = !isEye && ((/tattoo|紋|sticker/i.test(matName) || (!/eye|shirome|白目/i.test(matName) && /blush|shadow|decal|lashes|eyelash/i.test(matName))) || (/tattoo|紋|sticker/i.test(mName) || (!/eye|shirome|白目/i.test(mName) && /blush|shadow|decal|lashes|eyelash/i.test(mName))));
+                        const isHair = !isEye && (/hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛|pelo/i.test(matName) || /hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛|pelo/i.test(mName));
+                        const isSkin = !isEye && !isDecal && (/skin|body|肌|体|颜|face|head|human/i.test(matName) || /skin|body|肌|体|颜|face|head|human/i.test(mName));
+
+                        // 1. Evitar que partes se vean negras por el reverso (faldas, cuellos, cabello, ropa):
+                        if (!isDecal) {
+                            mat.side = THREE.DoubleSide;
+                        }
+
+                        // 2. Corregir transparencia / ver a través:
+                        if (isEye) {
+                            // Los ojos y córnea NUNCA deben ser transparentes (evita ojos huecos o ver a través de la cabeza)
+                            mat.transparent = false;
+                            mat.opacity = 1.0;
+                            mat.depthWrite = true;
+                            mat.depthTest = true;
+                            mat.alphaTest = 0;
+                            mat.polygonOffset = false;
+
+                            if (mat.color) {
+                                if (!mat.map || (mat.color.r < 0.2 && mat.color.g < 0.2 && mat.color.b < 0.2 && !matName.includes('pupil') && !matName.includes('瞳'))) {
+                                    mat.color.setRGB(1.0, 1.0, 1.0);
+                                }
+                            }
+                            if (mat.emissive) {
+                                mat.emissive.setRGB(0.18, 0.18, 0.18);
+                            }
+                            if (child.isMesh && !isPMX && !(mat as any).userData?.isCalibrated) {
+                                child.renderOrder = 2;
+                            }
+                        } else if (isSkin) {
+                            // La piel y el rostro NUNCA deben ser transparentes
+                            mat.transparent = false;
+                            mat.opacity = 1.0;
+                            mat.depthWrite = true;
+                            mat.depthTest = true;
+                            mat.alphaTest = 0;
+                        } else if (isHair) {
+                            // El cabello en Three.js con transparent=true se vuelve transparente y se ve el cráneo/fondo
+                            // MODO CUTOUT: transparent=false + alphaTest + depthWrite=true
+                            mat.transparent = false;
+                            if (mat.alphaTest === undefined || mat.alphaTest < 0.1) {
+                                mat.alphaTest = 0.2;
+                            }
+                            mat.depthWrite = true;
+                        } else if (!isDecal) {
+                            // Ropa y accesorios: Por defecto sólidos y opacos para evitar que se transparenten
+                            if (mat.opacity !== undefined && mat.opacity < 0.85) {
+                                // Ropa con transparencia intencional real (velos, encajes)
+                                mat.transparent = true;
+                                mat.depthWrite = false;
+                                mat.alphaTest = 0.05;
+                            } else {
+                                mat.transparent = false;
+                                mat.depthWrite = true;
+                                mat.alphaTest = mat.map ? 0.15 : 0;
+                            }
+                        }
+                        mat.needsUpdate = true;
+                    });
                 }
             });
 
@@ -1091,7 +1233,7 @@ function AvatarModelInner({
                                             }
                                         }
                                     });
-                                    console.log("💀 BONES DUMP:", allBones.join(', '));
+                                    // console.log("💀 BONES DUMP:", allBones.join(', ')); // DEBUG ONLY - muy costoso
                                 }
 
                                 if (tongueKey && SHOW_VERBOSE_LOGS) console.log(`👅 Clave de lengua detectada: "${tongueKey}"`);
@@ -1766,8 +1908,9 @@ function AvatarModelInner({
                 if (SHOW_VERBOSE_LOGS) console.log(`🔗 Huesos de cabeza sincronizados (IK):`, rigifyHeadBones.map(b => b.name).join(', '));
             }
 
-            // 2. Cirugía ortopédica para reconectar la cara y el pelo al cráneo (Arreglo para jerarquías aplastadas por glTF)
-            if (headBoneRef.current) {
+            // 2. Cirugía ortopédica para reconectar la cara y el pelo al cráneo (Arreglo EXCLUSIVO para jerarquías aplastadas de Blender/Rigify glTF)
+            // En modelos PMX / MMD nativos, la jerarquía ya es correcta y anclar huesos al cráneo deformaría pechos (おっぱい) y hombros (肩P)
+            if (headBoneRef.current && !isPMX) {
                 const headBone = headBoneRef.current;
 
                 const isDescendant = (child: THREE.Bone, parent: THREE.Bone) => {
@@ -1806,25 +1949,30 @@ function AvatarModelInner({
                     const n = b.name.toLowerCase();
 
                     // CRÍTICO: Excluir todo lo que esté a más de 0.7 metros de la cabeza.
-                    // Esto filtra automáticamente la Vagina/Pelvis (spine.006) que está abajo,
-                    // pero incluye los huesos spine/neck secundarios de la malla del pelo que están arriba!
                     if (distance > 0.7) return false;
 
-                    // EXCLUSIÓN ESPECÍFICA: No anclar a la cabeza accesorios del cuello/pecho (collar, choker, necklace, cuello, cape, etc)
+                    // EXCLUSIÓN ESPECÍFICA: No anclar a la cabeza accesorios del cuello/pecho/pelvis
                     if (n.includes('spine.006') || n.includes('garter') || n.includes('thigh') || n.includes('leg') || n.includes('panties') ||
                         n.includes('collar') || n.includes('choker') || n.includes('necklace') || n.includes('cuello') || n.includes('tie') || n.includes('cape')) {
                         return false;
                     }
 
-                    // Excluir hombros, brazos y pechos explícitamente por si caen dentro del radio
+                    // Excluir terminantemente hombros, brazos, pechos, alas y torso (tanto en inglés como en japonés)
                     if (n.includes('shoulder') || n.includes('arm') || n.includes('hand') ||
                         n.includes('finger') || n.includes('breast') || n.includes('chest') ||
-                        n.includes('clavicle')) {
+                        n.includes('clavicle') || n.includes('wing') || n.includes('spine') ||
+                        n.includes('torso') || n.includes('hip') || n.includes('pelvis') ||
+                        b.name.includes('おっぱい') || b.name.includes('胸') || b.name.includes('乳') ||
+                        b.name.includes('肩') || b.name.includes('腕') || b.name.includes('手') ||
+                        b.name.includes('指') || b.name.includes('鎖骨') || b.name.includes('翼') ||
+                        b.name.includes('Wing') || b.name.includes('Piao')) {
                         return false;
                     }
 
-                    // Cualquier otro hueso huérfano cerca de la cabeza (pelo, ojos, cuello secundario) es bienvenido!
-                    return true;
+                    // Solo anclar huesos que inequívocamente pertenezcan al cabello o rostro
+                    return n.includes('hair') || n.includes('bang') || n.includes('ponytail') ||
+                           n.includes('pigtail') || n.includes('ahoge') || b.name.includes('髪') ||
+                           b.name.includes('毛') || n.includes('face') || n.includes('eye');
                 }) as THREE.Bone[];
 
                 if (safeOrphans.length > 0) {
@@ -1885,6 +2033,8 @@ function AvatarModelInner({
                         }
                     }
                 }
+            } else if (isPMX) {
+                headOrphansRef.current = [];
             }
 
             // --- GLOBAL DUAL-ARMATURE SYNC (Fix for Vroid/Rigify mesh tearing) ---
@@ -2079,23 +2229,23 @@ function AvatarModelInner({
             jigglePhysicsRef.current.initialize(modelRef.current);
 
             // Forzar registro manual de pechos para asegurar rebote elástico firme (PMX y modelos genéricos)
-            // Firme y turgente: rebote ágil sin hundirse en el tórax ni colgar flácido
+            // Firme y turgente: rebote elástico contenido que NUNCA traspasa el sujetador ni la ropa
             if (leftBreastRef.current) {
                 jigglePhysicsRef.current.addBone(leftBreastRef.current, { 
-                    stiffness: 0.38, 
-                    damping: 0.76, 
-                    gravity: 0.003, 
-                    intensity: 1.05, 
-                    maxAngle: Math.PI / 11 
+                    stiffness: 0.60, 
+                    damping: 0.90, 
+                    gravity: 0.0005, 
+                    intensity: isPMX ? 0.15 : 0.85, 
+                    maxAngle: isPMX ? (Math.PI / 40) : (Math.PI / 22) 
                 });
             }
             if (rightBreastRef.current) {
                 jigglePhysicsRef.current.addBone(rightBreastRef.current, { 
-                    stiffness: 0.38, 
-                    damping: 0.76, 
-                    gravity: 0.003, 
-                    intensity: 1.05, 
-                    maxAngle: Math.PI / 11 
+                    stiffness: 0.60, 
+                    damping: 0.90, 
+                    gravity: 0.0005, 
+                    intensity: isPMX ? 0.15 : 0.85, 
+                    maxAngle: isPMX ? (Math.PI / 40) : (Math.PI / 22) 
                 });
             }
 
@@ -2106,8 +2256,8 @@ function AvatarModelInner({
                     stiffness: 0.35, 
                     damping: 0.78, 
                     gravity: 0.002, 
-                    intensity: 1.05, 
-                    maxAngle: Math.PI / 9 
+                    intensity: isPMX ? 0.30 : 1.05, 
+                    maxAngle: isPMX ? (Math.PI / 18) : (Math.PI / 9) 
                 });
             }
             if (rightButtRef.current && !rightButtRef.current.name.toLowerCase().includes('pelvis')) {
@@ -2115,13 +2265,14 @@ function AvatarModelInner({
                     stiffness: 0.35, 
                     damping: 0.78, 
                     gravity: 0.002, 
-                    intensity: 1.05, 
-                    maxAngle: Math.PI / 9 
+                    intensity: isPMX ? 0.30 : 1.05, 
+                    maxAngle: isPMX ? (Math.PI / 18) : (Math.PI / 9) 
                 });
             }
 
-            // 2.6 Dynamic Body Colliders (Anti-clipping, contorno de ropa sobre piernas y agarre de pechos/cuerpo)
+            // 2.6 Dynamic Body Colliders (Anti-clipping, contorno de ropa sobre piernas, agarre y colisión de cráneo con pelo)
             jigglePhysicsRef.current.setupBodyColliders({
+                head: headBoneRef.current,
                 spine: spineRef.current,
                 hips: hipsRef.current,
                 leftLeg: leftLegRef.current,
@@ -2170,23 +2321,157 @@ function AvatarModelInner({
                     const name = child.name;
                     const lower = name.toLowerCase();
 
-                    // Asegurar que las submallas tengan DoubleSide para que el interior no se vea negro ni transparente
-                    if (child.material) {
-                        const mats = Array.isArray(child.material) ? child.material : [child.material];
-                        mats.forEach((m: any) => {
-                            if (m) m.side = THREE.DoubleSide;
-                        });
+                    const isSkinMesh = /skin|body|肌|体|颜|face|head|human|ani_main|ani_body/i.test(name);
+
+                    // Asegurar que todos los morphs de ropa, rotura, daño o no-faciales inicien estrictamente en 0
+                    // Si es un modelo PMX, resetear TODOS los morphs al iniciar para evitar que morphs de ojos (como 白目消し o parpadeo congelado) lo dejen ciego/transparente
+                    if (child.morphTargetDictionary && child.morphTargetInfluences) {
+                        if (isPMX) {
+                            child.morphTargetInfluences.fill(0);
+                        } else {
+                            for (const key in child.morphTargetDictionary) {
+                                if (isClothingOrNudityMorph(key) || !isFacialMorph(key)) {
+                                    const idx = child.morphTargetDictionary[key];
+                                    if (idx !== undefined) child.morphTargetInfluences[idx] = 0;
+                                }
+                            }
+                        }
                     }
 
-                    // Ocultar solo mallas duplicadas/incompatibles de la plantilla base (boots2, flatfooted)
-                    if (
-                        name === 'Ani_MainFlatFooted' ||
-                        lower.includes('flatfooted') ||
-                        lower.includes('boots2') ||
-                        lower.includes('bots2')
-                    ) {
-                        child.visible = false;
-                        console.log(`🚫 [DefaultVisibility] Ocultando mesh duplicado base: ${name}`);
+                    if (isPMX) {
+                        if (child.material) {
+                            const mats = Array.isArray(child.material) ? child.material : [child.material];
+                            mats.forEach((m: any) => {
+                                if (m) {
+                                    const mName = (m.name || child.name || '').toLowerCase();
+
+                                    const isEye = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼/i.test(mName);
+                                    const isFacialOverlay = !isEye && /tear|gag|eyeline|highlight|catchlight|涙|ハイライト/i.test(mName);
+                                    const isSkinOrFace = !isEye && !isFacialOverlay && /skin|body|肌|体|颜|face|head|human|mouth|teeth|tongue|唇|歯|牙|舌|口/i.test(mName);
+                                    const isDecal = !isEye && !isFacialOverlay && (/tattoo|紋|sticker/i.test(mName) || (!/eye|shirome|白目/i.test(mName) && /blush|shadow|decal/i.test(mName)));
+                                    const isClothing = /swim|dress|skirt|cloth|clothes|clothing|outfit|suit|pants|shorts|socks|stocking|bottom|top|corset|underwear|bra|panty|panties|lingerie|bikini|服|衣服|上衣|外套|衣装|スカート|裾|ドレス|ワンピース|ワンピ|コルセット|パンツ|ブラ|内衣|文胸|胸罩|内裤|胖次|安全裤|泳装|泳衣|比基尼|裙|褲襪|膝襪/i.test(mName);
+
+                                    // 1. Sombras: SIEMPRE FrontSide para que las caras invertidas NUNCA proyecten sombras negras sobre el cuerpo (shadow acne)
+                                    m.shadowSide = THREE.FrontSide;
+
+                                    if (isDecal || isFacialOverlay) {
+                                        // Tatuajes / Calcomanías sobre la piel / Lágrimas / Expresiones / Delineado de ojos superpuesto:
+                                        m.side = THREE.FrontSide;
+                                        m.transparent = true;
+                                        m.depthWrite = false;
+                                        m.polygonOffset = true;
+                                        m.polygonOffsetFactor = -1.0;
+                                        m.polygonOffsetUnits = -1.0;
+                                        m.alphaTest = 0.05;
+                                    } else {
+                                        // Piel, ropa, accesorios, cabello: DoubleSide universal para que NUNCA se vean negros al rotar o por el interior
+                                        m.side = THREE.DoubleSide;
+                                        m.polygonOffset = false;
+                                    }
+
+                                    const isHair = !isEye && !isFacialOverlay && /hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛/i.test(mName);
+                                    if (isEye) {
+                                        // Ojos / Córnea / Esclera: Siempre 100% opaco, escribe profundidad y orden prioritario
+                                        m.transparent = false;
+                                        m.opacity = 1.0;
+                                        m.depthWrite = true;
+                                        m.depthTest = true;
+                                        m.alphaTest = 0;
+                                        m.polygonOffset = true;
+                                        m.polygonOffsetFactor = -2.0;
+                                        m.polygonOffsetUnits = -2.0;
+                                        m.side = THREE.DoubleSide;
+
+                                        // Si el material del ojo no tiene textura o vino negro, forzar blanco puro
+                                        if (m.color) {
+                                            if (!m.map || (m.color.r < 0.2 && m.color.g < 0.2 && m.color.b < 0.2 && !mName.includes('pupil') && !mName.includes('瞳'))) {
+                                                m.color.setRGB(1.0, 1.0, 1.0);
+                                            }
+                                        }
+                                        if (m.emissive) {
+                                            m.emissive.setRGB(0.2, 0.2, 0.2);
+                                        }
+                                    } else if (isHair) {
+                                        // Pelo: modo CUTOUT limpio. transparent=false con alphaTest evita que se vuelva transparente o se vea el cráneo
+                                        m.transparent = false;
+                                        m.depthWrite = true;
+                                        m.alphaTest = 0.2;
+                                    } else if (isFacialOverlay) {
+                                        // Ya configurado arriba (transparent=true, depthWrite=false)
+                                    } else if (isSkinOrFace) {
+                                        // Piel, rostro, cabeza y ojos integrados: SIEMPRE 100% sólidos, opacos y escriben profundidad
+                                        m.transparent = false;
+                                        m.opacity = 1.0;
+                                        m.depthWrite = true;
+                                        m.depthTest = true;
+                                        m.alphaTest = 0;
+                                    } else if (!isDecal) {
+                                        // Ropa / Accesorios: Por defecto sólidos y opacos para evitar que se transparenten
+                                        // Si la textura tiene zonas transparentes (cutout), usar alphaTest=0.2 con transparent=false
+                                        if (m.opacity !== undefined && m.opacity < 0.85) {
+                                            // Solo si es deliberadamente semitransparente (velo, tela transparente)
+                                            m.transparent = true;
+                                            m.depthWrite = false;
+                                            m.alphaTest = 0.05;
+                                        } else {
+                                            m.transparent = false;
+                                            m.opacity = 1.0;
+                                            m.depthWrite = true;
+                                            m.alphaTest = m.map ? 0.15 : 0;
+                                        }
+                                    } else {
+                                        m.transparent = false;
+                                        m.opacity = 1.0;
+                                        m.depthWrite = true;
+                                    }
+
+                                    m.needsUpdate = true;
+                                }
+                            });
+                        }
+                    } else if (isGrokAni) {
+                        // Ajustes exclusivos para la plantilla modular Ani/GrokAni (decals, ropa superpuesta)
+                        if (child.material) {
+                            const mats = Array.isArray(child.material) ? child.material : [child.material];
+                            mats.forEach((m: any) => {
+                                if (m) {
+                                    const mName = (m.name || name).toLowerCase();
+                                    const isDecalMat = /tattoo|紋|sticker|blush|shadow|decal|lashes|eyelash/i.test(mName);
+                                    if (isDecalMat) {
+                                        m.side = THREE.FrontSide;
+                                        m.transparent = true;
+                                        m.depthWrite = false;
+                                        m.polygonOffset = true;
+                                        m.polygonOffsetFactor = -2.0;
+                                        m.polygonOffsetUnits = -2.0;
+                                    } else {
+                                        m.side = THREE.DoubleSide;
+                                        m.polygonOffset = false;
+                                    }
+                                    m.needsUpdate = true;
+                                }
+                            });
+                        }
+
+                        // RenderOrder para GrokAni: Piel en 0, Ropa en 1, Decals en 2
+                        if (isSkinMesh) {
+                            child.renderOrder = 0;
+                        } else if (/sticker|lashes|blush|shadow|pastie/i.test(name)) {
+                            child.renderOrder = 2;
+                        } else {
+                            child.renderOrder = 1;
+                        }
+
+                        // Ocultar solo mallas duplicadas/incompatibles de la plantilla base (boots2, flatfooted)
+                        if (
+                            name === 'Ani_MainFlatFooted' ||
+                            lower.includes('flatfooted') ||
+                            lower.includes('boots2') ||
+                            lower.includes('bots2')
+                        ) {
+                            child.visible = false;
+                            console.log(`🚫 [DefaultVisibility] Ocultando mesh duplicado base: ${name}`);
+                        }
                     }
                 }
             });
@@ -2374,12 +2659,10 @@ function AvatarModelInner({
                     modelRef.current!.traverse((child: any) => {
                         if (child.isSkinnedMesh && child.skeleton && !skeleton) {
                             skeleton = child.skeleton;
-                            // TEST DE DIAGNÓSTICO: Listar los huesos reales del Skeleton
-                            const skeletonBoneNames = skeleton.bones.map(b => b.name);
-                            console.log('💀 HUESOS REALES DEL SKELETON (SKINNED MESH):', skeletonBoneNames.join(', '));
-
-                            const hasDefAss = skeletonBoneNames.some(b => b.toLowerCase().includes('def-ass.l'));
-                            console.log(`¿El Skeleton incluye DEF-ass.L? -> ${hasDefAss ? 'SÍ' : 'NO (¡EXCLUIDO POR EXPORTER!)'}`);
+                            // Solo loguear en modo debug (evitar spam en consola que bloquea el hilo)
+                            const hasDefAss = skeleton.bones.some((b: any) => b.name.toLowerCase().includes('def-ass.l'));
+                            if (hasDefAss) console.log('✅ Skeleton incluye DEF-ass.L');
+                            // console.log('💀 HUESOS REALES DEL SKELETON (SKINNED MESH):', skeleton.bones.map(b => b.name).join(', ')); // DEBUG ONLY
                         }
                     });
 
@@ -2927,6 +3210,24 @@ function AvatarModelInner({
 
         if (mixerRef.current) mixerRef.current.update(safeDelta);
 
+        // 🔒 BLINDAJE DE VESTIMENTA: Asegurar que ningún morph de eliminación de ropa, rotura o no-facial permanezca activo
+        if (modelRef.current) {
+            modelRef.current.traverse((child: any) => {
+                if (child.isMesh && child.morphTargetDictionary && child.morphTargetInfluences) {
+                    const dict = child.morphTargetDictionary;
+                    const infl = child.morphTargetInfluences;
+                    for (const key in dict) {
+                        if (isClothingOrNudityMorph(key) || !isFacialMorph(key)) {
+                            const idx = dict[key];
+                            if (idx !== undefined && infl[idx] > 0) {
+                                infl[idx] = 0;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         // 2. En modelos PMX, guardar estado limpio del mixer
         if (isPMX && ikSolverRef.current?.saveBones) {
             ikSolverRef.current.saveBones();
@@ -3117,7 +3418,8 @@ function AvatarModelInner({
             }
 
             // A. RESPIRACIÓN REALISTA ASIMÉTRICA SINCRONIZADA CON BPM (IK + ASMR)
-            const targetBpm = activeBpmRef.current || (isHotMode ? 105 : 68);
+            // En modo Ninfómano / Hot, el BPM sube a ~120-135 BPM (respiración jadeante agitada y caliente)
+            const targetBpm = activeBpmRef.current || (isHotMode ? 128 : 68);
             const bpmSpeedMultiplier = (targetBpm / 60) * 0.28;
             const breathSpeed = bpmSpeedMultiplier * moodInfluence.breathingSpeed;
             const breathCycle = ((t * breathSpeed) % 1.0 + 1.0) % 1.0;
@@ -3136,8 +3438,8 @@ function AvatarModelInner({
             }
             const inhale = (inhaleNorm - 0.5) * 2.0; // -1 a 1
 
-            // Expansión dinámica del pecho proporcional a la agitación/BPM
-            const breathAmplitude = targetBpm > 90 ? 0.0075 : 0.0045;
+            // Expansión dinámica del pecho proporcional a la agitación/BPM (más intensa y jadeante en hot mode)
+            const breathAmplitude = isHotMode ? 0.013 : (targetBpm > 90 ? 0.0075 : 0.0045);
             let baseY = isPMX ? -1.5 : -0.5; // El offset base necesario para este modelo (evita flotar)
             if (currentBasePoseRef.current === 'sit') baseY = isPMX ? -1.9 : -0.9;
             if (currentBasePoseRef.current === 'lie') baseY = isPMX ? -2.3 : -1.5;
@@ -3155,8 +3457,13 @@ function AvatarModelInner({
                     nextIdleSwitchTimeRef.current = 10 + Math.random() * 6; // 10-16s entre transiciones
                     prevIdleStateRef.current = currentIdleStateRef.current;
                     const others = IDLE_STATES.filter(s => s !== currentIdleStateRef.current);
-                    currentIdleStateRef.current = others[Math.floor(Math.random() * others.length)];
+                    const nextState = others[Math.floor(Math.random() * others.length)];
+                    currentIdleStateRef.current = nextState;
                     idleBlendRef.current = 0; // Reiniciar blend
+
+                    // Si hay una animación de override asignada a este estado de Idle, dispararla
+                    const slotId = `idle_${nextState}` as IdleSlotId;
+                    checkAndTriggerSlotOverride(slotId, true);
                 }
                 // Blend suave entre estados (0 -> 1 en ~2s)
                 idleBlendRef.current = Math.min(1, idleBlendRef.current + delta / 2.0);
@@ -3164,7 +3471,7 @@ function AvatarModelInner({
 
                 // Nympho mode multiplier
                 const isNymphoMode = isHotMode;
-                const nymphoMult = isNymphoMode ? 2.0 : 1.0;
+                const nymphoMult = isNymphoMode ? 2.2 : 1.0;
 
                 // Helper deg->rad inline
                 const d2r = THREE.MathUtils.degToRad;
@@ -3172,7 +3479,7 @@ function AvatarModelInner({
                 // ── B1. COLUMNA / TORSO — POSES VISIBLES Y DIFERENCIADAS ──
                 if (spineRef.current) {
                     const spineBaseQuat = spineRef.current.userData.baseQuat;
-                    const breathPitch = inhale * 0.025 * moodInfluence.expressionIntensity;
+                    const breathPitch = inhale * (isNymphoMode ? 0.045 : 0.025) * moodInfluence.expressionIntensity;
 
                     let sP = 0, sY = 0, sR = 0;
                     if (curState === 'relaxed') {
@@ -3196,7 +3503,11 @@ function AvatarModelInner({
                         sY = Math.sin(t * 0.5) * d2r(4);
                         sR = d2r(8) + Math.sin(t * 0.3) * d2r(2);
                     }
-                    if (isNymphoMode) sP -= d2r(10);
+                    // En modo ninfómano: arqueo lumbar sensual (pecho hacia afuera, culo respingado)
+                    if (isNymphoMode) {
+                        sP -= d2r(14); // Inclinación lumbar más pronunciada
+                        sR += Math.sin(t * 1.8) * d2r(2.5); // Micro-temblor de éxtasis
+                    }
 
                     const spDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(sP, sY, sR));
                     if (spineBaseQuat) {
@@ -3214,16 +3525,21 @@ function AvatarModelInner({
                         hY = Math.sin(t * 0.5) * d2r(2.5);
                         hZ = Math.cos(t * 0.4) * d2r(2);
                     } else if (curState === 'weight_shift') {
-                        hY = Math.sin(t * 0.4) * d2r(5) * nymphoMult;
-                        hZ = Math.sin(t * 0.3) * d2r(6) * nymphoMult;
+                        hY = Math.sin(t * 0.4) * d2r(6) * nymphoMult;
+                        hZ = Math.sin(t * 0.3) * d2r(7) * nymphoMult;
                     } else if (curState === 'cute_waist') {
-                        hY = Math.sin(t * 0.55) * d2r(4);
-                        hZ = Math.cos(t * 0.4) * d2r(3.5);
+                        hY = Math.sin(t * 0.55) * d2r(5);
+                        hZ = Math.cos(t * 0.4) * d2r(4.5);
                     } else if (curState === 'thoughtful') {
-                        hY = 0; hZ = d2r(3);
+                        hY = 0; hZ = d2r(3.5);
                     } else if (curState === 'curious_look') {
-                        hY = Math.sin(t * 0.5) * d2r(3);
-                        hZ = Math.cos(t * 0.38) * d2r(2.5);
+                        hY = Math.sin(t * 0.5) * d2r(4);
+                        hZ = Math.cos(t * 0.38) * d2r(3.5);
+                    }
+                    if (isNymphoMode) {
+                        // Vaivén constante de caderas seductor
+                        hY += Math.sin(t * 1.2) * d2r(4);
+                        hZ += Math.cos(t * 1.0) * d2r(5);
                     }
                     const hDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, hY, hZ));
                     if (hipsBaseQuat) {
@@ -3288,6 +3604,13 @@ function AvatarModelInner({
                     const ph = speechGesturePhaseRef.current;
                     const energy = Math.min(1, Math.max(lipSyncVolume * 2.5, isAiSpeaking ? 0.7 : 0));
                     const gestStyle = Math.floor(ph / 8) % 4; // Cambia estilo cada 8s
+
+                    // Si cambia de estilo de habla y hay override asignado, dispararlo
+                    if (prevSpeechStyleRef.current !== gestStyle) {
+                        prevSpeechStyleRef.current = gestStyle;
+                        const SPEECH_SLOT_MAP: IdleSlotId[] = ['speech_explain', 'speech_emphasis', 'speech_seductive', 'speech_animated'];
+                        checkAndTriggerSlotOverride(SPEECH_SLOT_MAP[gestStyle], false);
+                    }
 
                     // TORSO: lean-in conversacional notable
                     if (spineRef.current && spineRef.current.userData.baseQuat) {
@@ -3690,7 +4013,10 @@ function AvatarModelInner({
                 eyeDirectionX += 0.4;
                 break;
             default: // neutral
-                targetPupilScale = 0;
+                targetPupilScale = isHotMode ? 0.75 : 0; // Dilatación por excitación en Hot Mode
+        }
+        if (isHotMode && targetPupilScale <= 0) {
+            targetPupilScale = 0.65;
         }
 
         // Aplicar a Morphs de Ojos Detectados
@@ -3752,8 +4078,10 @@ function AvatarModelInner({
             });
         }
 
+        // Bedroom eyes: mirada lasciva entrecerrada (0.38) constante en Hot Mode
+        const bedroomEyeBase = isHotMode ? 0.38 : 0;
         const blinkValue = THREE.MathUtils.clamp(
-            isBlinking.current ? blinkCurve : (isHotMode ? 0.25 : 0),
+            isBlinking.current ? Math.max(blinkCurve, bedroomEyeBase) : bedroomEyeBase,
             0,
             1
         );
@@ -4109,13 +4437,53 @@ function AvatarModelInner({
             }
 
             // Configurar trigger de animación interna (tongueRef en useFrame)
-            if (act === 'suck' || act === 'lick' || act === 'tongue_out') {
+            if (act === 'suck' || act === 'lick' || act === 'tongue_out' || act === 'deepthroat') {
                 if (tongueMeshRef.current && tongueRef.current !== null) {
-                    tongueMeshRef.current.morphTargetInfluences![tongueRef.current] = 1.0;
+                    tongueMeshRef.current.morphTargetInfluences![tongueRef.current] = act === 'deepthroat' ? 1.0 : 0.85;
+                }
+                // Si es deepthroat, inclinar cabeza hacia atrás o adelante con boca abierta
+                if (act === 'deepthroat' && headBoneRef.current) {
+                    headBoneRef.current.rotation.x = THREE.MathUtils.degToRad(-25);
+                }
+            } else if (act === 'touch_tits') {
+                // Manos acariciando el pecho
+                if (rightArmRef.current && leftArmRef.current) {
+                    rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-35), THREE.MathUtils.degToRad(20), THREE.MathUtils.degToRad(-40));
+                    leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-35), THREE.MathUtils.degToRad(-20), THREE.MathUtils.degToRad(40));
+                    if (rightForeArmRef.current && leftForeArmRef.current) {
+                        rightForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(55), 0, 0);
+                        leftForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(55), 0, 0);
+                    }
+                }
+            } else if (act === 'masturbate' || act === 'touch_pussy') {
+                // Mano derecha baja a tocarse la entrepierna, mano izquierda al pecho
+                if (rightArmRef.current && leftArmRef.current) {
+                    rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-75), THREE.MathUtils.degToRad(-15), THREE.MathUtils.degToRad(-15));
+                    if (rightForeArmRef.current) rightForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(35), 0, 0);
+                    leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-30), THREE.MathUtils.degToRad(-15), THREE.MathUtils.degToRad(35));
+                    if (leftForeArmRef.current) leftForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(45), 0, 0);
+                }
+                if (spineRef.current && spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-15), 0, 0))));
+                }
+            } else if (act === 'spank_self') {
+                // Brazo derecho atrás golpeando el glúteo
+                if (rightArmRef.current) {
+                    rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-55), THREE.MathUtils.degToRad(25), THREE.MathUtils.degToRad(40));
+                    if (rightForeArmRef.current) rightForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(50), 0, 0);
+                }
+                if (jigglePhysicsRef.current) {
+                    jigglePhysicsRef.current.applyImpulse('butt', new THREE.Vector3(0, -0.015, -0.025));
+                }
+            } else if (act === 'sensual_dance') {
+                // Ondulación sensual
+                if (rightArmRef.current && leftArmRef.current) {
+                    rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(15), THREE.MathUtils.degToRad(15), THREE.MathUtils.degToRad(45));
+                    leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-15), THREE.MathUtils.degToRad(-15), THREE.MathUtils.degToRad(-45));
                 }
             } else if (act === 'ahegao') {
                 if (tongueMeshRef.current && tongueRef.current !== null) {
-                    tongueMeshRef.current.morphTargetInfluences![tongueRef.current] = 0.8;
+                    tongueMeshRef.current.morphTargetInfluences![tongueRef.current] = 1.0;
                     // Ahegao eyes
                     if (morphTargetMeshes.length > 0) {
                         morphTargetMeshes.forEach(mesh => {
@@ -4234,6 +4602,71 @@ function AvatarModelInner({
                 } else {
                     spineRef.current.rotation.x = THREE.MathUtils.degToRad(-15);
                 }
+            } else if (pose === 'arch_back') {
+                // Arqueo lumbar sensual: tronco inclinado ligeramente al frente, pecho adelante, brazos apoyados atrás
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-25), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-25);
+                }
+                rightArmRef.current.rotation.x = THREE.MathUtils.degToRad(-45);
+                rightArmRef.current.rotation.z = THREE.MathUtils.degToRad(30);
+                leftArmRef.current.rotation.x = THREE.MathUtils.degToRad(-45);
+                leftArmRef.current.rotation.z = THREE.MathUtils.degToRad(-30);
+            } else if (pose === 'titfuck' || pose === 'paizuri') {
+                // Pecho erguido, brazos juntando y apretando los pechos
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-10), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-10);
+                }
+                rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-25), THREE.MathUtils.degToRad(25), THREE.MathUtils.degToRad(-35));
+                leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-25), THREE.MathUtils.degToRad(-25), THREE.MathUtils.degToRad(35));
+                if (rightForeArmRef.current && leftForeArmRef.current) {
+                    rightForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(60), 0, 0);
+                    leftForeArmRef.current.rotation.set(THREE.MathUtils.degToRad(60), 0, 0);
+                }
+            } else if (pose === 'spanking' || pose === 'bent_over') {
+                // Inclinada hacia adelante a 45 grados ofreciendo el trasero para nalgadas
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(42), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(42);
+                }
+                if (hipsRef.current && hipsRef.current.userData.baseQuat) {
+                    hipsRef.current.quaternion.copy(hipsRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-15), 0, 0))));
+                }
+                rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(35), 0, THREE.MathUtils.degToRad(20));
+                leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(35), 0, THREE.MathUtils.degToRad(-20));
+            } else if (pose === 'feet_present' || pose === 'footjob') {
+                // Inclinada hacia atrás con piernas flexionadas elevando los pies hacia la cámara
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-30), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-30);
+                }
+                rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-50), 0, THREE.MathUtils.degToRad(25));
+                leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-50), 0, THREE.MathUtils.degToRad(-25));
+                if (rightLegRef.current) rightLegRef.current.rotation.set(THREE.MathUtils.degToRad(-50), THREE.MathUtils.degToRad(15), 0);
+                if (leftLegRef.current) leftLegRef.current.rotation.set(THREE.MathUtils.degToRad(-50), THREE.MathUtils.degToRad(-15), 0);
+            } else if (pose === 'riding') {
+                // Postura de cabalgata pélvica erguida con caderas basculadas
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-10), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(-10);
+                }
+                rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(20), 0, THREE.MathUtils.degToRad(35));
+                leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(20), 0, THREE.MathUtils.degToRad(-35));
+            } else if (pose === 'erotic_squat') {
+                // En cuclillas abiertas
+                if (spineRef.current.userData.baseQuat) {
+                    spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(20), 0, 0))));
+                } else {
+                    spineRef.current.rotation.x = THREE.MathUtils.degToRad(20);
+                }
+                rightArmRef.current.rotation.set(THREE.MathUtils.degToRad(-40), 0, THREE.MathUtils.degToRad(30));
+                leftArmRef.current.rotation.set(THREE.MathUtils.degToRad(-40), 0, THREE.MathUtils.degToRad(-30));
             } else if (pose === 'missionary' || pose === 'lie' || pose === 'cowgirl') {
                 if (spineRef.current.userData.baseQuat) {
                     spineRef.current.quaternion.copy(spineRef.current.userData.baseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-15), 0, 0))));
@@ -4808,12 +5241,15 @@ function PMXAvatarModel({ modelUrl, ...props }: {
             .then(result => {
                 if (!isCancelled) {
                     setPmxResult(result);
+                    if (typeof window !== 'undefined') {
+                        (window as any).__lastLoadedIsPMX = result.isPMX;
+                    }
                 }
             })
             .catch(err => {
                 if (!isCancelled) {
-                    console.error('❌ Error cargando modelo PMX:', err);
-                    setError(err.message || 'Error al procesar modelo PMX');
+                    console.error('❌ Error cargando modelo:', err);
+                    setError(err.message || 'Error al procesar modelo 3D');
                 }
             });
 
@@ -4834,17 +5270,17 @@ function PMXAvatarModel({ modelUrl, ...props }: {
         return (
             <Html center>
                 <div className="bg-red-950/80 border border-red-500/50 p-4 rounded-xl text-red-200 text-xs backdrop-blur-md">
-                    ⚠️ Error al cargar PMX: {error}
+                    ⚠️ Error al cargar modelo: {error}
                 </div>
             </Html>
         );
     }
 
     if (!modelData) {
-        return <FallbackAvatar text="Cargando modelo PMX / MMD..." />;
+        return <FallbackAvatar text="Cargando modelo 3D..." />;
     }
 
-    return <AvatarModelInner modelData={modelData} modelUrl={modelUrl} isPMX={true} {...props} />;
+    return <AvatarModelInner modelData={modelData} modelUrl={modelUrl} isPMX={pmxResult?.isPMX ?? true} {...props} />;
 }
 
 /**
@@ -4868,15 +5304,11 @@ function AvatarModel(props: {
     const safeModelUrl = props.modelUrl || '/models/grokani_lipsync.glb';
     const lowerUrl = safeModelUrl.toLowerCase();
 
-    // Detección estricta del tipo de modelo 3D: si es GLB/GLTF/VRM jamás debe pasar a MMDLoader
-    const isGLTF = lowerUrl.includes('.glb') || lowerUrl.includes('.gltf') || lowerUrl.includes('.vrm');
-    const isPMX = !isGLTF && (lowerUrl.includes('.pmx') || lowerUrl.includes('.pmd') || lowerUrl.includes('.zip'));
+    // Detección estricta del tipo de modelo 3D: si es GLB/GLTF directo jamás debe pasar a MMDLoader
+    const isDirectGLTF = (lowerUrl.includes('.glb') || lowerUrl.includes('.gltf') || lowerUrl.includes('.vrm')) && !lowerUrl.includes('.zip') && !lowerUrl.includes('.rar') && !lowerUrl.includes('.7z');
+    const isArchiveOrCustom = !isDirectGLTF && (lowerUrl.includes('.pmx') || lowerUrl.includes('.pmd') || lowerUrl.includes('.zip') || lowerUrl.includes('.rar') || lowerUrl.includes('.7z') || lowerUrl.includes('.fbx'));
 
-    if (typeof window !== 'undefined') {
-        (window as any).__lastLoadedIsPMX = isPMX;
-    }
-
-    if (isPMX) {
+    if (isArchiveOrCustom) {
         return <PMXAvatarModel {...props} modelUrl={safeModelUrl} />;
     }
 
@@ -4907,6 +5339,20 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
     const cameraTargetRef = useRef<THREE.Object3D>(new THREE.Object3D());
     const isVmdCameraActive = useRef<boolean>(false);
     const defaultFovRef = useRef<number>(camera instanceof THREE.PerspectiveCamera ? camera.fov : 50);
+    // Guardar posición y target previos a la cinemática VMD para restaurarlos con precisión al terminar
+    const savedPreVmdState = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+
+    // Coordenadas objetivo para cada modo
+    const targets: Record<string, { pos: THREE.Vector3, look: THREE.Vector3 }> = {
+        default: { pos: new THREE.Vector3(0, 3.2, 4.2), look: new THREE.Vector3(0, 2.2, 0) },
+        face: { pos: new THREE.Vector3(0, 2.75, 1.6), look: new THREE.Vector3(0, 2.65, 0) },
+        body: { pos: new THREE.Vector3(0, 1.5, 2.6), look: new THREE.Vector3(0, 1.1, 0) },
+        full: { pos: new THREE.Vector3(0, 1.4, 3.8), look: new THREE.Vector3(0, 1.0, 0) },
+        selfie: { pos: new THREE.Vector3(0.4, 2.8, 1.0), look: new THREE.Vector3(0, 2.6, 0) },
+        back: { pos: new THREE.Vector3(0, 1.6, -3.8), look: new THREE.Vector3(0, 1.5, 0) },
+    };
+
+    const [currentViewMode, setCurrentViewMode] = useState<string>(viewMode || 'default');
 
     // Adjuntar el objeto target al camera para que mixer encuentre target.position
     useEffect(() => {
@@ -4923,6 +5369,15 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             const { clip } = (e as CustomEvent<{ clip: THREE.AnimationClip; name: string }>).detail;
             if (!clip) return;
 
+            // Guardar posición de cámara y target previos para volver al terminar
+            const currentTarget = controlsRef.current?.target 
+                ? controlsRef.current.target.clone() 
+                : (targets[currentViewMode]?.look?.clone() || targets.default.look.clone());
+            savedPreVmdState.current = {
+                pos: camera.position.clone(),
+                target: currentTarget
+            };
+
             if (vmdCameraMixerRef.current) {
                 vmdCameraMixerRef.current.stopAllAction();
             }
@@ -4938,7 +5393,7 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             if (controlsRef.current) {
                 controlsRef.current.enabled = false; // Pausar OrbitControls durante cinemática
             }
-            console.log(`🎥 [CameraManager] Cinemática iniciada: ${clip.name} (${clip.duration.toFixed(1)}s)`);
+            console.log(`🎥 [CameraManager] Cinemática iniciada: ${clip.name} (${clip.duration.toFixed(1)}s). Posición inicial guardada.`);
         };
 
         const handleStop = () => {
@@ -4948,14 +5403,25 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
                     vmdCameraMixerRef.current = null;
                 }
                 isVmdCameraActive.current = false;
-                if (controlsRef.current) {
-                    controlsRef.current.enabled = true; // Reactivar OrbitControls
-                }
+
                 if (camera instanceof THREE.PerspectiveCamera) {
                     camera.fov = defaultFovRef.current;
                     camera.updateProjectionMatrix();
                 }
-                console.log('🎥 [CameraManager] Cinemática detenida, control libre restaurado.');
+
+                // Restaurar el control de OrbitControls y suavizar de vuelta a la vista guardada o actual
+                if (controlsRef.current) {
+                    controlsRef.current.enabled = true;
+                }
+
+                // Activar transición de regreso suave
+                isTransitioning.current = true;
+                setTimeout(() => {
+                    isTransitioning.current = false;
+                    savedPreVmdState.current = null;
+                }, 2500);
+
+                console.log('🎥 [CameraManager] Cinemática detenida, restaurando cámara suavemente a la posición original.');
             }
         };
 
@@ -4967,26 +5433,46 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             window.removeEventListener('nova-vmd-camera-stop', handleStop);
             handleStop();
         };
-    }, [camera, controlsRef]);
+    }, [camera, controlsRef, currentViewMode]);
 
-    // Coordenadas objetivo para cada modo
-    const targets: Record<string, { pos: THREE.Vector3, look: THREE.Vector3 }> = {
-        default: { pos: new THREE.Vector3(0, 3.2, 4.2), look: new THREE.Vector3(0, 2.2, 0) },
-        face: { pos: new THREE.Vector3(0, 2.75, 1.6), look: new THREE.Vector3(0, 2.65, 0) },
-        body: { pos: new THREE.Vector3(0, 1.5, 2.6), look: new THREE.Vector3(0, 1.1, 0) },
-        full: { pos: new THREE.Vector3(0, 1.4, 3.8), look: new THREE.Vector3(0, 1.0, 0) },
-        selfie: { pos: new THREE.Vector3(0.4, 2.8, 1.0), look: new THREE.Vector3(0, 2.6, 0) },
-        back: { pos: new THREE.Vector3(0, 1.6, -3.8), look: new THREE.Vector3(0, 1.5, 0) },
-    };
+    // Sincronizar con prop viewMode
+    useEffect(() => {
+        if (viewMode && viewMode !== currentViewMode) {
+            setCurrentViewMode(viewMode);
+        }
+    }, [viewMode]);
 
-    // Detectar cambio de modo
+    // Listener para eventos de cámara disparados por comandos de voz/texto y Gemini
+    useEffect(() => {
+        const handlePresetEvent = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            const preset = (detail?.preset || detail?.view || '').toLowerCase().trim();
+            if (preset && targets[preset]) {
+                console.log(`🎥 [CameraManager] Preset de cámara recibido vía evento: "${preset}"`);
+                setCurrentViewMode(preset);
+                isTransitioning.current = true;
+            }
+        };
+
+        window.addEventListener('nova-camera-preset', handlePresetEvent);
+        window.addEventListener('aiko-camera-view', handlePresetEvent);
+        window.addEventListener('aiko-camera-preset', handlePresetEvent);
+
+        return () => {
+            window.removeEventListener('nova-camera-preset', handlePresetEvent);
+            window.removeEventListener('aiko-camera-view', handlePresetEvent);
+            window.removeEventListener('aiko-camera-preset', handlePresetEvent);
+        };
+    }, []);
+
+    // Detectar cambio de modo de vista
     useEffect(() => {
         if (!isVmdCameraActive.current) {
             isTransitioning.current = true;
-            const timer = setTimeout(() => { isTransitioning.current = false; }, 2000);
+            const timer = setTimeout(() => { isTransitioning.current = false; }, 2500);
             return () => clearTimeout(timer);
         }
-    }, [viewMode]);
+    }, [currentViewMode]);
 
     // Detectar interacción del usuario para cancelar transición
     useEffect(() => {
@@ -5019,10 +5505,13 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             return;
         }
 
-        // 2. Transición suave de modos de vista
+        // 2. Transición suave de modos de vista o restauración tras cinemática
         if (!isTransitioning.current) return;
 
-        const target = targets[viewMode] || targets.default;
+        // Si tenemos un estado guardado antes de una cinemática VMD, restaurar hacia ese estado exacto
+        const target = savedPreVmdState.current 
+            ? { pos: savedPreVmdState.current.pos, look: savedPreVmdState.current.target } 
+            : (targets[currentViewMode] || targets.default);
         const lerpFactor = 5.0 * delta; // Velocidad de transición
 
         // Calcular distancias
@@ -5032,6 +5521,7 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
         // Si estamos muy cerca, terminamos la transición para ahorrar recursos y liberar control
         if (distPos < 0.05 && distLook < 0.05) {
             isTransitioning.current = false;
+            savedPreVmdState.current = null;
         }
 
         // Mover cámara
@@ -5195,13 +5685,13 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                     />
                 )}
 
-                {/* ILUMINACIÓN DINÁMICA: Atenuada para modelos PMX/Toon para evitar sobreexposición/palidez */}
+                {/* ILUMINACIÓN DINÁMICA: Calibrada para sombreado PBR realista con reflejos y sombras suaves */}
                 <ambientLight
                     intensity={(() => {
                         const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
                         const isGLTFModel = raw.includes('.glb') || raw.includes('.gltf') || raw.includes('.vrm');
-                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip'));
-                        return isPMXModel ? Math.min(modeLights.ambientIntensity * 0.45, 0.55) : modeLights.ambientIntensity;
+                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
+                        return isPMXModel ? Math.min(modeLights.ambientIntensity * 0.85, 0.95) : modeLights.ambientIntensity;
                     })()}
                     color={modeLights.ambientColor}
                 />
@@ -5210,8 +5700,8 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                     intensity={(() => {
                         const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
                         const isGLTFModel = raw.includes('.glb') || raw.includes('.gltf') || raw.includes('.vrm');
-                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip'));
-                        return isPMXModel ? Math.min(modeLights.dirLightIntensity * 0.75, 0.75) : modeLights.dirLightIntensity;
+                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
+                        return isPMXModel ? Math.min(modeLights.dirLightIntensity * 0.95, 1.05) : modeLights.dirLightIntensity;
                     })()}
                     color={modeLights.dirLightColor}
                     castShadow
@@ -5221,8 +5711,8 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                 {/* Luz Rim de realce trasero */}
                 <pointLight position={[0, 2.5, -2]} intensity={0.4} color={modeLights.rimLightColor} />
 
-                {/* Environment neutro para reflejos mínimos */}
-                <Environment preset="studio" environmentIntensity={0.15} />
+                {/* Environment studio para reflejos físicos en ojos, pelo sedoso y joyería */}
+                <Environment preset="studio" environmentIntensity={0.35} />
 
                 {/* SUELO Y SOMBRA DE CONTACTO: Da anclaje espacial para que los pies no floten en el vacío */}
                 <group position={[0, -1.5, 0]}>

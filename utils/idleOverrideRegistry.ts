@@ -1,4 +1,4 @@
-﻿/**
+/**
  * idleOverrideRegistry.ts
  * Permite reemplazar cualquier estado idle o gesto de habla procedural
  * con una animacion personalizada cargada en animationStore.
@@ -24,15 +24,15 @@ export interface IdleSlotDefinition {
 }
 
 export const IDLE_SLOT_DEFINITIONS: IdleSlotDefinition[] = [
-    { id: 'idle_relaxed',       label: 'Relajada',       icon: 'U+1F60C', description: 'Pose neutral tranquila',                    group: 'idle' },
-    { id: 'idle_weight_shift',  label: 'Peso Desplazado',icon: 'U+1F483', description: 'Cadera desplazada, espalda curvada',        group: 'idle' },
-    { id: 'idle_cute_waist',    label: 'Cintura Cute',   icon: 'U+1F970', description: 'Postura kawaii inclinada',                  group: 'idle' },
-    { id: 'idle_thoughtful',    label: 'Pensativa',      icon: 'U+1F914', description: 'Lean hacia adelante, brazo en barbilla',    group: 'idle' },
-    { id: 'idle_curious_look',  label: 'Curiosa',        icon: 'U+1F440', description: 'Ladeada, brazos abiertos',                  group: 'idle' },
-    { id: 'speech_explain',     label: 'Explicar',       icon: 'U+1F446', description: 'Brazo izq sube y gesticula',               group: 'speech' },
-    { id: 'speech_emphasis',    label: 'Enfasis',        icon: 'U+1F64C', description: 'Ambos brazos se abren juntos',             group: 'speech' },
-    { id: 'speech_seductive',   label: 'Seductora',      icon: 'U+1F485', description: 'Brazo der sube lentamente',                group: 'speech' },
-    { id: 'speech_animated',    label: 'Animada',        icon: 'U+2728',  description: 'Ambos brazos rapido alternado',            group: 'speech' },
+    { id: 'idle_relaxed',       label: 'Relajada',       icon: '😌', description: 'Pose neutral tranquila',                    group: 'idle' },
+    { id: 'idle_weight_shift',  label: 'Peso Desplazado',icon: '💃', description: 'Cadera desplazada, espalda curvada',        group: 'idle' },
+    { id: 'idle_cute_waist',    label: 'Cintura Cute',   icon: '🥰', description: 'Postura kawaii inclinada',                  group: 'idle' },
+    { id: 'idle_thoughtful',    label: 'Pensativa',      icon: '🤔', description: 'Lean hacia adelante, brazo en barbilla',    group: 'idle' },
+    { id: 'idle_curious_look',  label: 'Curiosa',        icon: '👀', description: 'Ladeada, brazos abiertos',                  group: 'idle' },
+    { id: 'speech_explain',     label: 'Explicar',       icon: '☝️', description: 'Brazo izq sube y gesticula',               group: 'speech' },
+    { id: 'speech_emphasis',    label: 'Énfasis',        icon: '🙌', description: 'Ambos brazos se abren juntos',             group: 'speech' },
+    { id: 'speech_seductive',   label: 'Seductora',      icon: '💅', description: 'Brazo der sube lentamente',                group: 'speech' },
+    { id: 'speech_animated',    label: 'Animada',        icon: '✨',  description: 'Ambos brazos rápido alternado',            group: 'speech' },
 ];
 
 const STORAGE_KEY = 'nova_idle_overrides';

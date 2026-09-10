@@ -12,6 +12,7 @@ import { BoneMappingResult } from '../utils/mixamoRetargeter';
 import { inspectVmd } from '../utils/vmdLoader';
 import { AvatarLearningService, AvatarPreference } from '../services/AvatarLearningService';
 import { gestureRegistry, GestureDefinition } from '../utils/gestureRegistry';
+import { idleOverrideRegistry, IDLE_SLOT_DEFINITIONS, IdleSlotDefinition, IdleSlotId } from '../utils/idleOverrideRegistry';
 import { getClothingManager, ClothingItem, ClothingCategory } from '../utils/clothingManager';
 
 const CLOTHING_CATEGORIES: { id: string; label: string; icon: string; category?: ClothingCategory }[] = [
@@ -47,6 +48,7 @@ const GESTURE_CATEGORIES = [
 /** Tipo para categorías personalizadas guardadas en localStorage */
 interface CustomCategory { id: string; label: string; icon: string; }
 const CUSTOM_CATS_KEY = 'nova_custom_anim_categories';
+const CUSTOM_GESTURE_CATS_KEY = 'nova_custom_gesture_categories';
 
 // --- Error Boundary local para evitar crasheos del motor 3D ---
 class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback: React.ReactNode}, {hasError: boolean}> {
@@ -135,6 +137,80 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const [gestureSearch, setGestureSearch] = useState<string>('');
   const [gestureOverrides, setGestureOverrides] = useState<Map<string, string>>(new Map());
   const [assigningGesture, setAssigningGesture] = useState<GestureDefinition | null>(null);
+
+  // Categorías personalizadas de gestos
+  const [customGestureCategories, setCustomGestureCategories] = useState<CustomCategory[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_GESTURE_CATS_KEY) || '[]'); } catch { return []; }
+  });
+  const [showNewGestureCatForm, setShowNewGestureCatForm] = useState(false);
+  const [newGestureCatLabel, setNewGestureCatLabel] = useState('');
+  const [newGestureCatIcon, setNewGestureCatIcon] = useState('✨');
+
+  const saveCustomGestureCategories = (cats: CustomCategory[]) => {
+    setCustomGestureCategories(cats);
+    try { localStorage.setItem(CUSTOM_GESTURE_CATS_KEY, JSON.stringify(cats)); } catch {}
+  };
+
+  const handleAddCustomGestureCategory = () => {
+    const label = newGestureCatLabel.trim();
+    if (!label) return;
+    const id = 'gcat_' + label.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    if (customGestureCategories.some(c => c.id === id) || GESTURE_CATEGORIES.some(c => c.id === id)) return;
+    saveCustomGestureCategories([...customGestureCategories, { id, label, icon: newGestureCatIcon }]);
+    setNewGestureCatLabel('');
+    setNewGestureCatIcon('✨');
+    setShowNewGestureCatForm(false);
+  };
+
+  const handleDeleteCustomGestureCategory = (id: string) => {
+    saveCustomGestureCategories(customGestureCategories.filter(c => c.id !== id));
+    if (gestureCategoryFilter === id) setGestureCategoryFilter('all');
+  };
+
+  // Modal para Crear Nuevo Gesto en Catálogo
+  const [showCreateGestureModal, setShowCreateGestureModal] = useState(false);
+  const [newGestureName, setNewGestureName] = useState('');
+  const [newGestureId, setNewGestureId] = useState('');
+  const [newGestureIcon, setNewGestureIcon] = useState('✨');
+  const [newGestureCategory, setNewGestureCategory] = useState<string>('greeting');
+  const [newGestureAliases, setNewGestureAliases] = useState('');
+  const [newGestureDuration, setNewGestureDuration] = useState('3.0');
+  const [newGestureAssignAnim, setNewGestureAssignAnim] = useState<string>('');
+
+  const handleCreateUserGesture = () => {
+    const name = newGestureName.trim();
+    if (!name) return;
+    const id = (newGestureId.trim() || name).toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    const aliases = newGestureAliases
+      .split(',')
+      .map(a => a.trim().toLowerCase())
+      .filter(Boolean);
+
+    gestureRegistry.addUserGesture({
+      id,
+      name,
+      category: newGestureCategory as any,
+      description: `Gesto personalizado creado por el usuario: ${name}`,
+      aliases,
+      defaultDuration: parseFloat(newGestureDuration) || 3.0,
+      icon: newGestureIcon || '✨'
+    }, newGestureAssignAnim || undefined);
+
+    // Limpiar y cerrar
+    setNewGestureName('');
+    setNewGestureId('');
+    setNewGestureIcon('✨');
+    setNewGestureAliases('');
+    setNewGestureDuration('3.0');
+    setNewGestureAssignAnim('');
+    setShowCreateGestureModal(false);
+    setUploadStatus(`✅ Gesto "${name}" creado exitosamente`);
+    setTimeout(() => setUploadStatus(''), 3000);
+  };
+
+  // Estados para Poses Idle / Habla (overrides)
+  const [idleOverrides, setIdleOverrides] = useState<Record<string, string>>({});
+  const [assigningIdleSlot, setAssigningIdleSlot] = useState<IdleSlotDefinition | null>(null);
 
   // Estados para Animaciones (Búsqueda y Categorización para solucionar nombres chinos)
   const [animCategoryFilter, setAnimCategoryFilter] = useState<string>('all');
@@ -362,15 +438,20 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   useEffect(() => {
     const updateOverrides = () => {
       setGestureOverrides(gestureRegistry.getAllOverrides());
+      setIdleOverrides(idleOverrideRegistry.getAllOverrides());
     };
     updateOverrides();
     window.addEventListener('nova-gestures-updated', updateOverrides);
+    window.addEventListener('nova-idle-overrides-updated', updateOverrides);
+    const unsubIdle = idleOverrideRegistry.subscribe(updateOverrides);
     const unsub = animationStore.subscribe(() => {
       setStoredAnims(animationStore.getAll());
       updateOverrides();
     });
     return () => {
       window.removeEventListener('nova-gestures-updated', updateOverrides);
+      window.removeEventListener('nova-idle-overrides-updated', updateOverrides);
+      unsubIdle();
       unsub();
     };
   }, []);
@@ -576,8 +657,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     if (!files?.length) return;
     const file = files[0];
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (ext !== 'glb' && ext !== 'vrm' && ext !== 'pmx' && ext !== 'pmd' && ext !== 'zip') {
-      setUploadStatus(`❌ Usa .glb, .vrm, .pmx o paquete .zip`);
+    const isArchive = ['zip', 'rar', '7z', 'tar'].includes(ext || '') ||
+      file.name.toLowerCase().endsWith('.tar.gz') || file.name.toLowerCase().endsWith('.tar.bz2');
+    if (ext !== 'glb' && ext !== 'vrm' && ext !== 'pmx' && ext !== 'pmd' && !isArchive) {
+      setUploadStatus(`❌ Usa .glb, .vrm, .pmx, o paquete comprimido (.zip .rar .7z .tar.gz)`);
       return;
     }
     setUploadStatus(`⏳ Guardando modelo ${file.name}...`);
@@ -778,9 +861,9 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 isDragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 hover:border-violet-500/30'
               }`}>
               <span className="material-symbols-outlined text-2xl text-slate-600 mb-1 block">deployed_code</span>
-              <p className="text-[10px] text-slate-400">Arrastra modelo .glb / .vrm / .pmx / .zip</p>
+              <p className="text-[10px] text-slate-400">Arrastra modelo .glb / .vrm / .pmx / .zip / .rar / .7z</p>
               <p className="text-[8px] text-slate-500 mt-0.5">Se guarda automáticamente en tu navegador</p>
-              <input ref={modelInputRef} type="file" accept=".glb,.vrm,.pmx,.pmd,.zip" className="hidden"
+              <input ref={modelInputRef} type="file" accept=".glb,.vrm,.pmx,.pmd,.zip,.rar,.7z,.tar,.tar.gz,.tar.bz2" className="hidden"
                 onChange={(e) => handleModelUpload(e.target.files)} />
             </div>
 
@@ -1090,20 +1173,128 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
           {/* ═══ TAB: GESTOS ═══ */}
           {activeTab === 'gestures' && (<>
-            <div className="flex flex-col gap-2.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Catálogo de Gestos</label>
-                  <p className="text-[9px] text-slate-500">Reemplaza gestos procedurales por animaciones cargadas</p>
+            <div className="flex flex-col gap-3">
+
+              {/* ── SECCIÓN: POSES IDLE & GESTOS DE HABLA PERSONALIZABLES ── */}
+              <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-violet-300 uppercase tracking-wider block flex items-center gap-1">
+                      <span>🎭</span> Poses Idle & Gestos de Habla
+                    </label>
+                    <p className="text-[8px] text-slate-500">Reemplaza las poses base de reposo y de habla con animaciones de tu biblioteca</p>
+                  </div>
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-violet-950/70 text-violet-300 border border-violet-500/30">
+                    {Object.keys(idleOverrides).length} / {IDLE_SLOT_DEFINITIONS.length} personalizados
+                  </span>
                 </div>
-                <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/30">
-                  {gestureOverrides.size} con VMD / Pack
-                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {IDLE_SLOT_DEFINITIONS.map(slot => {
+                    const overrideAnim = idleOverrides[slot.id];
+                    const assigned = overrideAnim ? animationStore.get(overrideAnim) : null;
+                    const isPlaying = activeAction === overrideAnim;
+
+                    return (
+                      <div
+                        key={slot.id}
+                        className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between ${
+                          overrideAnim
+                            ? 'bg-violet-950/20 border-violet-500/40 shadow-sm'
+                            : 'bg-black/20 border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">{slot.icon}</span>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-white">{slot.label}</span>
+                                <span className={`text-[7px] px-1 py-0.2 rounded font-semibold uppercase ${
+                                  slot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                                }`}>
+                                  {slot.group === 'idle' ? 'Reposo' : 'Habla'}
+                                </span>
+                              </div>
+                              <p className="text-[8px] text-slate-400 line-clamp-1">{slot.description}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {overrideAnim && (
+                          <div className="mt-2 py-1 px-2 rounded bg-violet-500/10 border border-violet-500/20 text-[8px] text-violet-300 flex items-center justify-between">
+                            <span className="truncate font-medium">🎬 {assigned?.name || overrideAnim}</span>
+                            <span className="text-[7px] text-violet-400 shrink-0 ml-1">Custom</span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-white/5">
+                          {overrideAnim ? (
+                            <>
+                              <button
+                                onClick={() => triggerAction(overrideAnim)}
+                                className={`flex-1 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 transition-all ${
+                                  isPlaying ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
+                                }`}
+                              >
+                                <span className="material-symbols-outlined text-[11px]">
+                                  {isPlaying ? 'pause' : 'play_arrow'}
+                                </span>
+                                {isPlaying ? 'Parar' : 'Probar'}
+                              </button>
+                              <button
+                                onClick={() => setAssigningIdleSlot(slot)}
+                                className="px-2 py-1 rounded text-[9px] font-medium bg-violet-500/20 hover:bg-violet-500/30 text-violet-200 border border-violet-500/40"
+                              >
+                                Cambiar
+                              </button>
+                              <button
+                                onClick={() => idleOverrideRegistry.removeOverride(slot.id)}
+                                className="p-1 rounded text-slate-400 hover:text-red-300 hover:bg-red-500/10"
+                                title="Restaurar a procedural"
+                              >
+                                <span className="material-symbols-outlined text-[12px]">restart_alt</span>
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setAssigningIdleSlot(slot)}
+                              className="w-full py-1 rounded text-[9px] font-semibold bg-white/5 hover:bg-violet-600/30 text-slate-300 hover:text-white border border-white/5 hover:border-violet-500/40 transition-all flex items-center justify-center gap-1"
+                            >
+                              <span className="material-symbols-outlined text-[11px]">add_circle</span>
+                              Reemplazar por Animación
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Filtro de Categorías de Gestos */}
+              {/* ── SECCIÓN: CATÁLOGO DE GESTOS ACCIONABLES ── */}
+              <div className="flex items-center justify-between mt-1">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Catálogo de Gestos</label>
+                  <p className="text-[9px] text-slate-500">Reemplaza gestos procedurales o crea nuevos para Nova</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setShowCreateGestureModal(true)}
+                    className="px-2.5 py-1 rounded-lg text-[9px] font-bold bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white shadow flex items-center gap-1 transition-all cursor-pointer"
+                  >
+                    <span>＋</span>
+                    <span>Nuevo Gesto</span>
+                  </button>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/30">
+                    {gestureOverrides.size} con VMD / Pack
+                  </span>
+                </div>
+              </div>
+
+              {/* Filtro de Categorías de Gestos (Base + Personalizadas) */}
               <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-none">
-                {GESTURE_CATEGORIES.map(cat => (
+                {[...GESTURE_CATEGORIES, ...customGestureCategories].map(cat => (
                   <button
                     key={cat.id}
                     onClick={() => setGestureCategoryFilter(cat.id)}
@@ -1115,9 +1306,56 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   >
                     <span>{cat.icon}</span>
                     <span>{cat.label}</span>
+                    {/* Botón eliminar para categorías personalizadas */}
+                    {cat.id.startsWith('gcat_') && (
+                      <span
+                        role="button"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteCustomGestureCategory(cat.id); }}
+                        className="ml-0.5 text-[9px] text-red-400 hover:text-red-300"
+                        title="Eliminar categoría"
+                      >✕</span>
+                    )}
                   </button>
                 ))}
+                {/* Botón para añadir nueva categoría de gestos */}
+                <button
+                  onClick={() => setShowNewGestureCatForm(v => !v)}
+                  className="px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap bg-emerald-900/40 text-emerald-300 hover:bg-emerald-900/60 border border-emerald-500/30 flex items-center gap-1 transition-all"
+                  title="Crear categoría de gestos personalizada"
+                >
+                  <span>＋</span><span>Nueva Cat.</span>
+                </button>
               </div>
+
+              {/* Formulario inline para nueva categoría de gestos */}
+              {showNewGestureCatForm && (
+                <div className="flex items-center gap-1.5 p-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30">
+                  <input
+                    type="text"
+                    value={newGestureCatIcon}
+                    onChange={e => setNewGestureCatIcon(e.target.value)}
+                    maxLength={2}
+                    className="w-9 text-center bg-black/30 border border-white/10 rounded px-1 py-1 text-sm outline-none focus:border-emerald-400"
+                    placeholder="✨"
+                  />
+                  <input
+                    type="text"
+                    value={newGestureCatLabel}
+                    onChange={e => setNewGestureCatLabel(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAddCustomGestureCategory()}
+                    placeholder="Nombre de categoría para gestos..."
+                    className="flex-1 bg-black/30 border border-white/10 rounded px-2 py-1 text-[10px] text-white placeholder:text-slate-600 outline-none focus:border-emerald-400"
+                  />
+                  <button
+                    onClick={handleAddCustomGestureCategory}
+                    className="px-2 py-1 rounded text-[9px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                  >Crear</button>
+                  <button
+                    onClick={() => setShowNewGestureCatForm(false)}
+                    className="text-slate-400 hover:text-white text-xs px-1"
+                  >✕</button>
+                </div>
+              )}
 
               {/* Buscador de Gestos */}
               <div className="relative">
@@ -1153,6 +1391,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     const overrideName = gestureOverrides.get(g.id);
                     const assignedAnim = overrideName ? animationStore.get(overrideName) : null;
                     const isPlaying = activeAction === g.id || (overrideName && activeAction === overrideName);
+                    const isUserCreated = gestureRegistry.isUserGesture(g.id);
 
                     return (
                       <div
@@ -1162,7 +1401,9 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
                             : overrideName
                               ? 'bg-white/[0.04] border-cyan-500/30 hover:border-cyan-500/50'
-                              : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
+                              : isUserCreated
+                                ? 'bg-violet-950/20 border-violet-500/30 hover:border-violet-500/50'
+                                : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
                         }`}
                       >
                         <div>
@@ -1179,6 +1420,20 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 </span>
                               </div>
                             </div>
+                            {/* Botón para borrar si fue creado por el usuario */}
+                            {isUserCreated && (
+                              <button
+                                onClick={() => {
+                                  gestureRegistry.removeUserGesture(g.id);
+                                  setUploadStatus(`🗑️ Gesto "${g.name}" eliminado`);
+                                  setTimeout(() => setUploadStatus(''), 2500);
+                                }}
+                                className="text-slate-500 hover:text-red-400 p-0.5 rounded transition-colors"
+                                title="Eliminar gesto personalizado"
+                              >
+                                <span className="material-symbols-outlined text-xs">delete</span>
+                              </button>
+                            )}
                           </div>
 
                           {/* Insignia de Estado */}
@@ -1199,8 +1454,12 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 )}
                               </div>
                             ) : (
-                              <span className="text-[8px] font-medium text-violet-300 bg-violet-950/60 border border-violet-500/30 px-1.5 py-0.5 rounded inline-block">
-                                ⚡ Procedural
+                              <span className={`text-[8px] font-medium px-1.5 py-0.5 rounded inline-block ${
+                                isUserCreated
+                                  ? 'text-cyan-300 bg-cyan-950/60 border border-cyan-500/30'
+                                  : 'text-violet-300 bg-violet-950/60 border border-violet-500/30'
+                              }`}>
+                                {isUserCreated ? '✨ Creado por Usuario' : '⚡ Procedural'}
                               </span>
                             )}
                           </div>
@@ -2537,6 +2796,302 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white transition-colors cursor-pointer"
               >
                 Cerrar
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SELECCIONAR ANIMACIÓN PARA SLOT IDLE / HABLA */}
+      {assigningIdleSlot && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#12121f] border border-violet-500/30 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">{assigningIdleSlot.icon}</span>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    Vincular: <span className="text-violet-400">{assigningIdleSlot.label}</span>
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                      assigningIdleSlot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {assigningIdleSlot.group === 'idle' ? 'Pose de Reposo' : 'Gesto de Habla'}
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Elige la animación que sustituirá a este estado {assigningIdleSlot.group === 'idle' ? 'cuando el avatar esté en reposo' : 'mientras hable'}.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAssigningIdleSlot(null)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center text-sm transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Controls: Search */}
+            <div className="p-3 border-b border-white/5 bg-black/20">
+              <input
+                type="text"
+                value={animSearch}
+                onChange={(e) => setAnimSearch(e.target.value)}
+                placeholder="🔍 Buscar animación por nombre..."
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-white placeholder:text-slate-500 outline-none focus:border-violet-400"
+              />
+            </div>
+
+            {/* Modal Body: Lista de Animaciones */}
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[55vh]">
+              {storedAnims.length === 0 ? (
+                <div className="text-center py-10 px-4">
+                  <span className="material-symbols-outlined text-4xl text-slate-600 mb-2 block">folder_open</span>
+                  <p className="text-xs font-bold text-slate-300">No hay animaciones cargadas</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Carga animaciones en la pestaña "Anims" primero.</p>
+                </div>
+              ) : (
+                storedAnims
+                  .filter(anim => {
+                    if (animSearch) {
+                      const q = animSearch.toLowerCase();
+                      return anim.name.toLowerCase().includes(q) || (anim.displayName && anim.displayName.toLowerCase().includes(q));
+                    }
+                    return true;
+                  })
+                  .map(anim => {
+                    const isCurrentOverride = idleOverrides[assigningIdleSlot.id] === anim.name;
+                    const isPreviewing = activeAction === anim.name;
+
+                    return (
+                      <div
+                        key={anim.name}
+                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
+                          isCurrentOverride
+                            ? 'bg-violet-950/40 border-violet-500/60 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
+                            : 'bg-white/[0.02] border-white/5 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm">🎬</span>
+                            <span className="text-xs font-bold text-white truncate block">
+                              {anim.displayName || anim.name}
+                            </span>
+                            {isCurrentOverride && (
+                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-500 text-white shrink-0 uppercase">
+                                Actual
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[8px] text-slate-500 block font-mono mt-0.5">
+                            .{anim.type} {anim.hasFacial ? '• 🎭 Facial' : ''} {anim.audioFileName ? '• 🎵 Audio' : ''}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => triggerAction(anim.name)}
+                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
+                              isPreviewing ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
+                            }`}
+                          >
+                            <span className="material-symbols-outlined text-[13px]">
+                              {isPreviewing ? 'pause' : 'play_arrow'}
+                            </span>
+                            {isPreviewing ? 'Parar' : 'Probar'}
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              idleOverrideRegistry.setOverride(assigningIdleSlot.id, anim.name);
+                              setAssigningIdleSlot(null);
+                              // Probar inmediatamente
+                              setTimeout(() => {
+                                triggerAction(anim.name);
+                              }, 100);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
+                              isCurrentOverride
+                                ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40'
+                                : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-md'
+                            }`}
+                          >
+                            <span className="material-symbols-outlined text-[13px]">check</span>
+                            {isCurrentOverride ? 'Asignada' : 'Seleccionar'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-between">
+              <span className="text-[10px] text-slate-500">{storedAnims.length} animaciones disponibles</span>
+              <button
+                onClick={() => setAssigningIdleSlot(null)}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CREAR NUEVO GESTO EN CATÁLOGO */}
+      {showCreateGestureModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#12121f] border border-cyan-500/30 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">✨</span>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Crear Nuevo Gesto</h3>
+                  <p className="text-[10px] text-slate-400">Añade un nuevo gesto al catálogo para Nova y el chat</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCreateGestureModal(false)}
+                className="text-slate-400 hover:text-white transition-colors"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
+              {/* Icono y Nombre */}
+              <div className="flex gap-2">
+                <div className="w-16">
+                  <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Emoji</label>
+                  <input
+                    type="text"
+                    value={newGestureIcon}
+                    onChange={e => setNewGestureIcon(e.target.value)}
+                    maxLength={3}
+                    className="w-full text-center bg-black/30 border border-white/10 rounded-lg py-1.5 text-base text-white outline-none focus:border-cyan-400"
+                    placeholder="✨"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Nombre del Gesto *</label>
+                  <input
+                    type="text"
+                    value={newGestureName}
+                    onChange={e => {
+                      setNewGestureName(e.target.value);
+                      if (!newGestureId) {
+                        setNewGestureId(e.target.value.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''));
+                      }
+                    }}
+                    placeholder="Ej: Saludo Militar, Guiño Coqueto..."
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-white placeholder:text-slate-500 outline-none focus:border-cyan-400"
+                  />
+                </div>
+              </div>
+
+              {/* ID Técnico (etiqueta [DO:ID]) */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">
+                  ID de Acción (etiqueta: <code className="text-cyan-300">[DO:{newGestureId.toUpperCase() || 'ACCION'}]</code>)
+                </label>
+                <input
+                  type="text"
+                  value={newGestureId}
+                  onChange={e => setNewGestureId(e.target.value.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''))}
+                  placeholder="ej: saludo_militar"
+                  className="w-full bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10px] font-mono text-cyan-300 placeholder:text-slate-600 outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* Categoría */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Categoría</label>
+                <select
+                  value={newGestureCategory}
+                  onChange={e => setNewGestureCategory(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10px] text-white outline-none focus:border-cyan-400 cursor-pointer"
+                >
+                  {GESTURE_CATEGORIES.filter(c => c.id !== 'all').map(c => (
+                    <option key={c.id} value={c.id}>{c.icon} {c.label}</option>
+                  ))}
+                  {customGestureCategories.map(c => (
+                    <option key={c.id} value={c.id}>{c.icon} {c.label} (Personalizada)</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Aliases de voz / texto */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">
+                  Palabras clave / Aliases (separados por coma)
+                </label>
+                <input
+                  type="text"
+                  value={newGestureAliases}
+                  onChange={e => setNewGestureAliases(e.target.value)}
+                  placeholder="ej: firmes, militar, soldado, saludo respetuoso"
+                  className="w-full bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10px] text-white placeholder:text-slate-500 outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* Duración en segundos */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Duración predeterminada (segundos)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="1"
+                  max="30"
+                  value={newGestureDuration}
+                  onChange={e => setNewGestureDuration(e.target.value)}
+                  className="w-full bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10px] text-white outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* Asignar de inmediato una animación existente */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">
+                  Asignar animación de biblioteca de inmediato (opcional)
+                </label>
+                <select
+                  value={newGestureAssignAnim}
+                  onChange={e => setNewGestureAssignAnim(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10px] text-slate-200 outline-none focus:border-cyan-400 cursor-pointer"
+                >
+                  <option value="">Ninguna (usar motor procedural)</option>
+                  {storedAnims.map(a => (
+                    <option key={a.name} value={a.name}>
+                      🎬 {a.displayName || a.name} (.{a.type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowCreateGestureModal(false)}
+                className="px-3 py-1.5 rounded-lg text-[10px] font-semibold bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateUserGesture}
+                disabled={!newGestureName.trim()}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-bold bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 disabled:opacity-40 text-white shadow-md transition-all cursor-pointer"
+              >
+                Crear Gesto
               </button>
             </div>
 
