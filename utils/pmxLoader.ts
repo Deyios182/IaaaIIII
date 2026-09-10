@@ -1013,10 +1013,13 @@ function loadMeshWithMMDLoader(
                     }
                   }
                 } else if (isHairMat) {
-                  // Pelo MMD → CUTOUT: elimina artefactos de Z-sorting (ver a través del pelo)
+                  // Pelo MMD → CUTOUT obligatorio: transparent=false + alphaTest=0.2 + depthWrite=true
+                  // Elimina completamente los artefactos de Z-sorting (ver el cráneo o ropa a través del pelo)
                   m.transparent = false;
-                  m.alphaTest = 0.15;
+                  m.opacity = 1.0;
+                  m.alphaTest = 0.2;
                   m.depthWrite = true;
+                  m.depthTest = true;
                 } else if (isFacialOverlay) {
                   // Ya configurado arriba (transparent=true, depthWrite=false)
                 } else if (isSkinOrFace) {
@@ -1026,26 +1029,19 @@ function loadMeshWithMMDLoader(
                   m.depthWrite = true;
                   m.depthTest = true;
                   m.alphaTest = 0;
-                } else if (m.transparent) {
-                  const isDeliberateSheer = /veil|lace|glass|lens|crystal|sheer|trans|纱|透|レース|ベール/i.test(mName) || (m.opacity !== undefined && m.opacity < 0.65);
-                  if (isDeliberateSheer) {
-                    // Solo telas explícitamente transparentes (velos, encajes finos)
-                    m.transparent = true;
-                    m.alphaTest = 0.05;
-                    m.depthWrite = false;
-                  } else {
-                    // Todas las demás partes con transparencia (faldas, bordes de mangas, adornos, lazos):
-                    // FORZAR CUTOUT: transparent=false + alphaTest + depthWrite=true
-                    // Esto erradica el fallo clásico de ver a través de la ropa, el cuerpo o el fondo.
-                    m.transparent = false;
-                    m.opacity = 1.0;
-                    m.depthWrite = true;
-                    m.alphaTest = 0.2;
-                  }
                 } else {
+                  // Ropa, vestidos, mangas, faldas, lazos, velos y accesorios:
+                  // Los modelos PMX frecuentemente tienen flags de transparencia o valores de opacidad < 1.0
+                  // por descuido del autor o para técnicas de sombreado MMD que en WebGL Three.js rompen
+                  // el Z-buffer y provocan que se vean transparentes o desteñidos.
+                  // Forzamos CUTOUT sólido en TODOS: transparent=false, opacity=1.0, depthWrite=true.
+                  // Si tienen textura con canal alfa (bordes recortados), alphaTest se encarga de recortar
+                  // limpiamente sin volverse semitransparente.
                   m.transparent = false;
                   m.opacity = 1.0;
                   m.depthWrite = true;
+                  m.depthTest = true;
+                  m.alphaTest = m.map ? 0.2 : 0;
                 }
 
                 // 8. Buscar si hay mapa emisivo genuino (como T_HDMF_EM.png)

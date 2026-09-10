@@ -2338,14 +2338,25 @@ function AvatarModelInner({
 
                     if (isPMX) {
                         // Los materiales PMX ya fueron calibrados con precisión y orden de renderizado en pmxLoader.ts
-                        // Solo asegurar shadowSide sin mutar colores, emissive ni opacidades
+                        // Reforzamos shadowSide y nos aseguramos de que no quede ninguna transparencia residual (excepto sub-malla de overlays)
                         if (child.material) {
                             const mats = Array.isArray(child.material) ? child.material : [child.material];
+                            const isOverlaySubmesh = child.name.includes('FacialOverlays');
                             mats.forEach((m: any) => {
                                 if (m) {
                                     m.shadowSide = THREE.FrontSide;
                                     if (m.emissive && (/eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼/i.test(m.name || ''))) {
                                         m.emissive.setRGB(0, 0, 0);
+                                    }
+                                    if (!isOverlaySubmesh) {
+                                        // Ropa, pelo, cuerpo y ojos: sólidos con depthWrite activado
+                                        m.transparent = false;
+                                        m.opacity = 1.0;
+                                        m.depthWrite = true;
+                                        m.depthTest = true;
+                                        if (m.alphaTest === undefined || m.alphaTest < 0.1) {
+                                            m.alphaTest = m.map ? 0.2 : 0;
+                                        }
                                     }
                                 }
                             });
