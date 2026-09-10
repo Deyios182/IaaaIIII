@@ -538,12 +538,7 @@ export function retargetMixamoClip(
 
   const mapped = results.filter(r => r.targetBone).length;
   const total = results.filter(r => r.priority >= 5).length;
-  console.log(`🔄 Bone mapping: ${mapped}/${total} huesos principales mapeados`);
-
-  results.filter(r => r.priority >= 7).forEach(r => {
-    const icon = r.targetBone ? '✅' : '❌';
-    console.log(`  ${icon} ${r.mixamoBone} → ${r.targetBone || 'SIN MATCH'}`);
-  });
+  // Bone mapping summary (silenciado - usar window.__lastBoneMapping para debug)
 
   (window as any).__lastBoneMapping = results;
   (window as any).__lastBoneMappingMap = Object.fromEntries(mapping);
@@ -592,14 +587,7 @@ export function retargetMixamoClip(
     });
   }
 
-  // Log qué bones se mapearon para Rigify (diagnóstico)
-  if (isRigify) {
-    const rigifyLog: string[] = [];
-    mapping.forEach((targetBone, srcBone) => {
-      rigifyLog.push(`  ${srcBone} → ${targetBone}`);
-    });
-    console.log(`🦴 Rigify mapping (${rigifyLog.length} bones):\n` + rigifyLog.join('\n'));
-  }
+  // Log Rigify silenciado - usar window.__lastBoneMapping para debug
 
   // === VRM arm correction (A-Pose 45°) ===
   const offsetRad = posePreset === 'vrm' ? 45 * (Math.PI / 180) : 0;
@@ -698,7 +686,7 @@ export function retargetMixamoClip(
     })
     .filter((track): track is THREE.KeyframeTrack => track !== null);
 
-  console.log(`🎬 Retarget: ${keptRotations} rotaciones (${correctedRotations} corregidas), ${keptPosition} posiciones`);
+  // Retarget summary silenciado (demasiado verbose por cada animación)
   return retargeted;
 }
 

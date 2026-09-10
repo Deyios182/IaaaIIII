@@ -13,6 +13,8 @@ export interface WakeWordConfig {
     onActivate?: () => void;
     onDeactivate?: () => void;
     onVoiceDetected?: (volume: number) => void;
+    onTranscript?: (text: string) => void;        // Resultado final Vosk (frase completa)
+    onPartialTranscript?: (text: string) => void; // Resultado parcial Vosk (tiempo real)
     enabled?: boolean;
 }
 
@@ -45,15 +47,15 @@ const getOrLoadVoskModel = () => {
 
 export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): WakeWordReturn => {
     const config: WakeWordConfig = typeof configOrCb === 'function' ? { onActivate: configOrCb } : configOrCb;
-    const { onActivate, onDeactivate, enabled = true } = config;
+    const { onActivate, onDeactivate, onTranscript, onPartialTranscript, enabled = true } = config;
 
     const [isListening, setIsListening] = useState(false);
     const [lastDetectedPhrase, setLastDetectedPhrase] = useState('');
 
-    const callbackRef = useRef({ onActivate, onDeactivate });
+    const callbackRef = useRef({ onActivate, onDeactivate, onTranscript, onPartialTranscript });
     useEffect(() => {
-        callbackRef.current = { onActivate, onDeactivate };
-    }, [onActivate, onDeactivate]);
+        callbackRef.current = { onActivate, onDeactivate, onTranscript, onPartialTranscript };
+    }, [onActivate, onDeactivate, onTranscript, onPartialTranscript]);
 
     const isSupported = typeof window !== 'undefined' && !!(
         navigator.mediaDevices?.getUserMedia &&
@@ -91,7 +93,10 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                     const transcript = (message.result?.text || '').toLowerCase().trim();
                     if (!transcript) return;
                     setLastDetectedPhrase(transcript);
-                    console.log(`🎙️ ${getLogTimestamp()} [WakeWord Vosk] Transcripción: "${transcript}"`);
+                    console.log(`🎤 ${getLogTimestamp()} [WakeWord Vosk] Transcripción: "${transcript}"`);
+
+                    // Notificar transcript completo (para subtítulos durante llamada)
+                    callbackRef.current.onTranscript?.(transcript);
 
                     if (
                         transcript.includes('nova') ||
@@ -106,6 +111,11 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
 
                 recognizer.on('partialresult', (message: any) => {
                     const partial = (message.result?.partial || '').toLowerCase().trim();
+                    if (!partial) return;
+
+                    // Notificar parcial (para subtítulos en tiempo real)
+                    callbackRef.current.onPartialTranscript?.(partial);
+
                     if (partial.includes('nova') || partial.includes('despierta')) {
                         triggerActivate();
                     }

@@ -786,23 +786,23 @@ function createPhotorealisticSSSGradient(): THREE.DataTexture {
     let r: number, g: number, b: number;
 
     if (x < 0.45) {
-      // Sombra suave ambiental (base 140 a 195)
+      // Sombra ambiental rica y contrastada (evita aspecto lavado/grisáceo)
       const t = x / 0.45;
-      r = THREE.MathUtils.lerp(140, 195, t);
-      g = THREE.MathUtils.lerp(125, 175, t);
-      b = THREE.MathUtils.lerp(135, 180, t);
+      r = THREE.MathUtils.lerp(75, 140, t);
+      g = THREE.MathUtils.lerp(65, 120, t);
+      b = THREE.MathUtils.lerp(75, 125, t);
     } else if (x < 0.70) {
-      // Penumbra con SSS cálido (rubor de dispersión subcutánea)
+      // Penumbra con SSS cálido y saturado (rubor subcutáneo)
       const t = (x - 0.45) / 0.25;
-      r = THREE.MathUtils.lerp(195, 245, t);
-      g = THREE.MathUtils.lerp(175, 220, t);
-      b = THREE.MathUtils.lerp(180, 220, t);
+      r = THREE.MathUtils.lerp(140, 230, t);
+      g = THREE.MathUtils.lerp(120, 190, t);
+      b = THREE.MathUtils.lerp(125, 185, t);
     } else {
-      // Luz directa limpia y viva
+      // Luz directa limpia con brillo total pero manteniendo saturación
       const t = (x - 0.70) / 0.30;
-      r = THREE.MathUtils.lerp(245, 255, t);
-      g = THREE.MathUtils.lerp(220, 255, t);
-      b = THREE.MathUtils.lerp(220, 255, t);
+      r = THREE.MathUtils.lerp(230, 255, t);
+      g = THREE.MathUtils.lerp(190, 255, t);
+      b = THREE.MathUtils.lerp(185, 255, t);
     }
 
     const idx = i * 4;
@@ -932,7 +932,8 @@ function loadMeshWithMMDLoader(
                 }
 
                 // 3. MMDLoader asigna el color 'ambient' de MMD como 'emissive' en Three.js.
-                // Con las luces de Three.js, un emissive no nulo actúa como fluorescencia blanca y lava las texturas.
+                // Resetear emissive a 0 para que la textura original conserve su viveza, color y contraste natural
+                // sin verse fluorescente ni desteñida por sobreiluminación propia.
                 if (m.emissive) {
                   m.emissive.setRGB(0, 0, 0);
                 }
@@ -987,7 +988,7 @@ function loadMeshWithMMDLoader(
                 // 7. Configuración de transparencia y alphaTest limpia para MMD
                 const isHairMat = !isEyeMat && !isFacialOverlay && /hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛/i.test(mName);
                 if (isEyeMat) {
-                  // Ojos / Esclera / Córnea / Iris: SIEMPRE 100% sólidos, opacos y visibles
+                  // Ojos / Esclera / Córnea / Iris / Pupila: 100% sólidos, opacos y vivos
                   m.transparent = false;
                   m.opacity = 1.0;
                   m.depthWrite = true;
@@ -997,15 +998,19 @@ function loadMeshWithMMDLoader(
                   m.polygonOffsetFactor = -2.0;
                   m.polygonOffsetUnits = -2.0;
 
-                  // Si la esclera/ojo no tiene textura o vino oscuro, forzar blanco puro
-                  if (m.color) {
-                    if (!m.map || (m.color.r < 0.2 && m.color.g < 0.2 && m.color.b < 0.2 && !mName.includes('pupil') && !mName.includes('瞳'))) {
+                  // Desactivar emissive artificial en ojos/pupilas: el emissive blanco blanquea y deslava el iris
+                  if (m.emissive) {
+                    m.emissive.setRGB(0, 0, 0);
+                  }
+
+                  // Si tiene textura de ojo/pupila, mantener color base en blanco puro para no oscurecer ni distorsionar
+                  if (m.map && m.color) {
+                    m.color.setRGB(1.0, 1.0, 1.0);
+                  } else if (m.color) {
+                    // Esclera/blanco del ojo sin textura
+                    if (m.color.r < 0.2 && m.color.g < 0.2 && m.color.b < 0.2 && !mName.includes('pupil') && !mName.includes('瞳')) {
                       m.color.setRGB(1.0, 1.0, 1.0);
                     }
-                  }
-                  // Darle una suave luz ambiental propia (emissive tenue) para que jamás se vea una cuenca negra en sombras
-                  if (m.emissive) {
-                    m.emissive.setRGB(0.18, 0.18, 0.18);
                   }
                 } else if (isHairMat) {
                   // Pelo MMD → CUTOUT: elimina artefactos de Z-sorting (ver a través del pelo)

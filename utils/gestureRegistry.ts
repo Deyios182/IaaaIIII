@@ -744,7 +744,7 @@ export class GestureRegistry {
       });
     }
 
-    console.log(`✨ [GestureRegistry] Animación custom registrada: "${name}" ${customTag ? `(tag: ${customTag})` : ''}`);
+    // Silenciado: log individual por animación eliminado (demasiado verbose al inicio)
   }
 
   /**

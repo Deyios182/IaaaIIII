@@ -952,7 +952,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   };
 
   const { isListening: isWakeWordListening, isSupported: isWakeWordSupported, startListening: startWakeWord, stopListening: stopWakeWord } = useWakeWord({
-    enabled: !isInCall,
+    enabled: true, // Siempre activo — los callbacks de transcripción se usan también durante llamada
     onActivate: () => {
       if (!isInCallRef.current) {
         console.log('[WakeWord] 🟢 Activando llamada por comando de voz...');
@@ -967,6 +967,22 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       if (isInCallRef.current) {
         console.log('[WakeWord] 🔴 Cerrando llamada por comando de voz...');
         endCallRef.current();
+      }
+    },
+    // 🎤 Subtítulos en tiempo real: Vosk transcribe localmente mientras Gemini procesa en la nube
+    onTranscript: (text) => {
+      if (!isInCallRef.current) return;
+      // Actualizar subtítulo solo si el servidor aún no ha respondido con algo más largo
+      setLiveUserTranscript(prev => {
+        if (prev && !prev.endsWith('...') && prev.length >= text.length) return prev;
+        return text;
+      });
+    },
+    onPartialTranscript: (partial) => {
+      if (!isInCallRef.current) return;
+      // Texto parcial en tiempo real (aparece instantáneamente mientras el usuario habla)
+      if (partial.length > 2) {
+        setLiveUserTranscript(partial + '…');
       }
     },
     debug: false,
@@ -1119,7 +1135,8 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const latencyStatsRef = useRef<{ ttfa: number; cloudTime: number }>({ ttfa: 0, cloudTime: 0 });
   const greetingAttemptRef = useRef<number>(0); // Auto-retry si Gemini devuelve turnComplete vacío al inicio
   const emptyTurnCountRef = useRef<number>(0); // Contador de turnos vacíos consecutivos
-  const lastGreetMsgRef = useRef<string>(''); // Guarda el saludo actual para auto-retry
+  const lastGreetMsgRef = useRef<string>(''); // Guarda el saludo (contexto en system prompt)
+  const lastGreetPhraseRef = useRef<string>(''); // Solo la frase pura de saludo (sin meta-instrucciones)
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSpeakingRef = useRef<boolean>(false);
   const cadenceAnalyzerRef = useRef<VoiceCadenceAnalyzer>(new VoiceCadenceAnalyzer());
@@ -3428,6 +3445,7 @@ ${sessionLog}
 
       console.log('⚡ [ProceduralGreet] Saludo procedural generado:', proceduralGreeting);
       lastGreetMsgRef.current = imperativeGreetPrompt;
+      lastGreetPhraseRef.current = proceduralGreeting; // Guardar frase pura para enviar al conectar
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -3537,9 +3555,28 @@ ${sessionLog}
 
             // ⚡ TRIGGER TRAS SETUP EXITOSO:
             // El servidor envía setupComplete cuando la sesión está lista.
+            // Enviamos la frase de saludo limpia (sin meta-instrucciones) via sendRealtimeInput
+            // para evitar el "Internal error" 1011 que causaba el prompt imperativo.
             if ((msg as any).setupComplete) {
               console.log('⚡ [LiveSession] setupComplete recibido. Sesión lista y estabilizada.');
               canSendAudioRef.current = true;
+
+              // 🎤 DISPARAR SALUDO con frase pura (no el prompt imperativo completo)
+              const greetPhrase = lastGreetPhraseRef.current;
+              if (greetPhrase && liveSessionRef.current) {
+                setTimeout(() => {
+                  try {
+                    if (liveSessionRef.current && isLiveSessionOpen(liveSessionRef.current)) {
+                      // sendRealtimeInput es menos intrusivo que sendClientContent
+                      // y no causa conflicto con el system instruction
+                      // @ts-ignore
+                      liveSessionRef.current.sendRealtimeInput({ text: greetPhrase });
+                    }
+                  } catch (e) {
+                    console.warn('⚠️ [Greeting] Error enviando saludo inicial:', e);
+                  }
+                }, 600); // 600ms para que el servidor esté completamente estabilizado
+              }
             }
 
             // DETECTAR BLOQUEO/SCENSURA (Refusal)

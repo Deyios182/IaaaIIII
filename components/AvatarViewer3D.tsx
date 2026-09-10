@@ -286,7 +286,7 @@ function AvatarModelInner({
                 child.skeleton.update();
             }
         });
-        console.log(`🔄 [AvatarModelInner] Esqueleto reseteado 100% a la postura prístina original.`);
+        // Skeleton reset completo (log silenciado)
     }, []);
 
     // Generador de Ruido Orgánico (Perlin)
@@ -1048,17 +1048,16 @@ function AvatarModelInner({
                 }
             });
 
-            // 1.1 FIX UNIVERSAL DE TRANSPARENCIA Y CARAS NEGRAS (Aplica a TODOS los modelos: PMX, FBX, GLTF, VRM)
-            // Resuelve:
-            // a) "Se ve transparente / a través": mallas de pelo o mallas opacas que Three.js marca con transparent=true
-            //    provocando fallos de Z-sorting. Se forza CUTOUT (alphaTest > 0, transparent=false, depthWrite=true).
-            // b) "Se ven negros por el otro lado": caras invertidas o de un solo lado (FrontSide) que quedan negras al rotar.
+            // 1.1 FIX UNIVERSAL DE TRANSPARENCIA Y CARAS NEGRAS (Aplica a FBX, GLTF, VRM; preserva PMX ya calibrados)
             modelRef.current.traverse((child: any) => {
                 if (child.isMesh && child.material) {
+                    // Si el modelo es PMX o el material ya fue calibrado en pmxLoader, omitir para no alterar sus tonos
+                    if (isPMX || child.name.includes('MMD_Mesh')) return;
+
                     const mName = (child.name || '').toLowerCase();
                     const mats = Array.isArray(child.material) ? child.material : [child.material];
                     mats.forEach((mat: any) => {
-                        if (!mat) return;
+                        if (!mat || mat.userData?.isCalibrated) return;
                         const matName = (mat.name || '').toLowerCase();
                         const isEye = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼|ハイライト|catchlight/i.test(matName) || /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼|ハイライト|catchlight/i.test(mName);
                         const isDecal = !isEye && ((/tattoo|紋|sticker/i.test(matName) || (!/eye|shirome|白目/i.test(matName) && /blush|shadow|decal|lashes|eyelash/i.test(matName))) || (/tattoo|紋|sticker/i.test(mName) || (!/eye|shirome|白目/i.test(mName) && /blush|shadow|decal|lashes|eyelash/i.test(mName))));
@@ -1793,8 +1792,7 @@ function AvatarModelInner({
                 footR: rightFootRef.current
             });
             
-            console.error(`🚨 [LEG BINDING] Hips: ${hipsRef.current?.name}, L-Leg: ${leftLegRef.current?.name}, L-Knee: ${leftShineRef.current?.name}, L-Foot: ${leftFootRef.current?.name}`);
-            console.error(`🚨 [LEG BINDING] R-Leg: ${rightLegRef.current?.name}, R-Knee: ${rightShineRef.current?.name}, R-Foot: ${rightFootRef.current?.name}`);
+            // LEG BINDING log silenciado - huesos vinculados correctamente
 
             // === INICIALIZAR NUEVOS SISTEMAS AVANZADOS ===
 
@@ -2339,93 +2337,16 @@ function AvatarModelInner({
                     }
 
                     if (isPMX) {
+                        // Los materiales PMX ya fueron calibrados con precisión y orden de renderizado en pmxLoader.ts
+                        // Solo asegurar shadowSide sin mutar colores, emissive ni opacidades
                         if (child.material) {
                             const mats = Array.isArray(child.material) ? child.material : [child.material];
                             mats.forEach((m: any) => {
                                 if (m) {
-                                    const mName = (m.name || child.name || '').toLowerCase();
-
-                                    const isEye = /eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼/i.test(mName);
-                                    const isFacialOverlay = !isEye && /tear|gag|eyeline|highlight|catchlight|涙|ハイライト/i.test(mName);
-                                    const isSkinOrFace = !isEye && !isFacialOverlay && /skin|body|肌|体|颜|face|head|human|mouth|teeth|tongue|唇|歯|牙|舌|口/i.test(mName);
-                                    const isDecal = !isEye && !isFacialOverlay && (/tattoo|紋|sticker/i.test(mName) || (!/eye|shirome|白目/i.test(mName) && /blush|shadow|decal/i.test(mName)));
-                                    const isClothing = /swim|dress|skirt|cloth|clothes|clothing|outfit|suit|pants|shorts|socks|stocking|bottom|top|corset|underwear|bra|panty|panties|lingerie|bikini|服|衣服|上衣|外套|衣装|スカート|裾|ドレス|ワンピース|ワンピ|コルセット|パンツ|ブラ|内衣|文胸|胸罩|内裤|胖次|安全裤|泳装|泳衣|比基尼|裙|褲襪|膝襪/i.test(mName);
-
-                                    // 1. Sombras: SIEMPRE FrontSide para que las caras invertidas NUNCA proyecten sombras negras sobre el cuerpo (shadow acne)
                                     m.shadowSide = THREE.FrontSide;
-
-                                    if (isDecal || isFacialOverlay) {
-                                        // Tatuajes / Calcomanías sobre la piel / Lágrimas / Expresiones / Delineado de ojos superpuesto:
-                                        m.side = THREE.FrontSide;
-                                        m.transparent = true;
-                                        m.depthWrite = false;
-                                        m.polygonOffset = true;
-                                        m.polygonOffsetFactor = -1.0;
-                                        m.polygonOffsetUnits = -1.0;
-                                        m.alphaTest = 0.05;
-                                    } else {
-                                        // Piel, ropa, accesorios, cabello: DoubleSide universal para que NUNCA se vean negros al rotar o por el interior
-                                        m.side = THREE.DoubleSide;
-                                        m.polygonOffset = false;
+                                    if (m.emissive && (/eye|pupil|iris|cornea|sclera|shirome|白目|瞳|目|眼/i.test(m.name || ''))) {
+                                        m.emissive.setRGB(0, 0, 0);
                                     }
-
-                                    const isHair = !isEye && !isFacialOverlay && /hair|bangs|tail|ponytail|kaminoke|strand|前发|后发|刘海|髪|发|毛/i.test(mName);
-                                    if (isEye) {
-                                        // Ojos / Córnea / Esclera: Siempre 100% opaco, escribe profundidad y orden prioritario
-                                        m.transparent = false;
-                                        m.opacity = 1.0;
-                                        m.depthWrite = true;
-                                        m.depthTest = true;
-                                        m.alphaTest = 0;
-                                        m.polygonOffset = true;
-                                        m.polygonOffsetFactor = -2.0;
-                                        m.polygonOffsetUnits = -2.0;
-                                        m.side = THREE.DoubleSide;
-
-                                        // Si el material del ojo no tiene textura o vino negro, forzar blanco puro
-                                        if (m.color) {
-                                            if (!m.map || (m.color.r < 0.2 && m.color.g < 0.2 && m.color.b < 0.2 && !mName.includes('pupil') && !mName.includes('瞳'))) {
-                                                m.color.setRGB(1.0, 1.0, 1.0);
-                                            }
-                                        }
-                                        if (m.emissive) {
-                                            m.emissive.setRGB(0.2, 0.2, 0.2);
-                                        }
-                                    } else if (isHair) {
-                                        // Pelo: modo CUTOUT limpio. transparent=false con alphaTest evita que se vuelva transparente o se vea el cráneo
-                                        m.transparent = false;
-                                        m.depthWrite = true;
-                                        m.alphaTest = 0.2;
-                                    } else if (isFacialOverlay) {
-                                        // Ya configurado arriba (transparent=true, depthWrite=false)
-                                    } else if (isSkinOrFace) {
-                                        // Piel, rostro, cabeza y ojos integrados: SIEMPRE 100% sólidos, opacos y escriben profundidad
-                                        m.transparent = false;
-                                        m.opacity = 1.0;
-                                        m.depthWrite = true;
-                                        m.depthTest = true;
-                                        m.alphaTest = 0;
-                                    } else if (!isDecal) {
-                                        // Ropa / Accesorios: Por defecto sólidos y opacos para evitar que se transparenten
-                                        // Si la textura tiene zonas transparentes (cutout), usar alphaTest=0.2 con transparent=false
-                                        if (m.opacity !== undefined && m.opacity < 0.85) {
-                                            // Solo si es deliberadamente semitransparente (velo, tela transparente)
-                                            m.transparent = true;
-                                            m.depthWrite = false;
-                                            m.alphaTest = 0.05;
-                                        } else {
-                                            m.transparent = false;
-                                            m.opacity = 1.0;
-                                            m.depthWrite = true;
-                                            m.alphaTest = m.map ? 0.15 : 0;
-                                        }
-                                    } else {
-                                        m.transparent = false;
-                                        m.opacity = 1.0;
-                                        m.depthWrite = true;
-                                    }
-
-                                    m.needsUpdate = true;
                                 }
                             });
                         }
@@ -2628,7 +2549,7 @@ function AvatarModelInner({
                             sourceRestPoses!.set(child.name, child.quaternion.clone());
                         }
                     });
-                    console.log(`📦 FBX: ${animations.length} anims, ${sourceRestPoses.size} huesos rest-pose`);
+                    // FBX cargado (log silenciado)
                 } else if (type === 'vmd') {
                     // Carga diferida de VMD abajo tras obtener las targetRestPoses
                 } else {
@@ -2685,7 +2606,7 @@ function AvatarModelInner({
                     const targetRestPoses = pristineRestPosesRef.current;
                     const targetRestPositions = pristineRestPositionsRef.current;
                     const targetWorldRestPoses = pristineWorldRestPosesRef.current;
-                    console.log(`🦴 Target: ${boneNames.size} huesos, ${targetRestPoses.size} rest-poses prístinas`);
+                    // Target rest-poses silenciadas (log eliminado)
 
                     if (type === 'vmd') {
                         console.log(`🌸 Cargando y retargeteando movimiento VMD: ${name}`);
@@ -2802,7 +2723,7 @@ function AvatarModelInner({
                             // Mixamo/FK: NO usar IK Solver → evita piernas rígidas en animaciones de baile
                             hasIKTracksRef.current = false;
                             legIkControllerRef.current?.setIkData(null);
-                            console.log(`🎯 Retargeteando con corrección rest-pose (${isMixamoAnimation(clip) ? 'Mixamo' : 'FK genérico'})...`);
+                            // Retargeteo iniciado
                             
                             const retargeted = retargetMixamoClip(
                                 clip, boneNames, modelRef.current!,
@@ -5686,33 +5607,56 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                 )}
 
                 {/* ILUMINACIÓN DINÁMICA: Calibrada para sombreado PBR realista con reflejos y sombras suaves */}
-                <ambientLight
-                    intensity={(() => {
-                        const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
-                        const isGLTFModel = raw.includes('.glb') || raw.includes('.gltf') || raw.includes('.vrm');
-                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
-                        return isPMXModel ? Math.min(modeLights.ambientIntensity * 0.85, 0.95) : modeLights.ambientIntensity;
-                    })()}
-                    color={modeLights.ambientColor}
-                />
-                <directionalLight
-                    position={[2, 5, 5]}
-                    intensity={(() => {
-                        const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
-                        const isGLTFModel = raw.includes('.glb') || raw.includes('.gltf') || raw.includes('.vrm');
-                        const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
-                        return isPMXModel ? Math.min(modeLights.dirLightIntensity * 0.95, 1.05) : modeLights.dirLightIntensity;
-                    })()}
-                    color={modeLights.dirLightColor}
-                    castShadow
-                />
-                {/* Fill light adaptada al modo */}
-                <pointLight position={[-1.5, 1.5, 3]} intensity={modeLights.pointLightIntensity * 0.7} color={modeLights.pointLightColor} />
-                {/* Luz Rim de realce trasero */}
-                <pointLight position={[0, 2.5, -2]} intensity={0.4} color={modeLights.rimLightColor} />
+                {(() => {
+                    const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
+                    const isGLTFModel = raw.includes('.glb') || raw.includes('.gltf') || raw.includes('.vrm');
+                    const isPMXModel = !isGLTFModel && (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
+
+                    if (isPMXModel) {
+                        // ── ILUMINACIÓN PMX/MMD ──────────────────────────────────────────────────────
+                        // Luces equilibradas para evitar lavar las texturas ni crear sobreexposición (washed out).
+                        return (
+                            <>
+                                <ambientLight intensity={0.95} color="#ffffff" />
+                                <directionalLight
+                                    position={[2, 4, 4]}
+                                    intensity={0.85}
+                                    color="#fffaf0"
+                                    castShadow
+                                />
+                                {/* Fill frontal suave para iluminar sombras sin blanquear */}
+                                <directionalLight position={[-1.5, 1.5, 3]} intensity={0.35} color="#fff0e6" />
+                                {/* Rim trasero sutil */}
+                                <pointLight position={[0, 2.5, -2]} intensity={0.3} color="#dbeafe" />
+                            </>
+                        );
+                    } else {
+                        // ── ILUMINACIÓN GLB/GLTF/VRM ─────────────────────────────────────────────────
+                        return (
+                            <>
+                                <ambientLight intensity={modeLights.ambientIntensity} color={modeLights.ambientColor} />
+                                <directionalLight
+                                    position={[2, 5, 5]}
+                                    intensity={modeLights.dirLightIntensity}
+                                    color={modeLights.dirLightColor}
+                                    castShadow
+                                />
+                                {/* Fill light adaptada al modo */}
+                                <pointLight position={[-1.5, 1.5, 3]} intensity={modeLights.pointLightIntensity * 0.7} color={modeLights.pointLightColor} />
+                                {/* Luz Rim de realce trasero */}
+                                <pointLight position={[0, 2.5, -2]} intensity={0.4} color={modeLights.rimLightColor} />
+                            </>
+                        );
+                    }
+                })()}
 
                 {/* Environment studio para reflejos físicos en ojos, pelo sedoso y joyería */}
-                <Environment preset="studio" environmentIntensity={0.35} />
+                {(() => {
+                    const raw = (modelUrl || avatar?.modelUrl || '').toLowerCase();
+                    const isPMXModel = !raw.includes('.glb') && !raw.includes('.gltf') && !raw.includes('.vrm') &&
+                        (raw.includes('.pmx') || raw.includes('.pmd') || raw.includes('.zip') || raw.includes('.rar') || raw.includes('.7z'));
+                    return <Environment preset="studio" environmentIntensity={isPMXModel ? 0.65 : 0.35} />;
+                })()}
 
                 {/* SUELO Y SOMBRA DE CONTACTO: Da anclaje espacial para que los pies no floten en el vacío */}
                 <group position={[0, -1.5, 0]}>

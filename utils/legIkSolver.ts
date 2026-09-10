@@ -387,7 +387,7 @@ export class MmdLegIkController {
     this.enabled = !!(ikData && (ikData.leftFoot?.length > 0 || ikData.rightFoot?.length > 0));
     this.hasLoggedActiveFrame = false;
     this.captureRestPose();
-    console.log(`🦵 [MmdLegIkController] enabled=${this.enabled}, keyframes: L=${ikData?.leftFoot?.length || 0}, R=${ikData?.rightFoot?.length || 0}`);
+    // IK data set (log silenciado)
   }
 
   public isEnabled(): boolean {
