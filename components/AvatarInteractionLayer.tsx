@@ -52,34 +52,20 @@ export interface InteractionLayerRef {
  * =========================================================================================
  * ⚙️ PARÁMETROS DE ESTIRAMIENTO Y REBOTE AL INTERACTUAR / APRETAR (PECHOS Y GLÚTEOS)
  * =========================================================================================
- * Puedes modificar estos valores aquí mismo para calibrar a tu gusto la elasticidad y el rebote:
  */
 export const SENSORY_PHYSICS_CONFIG = {
-    stretchLimit: 0.45,
-    stretchFactor: 0.70,
-    squashFactor: 0.55,
-    dragMultiplier: 1.80,
-    bounceStiffness: 0.14,
-    bounceDamping: 0.96,
-    volumeRecoverSpeed: 0.05,
-    grabRadius: 0.18,     // área de mano, no de dedo
-    grabFalloff: 0.55,    // 0.3 = borde duro (pellizco); 0.7 = masa entera
+    stretchLimit: 0.08,
+    stretchFactor: 0.14,
+    squashFactor: 0.10,
+    dragMultiplier: 0.65,
+    bounceStiffness: 0.40,
+    bounceDamping: 0.86,
+    volumeRecoverSpeed: 0.22,
 };
 
 /**
  * =========================================================================================
- * 🎯 CALIBRACIÓN MANUAL DE COLLIDERS / ESFERAS DE INTERACCIÓN (HITBOX_ZONES)
- * =========================================================================================
- * Puedes modificar manualmente cualquier valor aquí para ajustar el tamaño y posición de cada zona:
- * - radius: Radio en metros de la esfera de interacción (ej: 0.18 = 18cm). Aumenta para cubrir más área.
- * - offset: [X, Y, Z] desplazamiento relativo al hueso (en metros):
- *     X: izquierda (-) / derecha (+)
- *     Y: abajo (-) / arriba (+)
- *     Z: atrás (-) / adelante (+)
- * - fallbackOffset: [X, Y, Z] usado automáticamente si el modelo NO tiene huesos dedicados de glúteos/pechos
- *   y se apoya en la cadera (hips) o espina (spine).
- * - boneTarget: Hueso del esqueleto al que se ancla la esfera.
- * - type: 'sensory' (pecho, glúteos, íntimo) o 'pose' (miembros que se arrastran para posar).
+ * HITBOX_ZONES canónicas — no recalibrar radios/offsets
  * =========================================================================================
  */
 const HITBOX_ZONES = [
@@ -88,7 +74,7 @@ const HITBOX_ZONES = [
     { id: 'mouth', name: 'boca', radius: 0.07, offset: [0, 0.01, 0.10], fallbackOffset: [0, 0.01, 0.10], boneTarget: 'lips', type: 'sensory' as const },
     { id: 'hair', name: 'cabello', radius: 0.15, offset: [0, 0.10, -0.10], fallbackOffset: [0, 0.10, -0.10], boneTarget: 'hair', type: 'sensory' as const },
 
-    // Brazos y Manos (Hombros, Codos, Manos)
+    // Brazos y Manos
     { id: 'leftArm', name: 'hombro izquierdo', radius: 0.10, offset: [0, 0, 0], fallbackOffset: [0, 0, 0], boneTarget: 'leftArm', type: 'pose' as const },
     { id: 'rightArm', name: 'hombro derecho', radius: 0.10, offset: [0, 0, 0], fallbackOffset: [0, 0, 0], boneTarget: 'rightArm', type: 'pose' as const },
     { id: 'leftForeArm', name: 'codo izquierdo', radius: 0.09, offset: [0, 0, 0], fallbackOffset: [0, 0, 0], boneTarget: 'leftForeArm', type: 'pose' as const },
@@ -96,28 +82,30 @@ const HITBOX_ZONES = [
     { id: 'leftHand', name: 'mano izquierda', radius: 0.10, offset: [0, 0, 0], fallbackOffset: [0, 0, 0], boneTarget: 'leftHand', type: 'pose' as const },
     { id: 'rightHand', name: 'mano derecha', radius: 0.10, offset: [0, 0, 0], fallbackOffset: [0, 0, 0], boneTarget: 'rightHand', type: 'pose' as const },
 
-    // Pechos (Sensorial) - Cara frontal del torso superior
-    { id: 'leftBreast', name: 'pecho izquierdo', radius: 0.18, offset: [0, 0, 0.06], fallbackOffset: [-0.09, -0.2, 0.12], boneTarget: 'leftBreast', type: 'sensory' as const },
-    { id: 'rightBreast', name: 'pecho derecho', radius: 0.18, offset: [0, 0, 0.06], fallbackOffset: [0.09, -0.2, 0.12], boneTarget: 'rightBreast', type: 'sensory' as const },
+    // Pechos
+    { id: 'leftBreast', name: 'pecho izquierdo', radius: 0.26, offset: [0, 0, 0.06], fallbackOffset: [-0.09, -0.2, 0.12], boneTarget: 'leftBreast', type: 'sensory' as const },
+    { id: 'rightBreast', name: 'pecho derecho', radius: 0.26, offset: [0, 0, 0.06], fallbackOffset: [0.09, -0.2, 0.12], boneTarget: 'rightBreast', type: 'sensory' as const },
 
-    // Vientre / Abdomen
+    // Vientre
     { id: 'belly', name: 'vientre', radius: 0.13, offset: [0, -0.3, 0.09], fallbackOffset: [0, -0.04, 0.09], boneTarget: 'belly', type: 'sensory' as const },
 
-    // Glúteos y Zonas Íntimas
-    // En modelos sin huesos individuales de glúteos, fallbackOffset ubica las esferas perfectamente en las nalgas izquierda y derecha detrás de la cadera
-    { id: 'leftButt', name: 'glúteo izquierdo', radius: 0.16, offset: [0, 0, -0.05], fallbackOffset: [-0.11, -0.08, -0.12], boneTarget: 'leftButt', type: 'sensory' as const },
-    { id: 'rightButt', name: 'glúteo derecho', radius: 0.16, offset: [0, 0, -0.05], fallbackOffset: [0.11, -0.08, -0.12], boneTarget: 'rightButt', type: 'sensory' as const },
-    { id: 'vagina', name: 'zona íntima', radius: 0.09, offset: [0, 0, 0.02], fallbackOffset: [0, -0.18, 0.035], boneTarget: 'vagina', type: 'sensory' as const },
-    { id: 'anus', name: 'trasero', radius: 0.09, offset: [0, 0, -0.02], fallbackOffset: [0, -0.16, -0.08], boneTarget: 'anus', type: 'sensory' as const },
+    // Glúteos y Zonas Íntimas (calibración canónica)
+    { id: 'leftButt', name: 'glúteo izquierdo', radius: 0.26, offset: [0, 0, -0.06], fallbackOffset: [-0.15, -0.4, -0.10], boneTarget: 'leftButt', type: 'sensory' as const },
+    { id: 'rightButt', name: 'glúteo derecho', radius: 0.26, offset: [0, 0, -0.06], fallbackOffset: [0.15, -0.4, -0.10], boneTarget: 'rightButt', type: 'sensory' as const },
+    { id: 'vagina', name: 'zona íntima', radius: 0.09, offset: [0, 0, 0.02], fallbackOffset: [0, -0.5, 0.045], boneTarget: 'vagina', type: 'sensory' as const },
+    { id: 'anus', name: 'trasero', radius: 0.09, offset: [0, 0, -0.02], fallbackOffset: [0, -0.5, -0.2], boneTarget: 'anus', type: 'sensory' as const },
 
-    // Piernas (Muslos, Rodillas, Pies) - Poses de articulación
-    { id: 'leftThigh', name: 'muslo izquierdo', radius: 0.10, offset: [-0.04, -0.20, 0.01], fallbackOffset: [-0.04, -0.20, 0.01], boneTarget: 'leftLeg', type: 'pose' as const },
-    { id: 'rightThigh', name: 'muslo derecho', radius: 0.10, offset: [0.04, -0.20, 0.01], fallbackOffset: [0.04, -0.20, 0.01], boneTarget: 'rightLeg', type: 'pose' as const },
+    // Piernas
+    { id: 'leftThigh', name: 'muslo izquierdo', radius: 0.10, offset: [-0.04, -0.5, 0.01], fallbackOffset: [-0.04, -0.22, 0.01], boneTarget: 'leftLeg', type: 'pose' as const },
+    { id: 'rightThigh', name: 'muslo derecho', radius: 0.10, offset: [0.04, -0.5, 0.01], fallbackOffset: [0.04, -0.22, 0.01], boneTarget: 'rightLeg', type: 'pose' as const },
     { id: 'leftKnee', name: 'rodilla izquierda', radius: 0.09, offset: [0, 0, 0.04], fallbackOffset: [0, 0, 0.04], boneTarget: 'leftKnee', type: 'pose' as const },
     { id: 'rightKnee', name: 'rodilla derecha', radius: 0.09, offset: [0, 0, 0.04], fallbackOffset: [0, 0, 0.04], boneTarget: 'rightKnee', type: 'pose' as const },
     { id: 'leftFoot', name: 'pie izquierdo', radius: 0.085, offset: [0, -0.04, 0.03], fallbackOffset: [0, -0.04, 0.03], boneTarget: 'leftFoot', type: 'pose' as const },
     { id: 'rightFoot', name: 'pie derecho', radius: 0.085, offset: [0, -0.04, 0.03], fallbackOffset: [0, -0.04, 0.03], boneTarget: 'rightFoot', type: 'pose' as const },
 ];
+
+const isStructuralBone = (b: THREE.Bone | null | undefined, bones: InteractionLayerProps['bones']) =>
+    !!b && (b === bones.hips || b === bones.spine || b === bones.leftLeg || b === bones.rightLeg || b === bones.chest);
 
 export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, InteractionLayerProps>(({
     bones,
@@ -133,13 +121,11 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
 }, ref) => {
     const { camera, controls } = useThree();
 
-    // Type definition for the hitboxes to prevent TS errors
     type HitboxZone = typeof HITBOX_ZONES[0];
 
     const hitboxRefs = useRef<Record<string, THREE.Mesh | null>>({});
     const offsets = useRef<Record<string, THREE.Vector3>>({});
 
-    // Cache estático de huesos para rendimiento extremo (0 llamadas a .traverse en useFrame)
     const cachedGluteBonesL = useRef<THREE.Bone[]>([]);
     const cachedGluteBonesR = useRef<THREE.Bone[]>([]);
     const cachedBreastBonesL = useRef<THREE.Bone[]>([]);
@@ -153,7 +139,11 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
         let rootNode: THREE.Object3D = rootCandidate;
         while (rootNode.parent) rootNode = rootNode.parent;
 
-        if (lastSceneUuid.current === rootNode.uuid && cachedBreastBonesL.current.length > 0) {
+        if (
+            lastSceneUuid.current === rootNode.uuid &&
+            cachedBreastBonesL.current.length > 0 &&
+            (cachedGluteBonesL.current.length > 0 || cachedGluteBonesR.current.length > 0)
+        ) {
             return;
         }
         lastSceneUuid.current = rootNode.uuid;
@@ -165,7 +155,6 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
 
         rootNode.traverse((child: any) => {
             if (child.isBone) {
-                // Excluir cualquier hueso/nodo perteneciente a armas, accesorios o secundarios
                 let isWeaponOrAcc = false;
                 let cp: THREE.Object3D | null = child;
                 while (cp) {
@@ -197,17 +186,17 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
 
                 const n = child.name.toLowerCase();
                 const raw = child.name;
-                const isL = n.includes('l') || raw.includes('左');
-                const isR = n.includes('r') || raw.includes('右');
+                if (n.startsWith('wgt-') || n.includes('collision') || n.includes('hole')) return;
+
+                const isL = (/(?:^|[._\-])(?:l|left)(?:$|[._\-\d])/i).test(n) || raw.includes('左');
+                const isR = (/(?:^|[._\-])(?:r|right)(?:$|[._\-\d])/i).test(n) || raw.includes('右');
 
                 const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) || n === 'ass') &&
                     !n.includes('passive') && !n.includes('assault') && !n.includes('glass') &&
                     !n.includes('grass') && !n.includes('bass') && !n.includes('class') &&
                     !n.includes('compass') && !n.includes('mass') && !n.includes('asset') &&
-                    !n.includes('assist') && !n.includes('hole') && !n.includes('collision');
+                    !n.includes('assist');
 
-                // IMPORTANTE: NUNCA asignar 'pelvis' ni 'hip' como glúteo, porque 'pelvis.L' es el padre anatómico
-                // de 'thigh.L' (la pierna entera). Si se mueve la pelvis, se desplazaría toda la pierna.
                 const hasLegDescendant = child.children && child.children.some((c: any) => {
                     const cn = (c.name || '').toLowerCase();
                     return cn.includes('thigh') || cn.includes('leg') || cn.includes('knee') || cn.includes('foot') || (c.name || '').includes('足');
@@ -217,26 +206,43 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                     n.includes('butt') ||
                     n.includes('glute') ||
                     n.includes('shiri') ||
+                    n.includes('siri') ||
+                    n.includes('trasero') ||
+                    n.includes('booty') ||
+                    n.includes('nalga') ||
+                    n.includes('buttock') ||
                     raw.includes('尻') ||
                     raw.includes('臀') ||
                     raw.includes('ケツ') ||
+                    raw.includes('お尻') ||
+                    raw.includes('屁股') ||
                     isSafeAss
                 ) && !n.includes('pelvis') && !n.includes('hip') && !n.includes('thigh') && !n.includes('leg') && !hasLegDescendant;
 
-                if (isRealButt && child !== bones.hips && child !== bones.spine && child !== bones.leftLeg && child !== bones.rightLeg) {
-                    if (isL) cachedGluteBonesL.current.push(child);
-                    if (isR) cachedGluteBonesR.current.push(child);
+                if (isRealButt && !isStructuralBone(child, bones)) {
+                    if (isL && !isR) cachedGluteBonesL.current.push(child);
+                    else if (isR && !isL) cachedGluteBonesR.current.push(child);
+                    else {
+                        cachedGluteBonesL.current.push(child);
+                        cachedGluteBonesR.current.push(child);
+                    }
                 }
 
                 const isBreast = n.includes('breast') || n.includes('boob') || n.includes('oppai') || n.includes('bust') || n.includes('mune') || raw.includes('胸') || raw.includes('乳');
                 if (isBreast && !n.includes('chest') && !n.includes('torso') && raw !== '上半身2') {
-                    if (isL) cachedBreastBonesL.current.push(child);
-                    if (isR) cachedBreastBonesR.current.push(child);
+                    if (isL && !isR) cachedBreastBonesL.current.push(child);
+                    else if (isR && !isL) cachedBreastBonesR.current.push(child);
+                    else {
+                        cachedBreastBonesL.current.push(child);
+                        cachedBreastBonesR.current.push(child);
+                    }
                 }
             }
         });
 
-        // Solo agregar fallback si NO es un arma o accesorio ni pierna
+        // No filtrar solo DEF-: un solo hueso chico se ve como pellizco.
+        // Se mueven todos los huesos de masa detectados.
+
         const isBoneNotWeapon = (b: THREE.Bone | null | undefined): boolean => {
             if (!b) return false;
             let p: THREE.Object3D | null = b;
@@ -248,8 +254,16 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
             return true;
         };
 
-        if (isBoneNotWeapon(bones.leftButt) && bones.leftButt !== bones.hips && bones.leftButt !== bones.spine && bones.leftButt !== bones.leftLeg && bones.leftButt !== bones.rightLeg && !cachedGluteBonesL.current.includes(bones.leftButt!)) cachedGluteBonesL.current.push(bones.leftButt!);
-        if (isBoneNotWeapon(bones.rightButt) && bones.rightButt !== bones.hips && bones.rightButt !== bones.spine && bones.rightButt !== bones.leftLeg && bones.rightButt !== bones.rightLeg && !cachedGluteBonesR.current.includes(bones.rightButt!)) cachedGluteBonesR.current.push(bones.rightButt!);
+        if (isBoneNotWeapon(bones.leftButt) && !isStructuralBone(bones.leftButt, bones) && !cachedGluteBonesL.current.includes(bones.leftButt!)) {
+            if (cachedGluteBonesL.current.length === 0 || bones.leftButt!.name.toLowerCase().includes('def-')) {
+                cachedGluteBonesL.current.push(bones.leftButt!);
+            }
+        }
+        if (isBoneNotWeapon(bones.rightButt) && !isStructuralBone(bones.rightButt, bones) && !cachedGluteBonesR.current.includes(bones.rightButt!)) {
+            if (cachedGluteBonesR.current.length === 0 || bones.rightButt!.name.toLowerCase().includes('def-')) {
+                cachedGluteBonesR.current.push(bones.rightButt!);
+            }
+        }
         if (isBoneNotWeapon(bones.leftBreast) && !cachedBreastBonesL.current.includes(bones.leftBreast!)) cachedBreastBonesL.current.push(bones.leftBreast!);
         if (isBoneNotWeapon(bones.rightBreast) && !cachedBreastBonesR.current.includes(bones.rightBreast!)) cachedBreastBonesR.current.push(bones.rightBreast!);
     }, [bones]);
@@ -268,7 +282,6 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
         });
     }, []);
 
-    // Vectores y cuaterniones de scratch reutilizables para evitar recolección de basura (GC pauses)
     const tempVec = useMemo(() => new THREE.Vector3(), []);
     const tempVecOffset = useMemo(() => new THREE.Vector3(), []);
     const tempWorldQuat = useMemo(() => new THREE.Quaternion(), []);
@@ -285,7 +298,6 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
             hipsBone.getWorldQuaternion(tempBodyQuat);
         }
 
-        // Sincronizar posición y rotación de colliders anatómicos para que el raycast detecte toques con precisión
         HITBOX_ZONES.forEach(zone => {
             const bone = bones[zone.boneTarget as keyof typeof bones];
             const hitbox = hitboxRefs.current[zone.id];
@@ -299,17 +311,17 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                 let [ox, oy, oz] = zone.offset;
 
                 if (zone.id === 'leftBreast' && !hasDiscreteBreasts) {
-                    [ox, oy, oz] = zone.fallbackOffset || [-0.09, 0.04, 0.12];
+                    [ox, oy, oz] = zone.fallbackOffset || [-0.09, -0.2, 0.12];
                 } else if (zone.id === 'rightBreast' && !hasDiscreteBreasts) {
-                    [ox, oy, oz] = zone.fallbackOffset || [0.09, 0.04, 0.12];
+                    [ox, oy, oz] = zone.fallbackOffset || [0.09, -0.2, 0.12];
                 } else if (zone.id === 'leftButt' && !hasDiscreteButt) {
-                    [ox, oy, oz] = zone.fallbackOffset || [-0.09, -0.04, -0.10];
+                    [ox, oy, oz] = zone.fallbackOffset || [-0.15, -0.4, -0.10];
                 } else if (zone.id === 'rightButt' && !hasDiscreteButt) {
-                    [ox, oy, oz] = zone.fallbackOffset || [0.09, -0.04, -0.10];
+                    [ox, oy, oz] = zone.fallbackOffset || [0.15, -0.4, -0.10];
                 } else if (zone.id === 'vagina' && bones.vagina === bones.hips) {
-                    [ox, oy, oz] = zone.fallbackOffset || [0, -0.11, 0.045];
+                    [ox, oy, oz] = zone.fallbackOffset || [0, -0.5, 0.045];
                 } else if (zone.id === 'anus' && bones.anus === bones.hips) {
-                    [ox, oy, oz] = zone.fallbackOffset || [0, -0.10, -0.065];
+                    [ox, oy, oz] = zone.fallbackOffset || [0, -0.5, -0.2];
                 }
 
                 tempVecOffset.set(ox, oy, oz);
@@ -321,7 +333,6 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
             }
         });
 
-        // FÍSICAS DE RETORNO Y REBOTE JUGOZO TRIDIMENSIONAL
         if (!activeDrag.current) {
             Object.entries(offsets.current).forEach(([zoneId, offset]) => {
                 offset.lerp(new THREE.Vector3(0, 0, 0), delta * 4.5);
@@ -339,20 +350,21 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                         if (offset.lengthSq() < 0.0005 && isPosSettled) {
                             offset.set(0, 0, 0);
 
-                            if (bone.userData.dragStartPos) {
+                            if (bone.userData.dragStartPos && !isStructuralBone(bone, bones)) {
                                 bone.position.copy(bone.userData.dragStartPos);
                             }
-                            if (bone.userData.baseScale) {
+                            if (bone.userData.baseScale && !isStructuralBone(bone, bones)) {
                                 bone.scale.copy(bone.userData.baseScale);
                             }
 
-                            bone.userData.dragStartQuat = null;
-                            bone.userData.dragStartPos = null;
-                            bone.userData.velPos = null;
+                            if (!isStructuralBone(bone, bones)) {
+                                bone.userData.dragStartQuat = null;
+                                bone.userData.dragStartPos = null;
+                                bone.userData.velPos = null;
+                            }
                             return;
                         }
 
-                        // Return Rotation (pose only)
                         if (hitbox.type === 'pose' && bone.userData.dragStartQuat) {
                             const targetQuat = bone.userData.dragStartQuat.clone();
                             const eulerOffset = new THREE.Euler(offset.y * 2, offset.x * 2, 0);
@@ -360,11 +372,10 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                             bone.quaternion.slerp(targetQuat, 0.2);
                         }
 
-                        // RETORNO CON REBOTE ELÁSTICO (Parámetros configurables en SENSORY_PHYSICS_CONFIG arriba)
                         const applyBounce = (b: THREE.Bone, isGlute: boolean, isBreast: boolean) => {
+                            if (isStructuralBone(b, bones)) return;
                             if (b.userData.dragStartPos) {
                                 if (!b.userData.velPos) b.userData.velPos = new THREE.Vector3();
-                                // Elasticidad viva que rebota más veces y de forma más fluida
                                 const stiffness = (isGlute || isBreast) ? SENSORY_PHYSICS_CONFIG.bounceStiffness : 0.30;
                                 const damping = (isGlute || isBreast) ? SENSORY_PHYSICS_CONFIG.bounceDamping : 0.85;
 
@@ -374,7 +385,6 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                                 b.userData.velPos.multiplyScalar(damping);
                                 b.position.add(b.userData.velPos);
 
-                                // Recuperación orgánica del volumen/moldeo original
                                 if (b.userData.baseScale) {
                                     b.scale.lerp(b.userData.baseScale, SENSORY_PHYSICS_CONFIG.volumeRecoverSpeed);
                                 }
@@ -394,19 +404,24 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
 
                         if (isGluteZone) {
                             const bonesToBounce = zoneId === 'leftButt' ? cachedGluteBonesL.current : cachedGluteBonesR.current;
-                            if (bonesToBounce.length > 0) {
-                                bonesToBounce.forEach(b => applyBounce(b, true, false));
-                            } else if (bone && bone !== bones.hips && bone !== bones.spine && bone !== bones.leftLeg && bone !== bones.rightLeg) {
-                                applyBounce(bone, true, false);
+                            const usable = bonesToBounce.filter(b => !isStructuralBone(b, bones));
+                            if (usable.length > 0) {
+                                usable.forEach(b => applyBounce(b, true, false));
                             }
                         } else if (isBreastZone) {
                             const bonesToBounce = zoneId === 'leftBreast' ? cachedBreastBonesL.current : cachedBreastBonesR.current;
                             if (bonesToBounce.length > 0) {
                                 bonesToBounce.forEach(b => applyBounce(b, false, true));
-                            } else if (bone && bone !== bones.chest && bone !== bones.spine && bone !== bones.hips) {
+                            } else if (bone && !isStructuralBone(bone, bones)) {
                                 applyBounce(bone, false, true);
+                                if (bone.userData.dragStartQuat) {
+                                    bone.quaternion.slerp(bone.userData.dragStartQuat, 0.25);
+                                    if (offset.lengthSq() < 0.0005) {
+                                        bone.quaternion.copy(bone.userData.dragStartQuat);
+                                    }
+                                }
                             }
-                        } else if (bone && bone !== bones.hips && bone !== bones.spine && bone !== bones.leftLeg && bone !== bones.rightLeg) {
+                        } else if (bone && !isStructuralBone(bone, bones)) {
                             applyBounce(bone, false, false);
                         }
                     }
@@ -429,19 +444,17 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
             activeBoneTarget = 'spine';
         }
 
-        // ARRASTRE, MOLDEO VOLUMÉTRICO Y ESTIRAMIENTO DINÁMICO (Sculpting & Flesh molding)
-        // EXCLUSIVO para pechos y glúteos. NUNCA desplazar piernas ni caderas
         if (isRightClick || isSensory) {
             const isGlute = zone.id === 'leftButt' || zone.id === 'rightButt';
             const isBreast = zone.id === 'leftBreast' || zone.id === 'rightBreast';
 
-            // Solo pechos y glúteos tienen deformación elástica de masa blanda
             if (!isGlute && !isBreast) return;
 
             const bone = (bones as any)[activeBoneTarget];
-            const refParent = (bone && bone.parent) ? bone.parent : (bones.hips || bones.spine);
+            const refParent = (bone && bone.parent && !isStructuralBone(bone, bones))
+                ? bone.parent
+                : (bones.hips || bones.spine);
 
-            // Rango de estiramiento ("un poco", controlado y estético)
             const stretchLimit = SENSORY_PHYSICS_CONFIG.stretchLimit;
 
             const worldToLocal = refParent ? refParent.matrixWorld.clone().invert() : new THREE.Matrix4();
@@ -459,9 +472,8 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                 deltaPos.setLength(elasticCurve * stretchLimit);
             }
 
-            // Moldeo elástico orgánico (estiramiento y aplastamiento proporcional)
             const applyMolding = (targetBone: THREE.Bone) => {
-                if (targetBone === bones.hips || targetBone === bones.spine || targetBone === bones.leftLeg || targetBone === bones.rightLeg) return;
+                if (isStructuralBone(targetBone, bones)) return;
                 if (!targetBone.userData.baseScale) {
                     targetBone.userData.baseScale = targetBone.scale.clone();
                 }
@@ -478,37 +490,49 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
 
             if (isGlute) {
                 const targetBones = zone.id === 'leftButt' ? cachedGluteBonesL.current : cachedGluteBonesR.current;
+                const usable = targetBones.filter(b => !isStructuralBone(b, bones));
 
-                if (targetBones.length > 0) {
-                    targetBones.forEach(child => {
-                        // NUNCA mover caderas, espina ni piernas enteras
-                        if (child === bones.hips || child === bones.spine || child === bones.leftLeg || child === bones.rightLeg) return;
+                if (usable.length > 0) {
+                    usable.forEach(child => {
                         if (!child.userData.dragStartPos) child.userData.dragStartPos = child.position.clone();
                         const localTarget = child.userData.dragStartPos.clone().add(deltaPos);
-                        child.position.lerp(localTarget, 0.65);
+                        child.position.lerp(localTarget, 0.85);
                         applyMolding(child);
                     });
-                } else if (bone && bone !== bones.hips && bone !== bones.spine && bone !== bones.leftLeg && bone !== bones.rightLeg) {
+                } else if (bone && !isStructuralBone(bone, bones)) {
                     if (!bone.userData.dragStartPos) bone.userData.dragStartPos = bone.position.clone();
-                    const targetPos = bone.userData.dragStartPos.clone().add(deltaPos);
-                    bone.position.lerp(targetPos, 0.65);
+                    bone.position.lerp(bone.userData.dragStartPos.clone().add(deltaPos), 0.85);
                     applyMolding(bone);
+                } else {
+                    // Sin hueso de nalga: solo jiggle. Nunca rotar/mover hips (arranca la pierna).
+                    window.dispatchEvent(new CustomEvent('nova-jiggle-trigger', {
+                        detail: { part: zone.id }
+                    }));
                 }
             } else if (isBreast) {
                 const targetBones = zone.id === 'leftBreast' ? cachedBreastBonesL.current : cachedBreastBonesR.current;
                 if (targetBones.length > 0) {
                     targetBones.forEach(child => {
-                        if (child === bones.chest || child === bones.spine || child === bones.hips) return;
+                        if (isStructuralBone(child, bones)) return;
                         if (!child.userData.dragStartPos) child.userData.dragStartPos = child.position.clone();
                         const localTarget = child.userData.dragStartPos.clone().add(deltaPos);
-                        child.position.lerp(localTarget, 0.65);
+                        child.position.lerp(localTarget, 0.85);
                         applyMolding(child);
                     });
-                } else if (bone && bone !== bones.chest && bone !== bones.spine && bone !== bones.hips) {
+                } else if (bone && !isStructuralBone(bone, bones)) {
                     if (!bone.userData.dragStartPos) bone.userData.dragStartPos = bone.position.clone();
                     const targetPos = bone.userData.dragStartPos.clone().add(deltaPos);
-                    bone.position.lerp(targetPos, 0.65);
+                    bone.position.lerp(targetPos, 0.85);
                     applyMolding(bone);
+                } else if (bone) {
+                    if (!bone.userData.dragStartQuat) bone.userData.dragStartQuat = bone.quaternion.clone();
+                    const tiltEuler = new THREE.Euler(
+                        deltaPos.y * 0.4,
+                        (zone.id === 'leftBreast' ? -1 : 1) * Math.abs(deltaPos.x) * 0.3,
+                        0
+                    );
+                    const targetQuat = bone.userData.dragStartQuat.clone().multiply(new THREE.Quaternion().setFromEuler(tiltEuler));
+                    bone.quaternion.slerp(targetQuat, 0.35);
                 }
             }
         } else {
@@ -552,124 +576,43 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
         }
     };
 
-    // INTERACCIÓN DIRECTA CON LA MALLA Y HUESOS DEL CUERPO (Zero Floating Spheres)
-    const handleSurfacePointerDown = (e: any) => {
-        if (activeDrag.current && activeDrag.current.isDragging) return;
-        if (!e.point) return;
-
-        const clickPoint = e.point as THREE.Vector3;
-        const hipsBone = bones.hips || bones.spine;
-        if (hipsBone) {
-            hipsBone.getWorldQuaternion(tempBodyQuat);
-            hipsBone.getWorldPosition(tempSurfaceA);
-        } else {
-            tempSurfaceA.set(0, 0, 0);
-        }
-
-        // Vector relativo al centro del cuerpo del avatar
-        const relVec = tempSurfaceB.subVectors(clickPoint, tempSurfaceA);
-        // Desrotar vector con la orientación del cuerpo para obtener coordenadas anatómicas locales:
-        // relLocal.x: izquierda (-) / derecha (+)
-        // relLocal.y: altura vertical respecto a la cadera
-        // relLocal.z: frente (+) / espalda (-)
-        const bodyInvQuat = tempSurfaceQuat.copy(tempBodyQuat).invert();
-        const relLocal = tempSurfaceC.copy(relVec).applyQuaternion(bodyInvQuat);
-
-        let bestZoneId = 'head';
-
-        // 1. CABEZA Y ROSTRO (Y > 0.48 sobre cadera)
-        if (relLocal.y > 0.48) {
-            if (relLocal.z > 0.07 && relLocal.y < 0.68) {
-                bestZoneId = 'mouth';
-            } else if (relLocal.z < -0.06) {
-                bestZoneId = 'hair';
-            } else {
-                bestZoneId = 'head';
-            }
-        }
-        // 2. PECHOS (Frente superior del torso: Y entre 0.12 y 0.48, Z positivo)
-        else if (relLocal.y >= 0.12 && relLocal.y <= 0.48 && relLocal.z > 0.015) {
-            bestZoneId = relLocal.x < 0 ? 'leftBreast' : 'rightBreast';
-        }
-        // 3. VIENTRE / ABDOMEN (Frente medio: Y entre -0.05 y 0.14, Z positivo)
-        else if (relLocal.y > -0.05 && relLocal.y < 0.14 && relLocal.z > 0.02) {
-            bestZoneId = 'belly';
-        }
-        // 4. GLÚTEOS (Espalda baja y glúteos: Y entre -0.34 y 0.12, Z negativo)
-        else if (relLocal.y >= -0.34 && relLocal.y <= 0.12 && relLocal.z < -0.012) {
-            bestZoneId = relLocal.x < 0 ? 'leftButt' : 'rightButt';
-        }
-        // 5. ENTREPIERNA / SUELO PÉLVICO (Y entre -0.05 y -0.22, centro |X| < 0.075)
-        else if (relLocal.y >= -0.22 && relLocal.y <= -0.05 && Math.abs(relLocal.x) < 0.075) {
-            bestZoneId = relLocal.z >= -0.02 ? 'vagina' : 'anus';
-        }
-        // 6. PIERNAS Y PIES (Y < -0.20)
-        else if (relLocal.y < -0.20) {
-            // Si el toque es desde atrás en la zona alta, pertenece a los glúteos y jamás a los muslos
-            if (relLocal.z < -0.015 && relLocal.y >= -0.35) {
-                bestZoneId = relLocal.x < 0 ? 'leftButt' : 'rightButt';
-            } else {
-                const isL = relLocal.x < 0;
-                if (relLocal.y > -0.52) {
-                    bestZoneId = isL ? 'leftThigh' : 'rightThigh';
-                } else if (relLocal.y > -0.85) {
-                    bestZoneId = isL ? 'leftKnee' : 'rightKnee';
-                } else {
-                    bestZoneId = isL ? 'leftFoot' : 'rightFoot';
-                }
-            }
-        }
-        // 7. BRAZOS Y MANOS (Lateral |X| > 0.18)
-        else if (Math.abs(relLocal.x) > 0.18) {
-            const isL = relLocal.x < 0;
-            if (relLocal.y < 0.0) {
-                bestZoneId = isL ? 'leftHand' : 'rightHand';
-            } else if (relLocal.y < 0.25) {
-                bestZoneId = isL ? 'leftForeArm' : 'rightForeArm';
-            } else {
-                bestZoneId = isL ? 'leftArm' : 'rightArm';
-            }
-        }
-        // Default por proximidad
-        else {
-            bestZoneId = relLocal.z > 0 ? (relLocal.x < 0 ? 'leftBreast' : 'rightBreast') : (relLocal.x < 0 ? 'leftButt' : 'rightButt');
-        }
-
-        const matchedZone = HITBOX_ZONES.find(z => z.id === bestZoneId);
-        if (matchedZone) {
-            handlePointerDown(e, matchedZone);
-        }
-    };
-
-    useImperativeHandle(ref, () => ({
-        updatePhysics,
-        resetPhysics: () => {
-            Object.values(offsets.current).forEach(o => o.set(0, 0, 0));
-        },
-        getOffset: (zoneId: string) => offsets.current[zoneId] || null,
-        handleSurfacePointerDown
-    }));
-
     const handlePointerDown = (e: any, zone: typeof HITBOX_ZONES[0]) => {
         const bone = bones[zone.boneTarget as keyof typeof bones];
-        if (!bone) return;
+        const isButtZone = zone.id === 'leftButt' || zone.id === 'rightButt';
+        if (!bone && !isButtZone) return;
         e.stopPropagation();
 
-        // Si usamos herramientas de golpear (whip, bat, dildo), no se arrastra
         if (currentTool === 'whip' || currentTool === 'bat' || currentTool === 'dildo') {
             if (onInteract) onInteract(zone.id, 'hit' as any, zone.type, currentTool);
             return;
         }
 
-        if (!bone.userData.dragStartQuat) bone.userData.dragStartQuat = bone.quaternion.clone();
-        if (bone !== bones.hips && bone !== bones.spine && bone !== bones.leftLeg && bone !== bones.rightLeg && !bone.userData.dragStartPos) {
-            bone.userData.dragStartPos = bone.position.clone();
+        if (bone) {
+            if (!bone.userData.dragStartQuat) bone.userData.dragStartQuat = bone.quaternion.clone();
+            if (!isStructuralBone(bone, bones) && !bone.userData.dragStartPos) bone.userData.dragStartPos = bone.position.clone();
+            if (!isStructuralBone(bone, bones) && !bone.userData.baseScale) bone.userData.baseScale = bone.scale.clone();
+        }
+
+        if (zone.id === 'leftButt' || zone.id === 'rightButt') {
+            const targetBones = zone.id === 'leftButt' ? cachedGluteBonesL.current : cachedGluteBonesR.current;
+            targetBones.forEach(b => {
+                if (isStructuralBone(b, bones)) return;
+                if (!b.userData.dragStartPos) b.userData.dragStartPos = b.position.clone();
+                if (!b.userData.dragStartQuat) b.userData.dragStartQuat = b.quaternion.clone();
+                if (!b.userData.baseScale) b.userData.baseScale = b.scale.clone();
+            });
+        } else if (zone.id === 'leftBreast' || zone.id === 'rightBreast') {
+            const targetBones = zone.id === 'leftBreast' ? cachedBreastBonesL.current : cachedBreastBonesR.current;
+            targetBones.forEach(b => {
+                if (!b.userData.dragStartPos) b.userData.dragStartPos = b.position.clone();
+                if (!b.userData.dragStartQuat) b.userData.dragStartQuat = b.quaternion.clone();
+                if (!b.userData.baseScale) b.userData.baseScale = b.scale.clone();
+            });
         }
 
         const stateControls = controls as any;
         if (stateControls) stateControls.enabled = false;
 
-        // Save button (0 = left, 2 = right)
         activeDrag.current = { zone, isDragging: true, button: e.button };
 
         const onWindowMove = (ev: PointerEvent) => {
@@ -677,18 +620,18 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
             const curZone = activeDrag.current.zone;
             if (!curZone || curZone.id === 'back') return;
 
-            const offset = offsets.current[curZone.id];
-            if (offset) {
+            const off = offsets.current[curZone.id];
+            if (off) {
                 const deltaX = ev.movementX || 0;
                 const deltaY = ev.movementY || 0;
                 const sensitivity = dragSensitivity;
 
-                offset.x += deltaX * sensitivity;
-                offset.y += deltaY * sensitivity;
+                off.x += deltaX * sensitivity;
+                off.y += deltaY * sensitivity;
 
                 const limit = curZone.type === 'sensory' ? Math.max(2.5, maxAngle / 20) : (maxAngle / 50);
-                offset.x = Math.max(-limit, Math.min(limit, offset.x));
-                offset.y = Math.max(-limit, Math.min(limit, offset.y));
+                off.x = Math.max(-limit, Math.min(limit, off.x));
+                off.y = Math.max(-limit, Math.min(limit, off.y));
             }
         };
 
@@ -716,6 +659,90 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
         if (onInteract) onInteract(zone.id, 'grab', zone.type, currentTool);
     };
 
+    const handleSurfacePointerDown = (e: any) => {
+        if (activeDrag.current && activeDrag.current.isDragging) return;
+        if (!e.point) return;
+
+        const clickPoint = e.point as THREE.Vector3;
+        const hipsBone = bones.hips || bones.spine;
+        if (hipsBone) {
+            hipsBone.getWorldQuaternion(tempBodyQuat);
+            hipsBone.getWorldPosition(tempSurfaceA);
+        } else {
+            tempSurfaceA.set(0, 0, 0);
+        }
+
+        const relVec = tempSurfaceB.subVectors(clickPoint, tempSurfaceA);
+        const bodyInvQuat = tempSurfaceQuat.copy(tempBodyQuat).invert();
+        const relLocal = tempSurfaceC.copy(relVec).applyQuaternion(bodyInvQuat);
+
+        let bestZoneId = 'head';
+
+        if (relLocal.y > 0.48) {
+            if (relLocal.z > 0.07 && relLocal.y < 0.68) {
+                bestZoneId = 'mouth';
+            } else if (relLocal.z < -0.06) {
+                bestZoneId = 'hair';
+            } else {
+                bestZoneId = 'head';
+            }
+        } else if (relLocal.y >= 0.12 && relLocal.y <= 0.48 && relLocal.z > 0.015) {
+            bestZoneId = relLocal.x < 0 ? 'leftBreast' : 'rightBreast';
+        } else if (relLocal.y > -0.05 && relLocal.y < 0.14 && relLocal.z > 0.02) {
+            bestZoneId = 'belly';
+        } else if (relLocal.y >= -0.34 && relLocal.y <= 0.12 && relLocal.z < -0.012) {
+            bestZoneId = relLocal.x < 0 ? 'leftButt' : 'rightButt';
+        } else if (relLocal.y >= -0.22 && relLocal.y <= -0.05 && Math.abs(relLocal.x) < 0.075) {
+            bestZoneId = relLocal.z >= -0.02 ? 'vagina' : 'anus';
+        } else if (relLocal.y < -0.20) {
+            if (relLocal.z < -0.015 && relLocal.y >= -0.35) {
+                bestZoneId = relLocal.x < 0 ? 'leftButt' : 'rightButt';
+            } else {
+                const isL = relLocal.x < 0;
+                if (relLocal.y > -0.52) {
+                    bestZoneId = isL ? 'leftThigh' : 'rightThigh';
+                } else if (relLocal.y > -0.85) {
+                    bestZoneId = isL ? 'leftKnee' : 'rightKnee';
+                } else {
+                    bestZoneId = isL ? 'leftFoot' : 'rightFoot';
+                }
+            }
+        } else if (Math.abs(relLocal.x) > 0.18) {
+            const isL = relLocal.x < 0;
+            if (relLocal.y < 0.0) {
+                bestZoneId = isL ? 'leftHand' : 'rightHand';
+            } else if (relLocal.y < 0.25) {
+                bestZoneId = isL ? 'leftForeArm' : 'rightForeArm';
+            } else {
+                bestZoneId = isL ? 'leftArm' : 'rightArm';
+            }
+        } else {
+            bestZoneId = relLocal.z > 0 ? (relLocal.x < 0 ? 'leftBreast' : 'rightBreast') : (relLocal.x < 0 ? 'leftButt' : 'rightButt');
+        }
+
+        const matchedZone = HITBOX_ZONES.find(z => z.id === bestZoneId);
+        if (matchedZone) {
+            handlePointerDown(e, matchedZone);
+        }
+    };
+
+    const lastTickTime = useRef(0);
+    useFrame((_, delta) => {
+        const now = performance.now();
+        if (now - lastTickTime.current < 2) return;
+        lastTickTime.current = now;
+        updatePhysics(delta);
+    });
+
+    useImperativeHandle(ref, () => ({
+        updatePhysics,
+        resetPhysics: () => {
+            Object.values(offsets.current).forEach(o => o.set(0, 0, 0));
+        },
+        getOffset: (zoneId: string) => offsets.current[zoneId] || null,
+        handleSurfacePointerDown
+    }));
+
     return (
         <group>
             {HITBOX_ZONES.map(zone => {
@@ -737,7 +764,7 @@ export const AvatarInteractionLayer = forwardRef<InteractionLayerRef, Interactio
                                 colorWrite={Boolean(showDebugZones)}
                                 transparent={true}
                                 opacity={showDebugZones ? 0.45 : 0.0}
-                                depthTest={!showDebugZones} // 🔥 Rayos X: visible a través de cualquier textura, ropa o cuerpo cuando está en modo depuración
+                                depthTest={false}
                                 depthWrite={false}
                                 color={
                                     zone.id.includes('Breast') ? '#f43f5e' :

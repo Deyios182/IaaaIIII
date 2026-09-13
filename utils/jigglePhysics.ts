@@ -18,6 +18,7 @@ export interface JiggleBone {
     anchorBone?: THREE.Object3D | null;
     lastParentWorldQuat?: THREE.Quaternion;
     lastParentWorldPos?: THREE.Vector3;
+    offset?: THREE.Euler; // jiggle aparte de la pose del clip
 }
 
 export interface JiggleSettings {
@@ -77,7 +78,8 @@ const JIGGLE_PATTERNS = [
     // Pechos (inglés, japonés PMX, chino Genshin, español)
     'breast', 'boob', 'oppai', 'bust', 'pai', 'pecho', 'sen', 'mune', '胸',
     // Trasero / Glúteos (inglés, japonés PMX, chino Genshin, español)
-    'ass', 'butt', 'glute', 'shiri', 'buttock', '尻', '臀', '屁股',
+    'ass', 'butt', 'glute', 'shiri', 'siri', 'buttock', 'booty', 'nalga', 'rear',
+    '尻', '臀', '屁股', 'お尻', 'ケツ',
     // Pelo / Colas / Mechones (inglés, japonés PMX, chino Genshin)
     'hair', 'tail', 'ponytail', 'twintail', 'kaminoke', 'bangs', 'fringe', 'strand',
     'ahoge', 'pigtail', 'braid', 'sidelock', 'front_hair', 'back_hair', 'side_hair',
@@ -123,24 +125,25 @@ export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Par
     const isBreast = n.includes('breast') || n.includes('boob') || n.includes('oppai') ||
         n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho');
     if (isBreast) return {
-        stiffness: 0.28,
-        damping: 0.64,
-        gravity: 0.16,
-        intensity: 0.95,
-        maxAngle: Math.PI / 12
+        stiffness: 0.55,
+        damping: 0.78,
+        gravity: 0,
+        intensity: 0.90,
+        maxAngle: Math.PI / 14
     };
 
     // Glúteos: más firmes, menos sag, menos viaje. Nunca copiar el preset del pecho.
     const isButt = (n.includes('butt') || n.includes('glute') || n.includes('buttock') || n.includes('buttcheek') ||
-        n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero') ||
+        n.includes('shiri') || n.includes('siri') || n.includes('booty') || n.includes('nalga') || n.includes('trasero') ||
+        raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || raw.includes('お尻') || raw.includes('ケツ') ||
         (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) && !n.includes('passive') && !n.includes('assault'))) &&
         !n.includes('pelvis') && !n.includes('hip') && !n.includes('thigh') && !n.includes('leg');
     if (isButt) return {
-        stiffness: 0.42,
-        damping: 0.72,
-        gravity: 0.06,
-        intensity: 0.70,
-        maxAngle: Math.PI / 16
+        stiffness: 0.55,
+        damping: 0.78,
+        gravity: 0,
+        intensity: 0.90,
+        maxAngle: Math.PI / 14
     };
 
     if (isActualEarBone(n)) return { stiffness: 0.35, damping: 0.65, gravity: 0, maxAngle: Math.PI / 4 };
@@ -281,7 +284,7 @@ export function isJiggleBone(boneName: string): boolean {
 export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | 'other' {
     const n = boneName.toLowerCase();
     const raw = boneName;
-    if (n.includes('breast') || n.includes('boob') || n.includes('oppai') || n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho')) {
+    if (n.includes('breast') || n.includes('boob') || n.includes('oppai') || n.includes('bust') || n.includes('mune') || n.includes('pecho') || raw.includes('胸') || raw.includes('乳')) {
         return 'breast';
     }
     const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) || n === 'ass') &&
@@ -291,7 +294,7 @@ export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | '
         !n.includes('assist');
     const isUnilateralPelvis = (n.includes('pelvis') || n.includes('hip')) &&
         (n.includes('.l') || n.includes('.r') || n.includes('_l') || n.includes('_r') || raw.includes('左') || raw.includes('右'));
-    if (isSafeAss || n.includes('butt') || n.includes('glute') || n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero') || isUnilateralPelvis) {
+    if (isSafeAss || n.includes('butt') || n.includes('glute') || n.includes('shiri') || n.includes('siri') || n.includes('booty') || n.includes('nalga') || n.includes('trasero') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || raw.includes('お尻') || raw.includes('ケツ') || isUnilateralPelvis) {
         return 'butt';
     }
     if (n.includes('hair') || n.includes('tail') || n.includes('ponytail') || n.includes('bangs') || n.includes('strand') || n.includes('kaminoke') || raw.includes('髪') || raw.includes('发') || raw.includes('辮')) {
@@ -811,7 +814,8 @@ export class JigglePhysicsSystem {
                     tipOffset,
                     baseLocalDir,
                     particleRadius,
-                    anchorBone
+                    anchorBone,
+                    offset: new THREE.Euler(0, 0, 0)
                 });
             }
         });
@@ -823,8 +827,12 @@ export class JigglePhysicsSystem {
 
         console.log(`🌊 Jiggle Physics: ${this.bones.length} huesos detectados`);
         if (this.bones.length > 0) {
-            console.log('  Huesos:', this.bones.map(b => b.bone.name).slice(0, 15).join(', '));
+            console.log('  Huesos:', this.bones.map(b => `${b.bone.name}[${b.type}]`).join(', '));
         }
+        const butts = this.bones.filter(b => b.type === 'butt');
+        const breasts = this.bones.filter(b => b.type === 'breast');
+        console.log(`  Pechos: ${breasts.length} (${breasts.map(b => b.bone.name).join(', ') || 'NINGUNO'})`);
+        console.log(`  Glúteos: ${butts.length} (${butts.map(b => b.bone.name).join(', ') || 'NINGUNO — este modelo no tiene hueso de culo'})`);
     }
 
     // Permitir añadir huesos manualmente o actualizar configuración específica
@@ -860,7 +868,8 @@ export class JigglePhysicsSystem {
             tipOffset,
             baseLocalDir,
             particleRadius,
-            anchorBone
+            anchorBone,
+            offset: new THREE.Euler(0, 0, 0)
         });
         console.log(`🌊 Jiggle Physics: Añadido hueso ${bone.name} (${type})`);
     }
@@ -941,40 +950,42 @@ export class JigglePhysicsSystem {
 
         for (const jb of this.bones) {
             const { stiffness, damping, gravity, intensity } = jb.settings || globalSettings;
+            const isMass = jb.type === 'breast' || jb.type === 'butt';
 
-            // Permitir rotación base animada dinámica
-            let targetRot = jb.originalRotation;
-            if (jb.bone.userData.ikBaseRotation) {
-                targetRot = new THREE.Euler().setFromQuaternion(jb.bone.userData.ikBaseRotation);
-            }
+            if (!jb.offset) jb.offset = new THREE.Euler(0, 0, 0);
 
-            // 1. Fuerza de retorno al origen (spring elástico)
-            const returnForceX = (targetRot.x - jb.bone.rotation.x) * stiffness;
-            const returnForceY = (targetRot.y - jb.bone.rotation.y) * stiffness;
-            const returnForceZ = (targetRot.z - jb.bone.rotation.z) * stiffness;
+            // NUNCA usar bone.quaternion como rest: en huesos sin pista de animación
+            // ya lleva el jiggle del frame anterior y el modelo "camina" solo.
+            const restQ = jb.bone.userData.ikBaseRotation
+                ? (jb.bone.userData.ikBaseRotation as THREE.Quaternion).clone()
+                : new THREE.Quaternion().setFromEuler(jb.originalRotation);
 
-            jb.velocity.x += returnForceX * 25 * intensity;
-            jb.velocity.y += returnForceY * 25 * intensity;
-            jb.velocity.z += returnForceZ * 25 * intensity;
+            const targetRot = new THREE.Euler().setFromQuaternion(restQ);
 
-            // 2. Gravedad en espacio mundial 3D real:
-            // Proyectar el vector mundial (0, -1, 0) a los ejes locales del hueso mediante producto cruz
+            // 1. Spring sobre el OFFSET (no sobre bone.rotation del mixer)
+            jb.velocity.x += -jb.offset.x * stiffness * 25 * intensity;
+            jb.velocity.y += -jb.offset.y * stiffness * 25 * intensity;
+            jb.velocity.z += -jb.offset.z * stiffness * 25 * intensity;
+
+            // 2. Gravedad desde la pose de REPOSO (si usas la pose ya jigglada, no para nunca)
             jb.bone.updateWorldMatrix(true, false);
-            jb.bone.getWorldQuaternion(_tempBoneWorldQuat);
+            if (jb.bone.parent) {
+                jb.bone.parent.updateWorldMatrix(true, false);
+                jb.bone.parent.getWorldQuaternion(_tempBoneWorldQuat);
+                _tempBoneWorldQuat.multiply(restQ);
+            } else {
+                _tempBoneWorldQuat.copy(restQ);
+            }
             _tempCurrentWorldDir.copy(jb.baseLocalDir).applyQuaternion(_tempBoneWorldQuat);
-
-            // Torque mundial = currentWorldDir × (0, -1, 0)
             _tempWorldGravityTorque.crossVectors(_tempCurrentWorldDir, _worldGravity);
-
-            // Proyectar torque mundial a la base local del hueso
             _tempLocalGravityTorque.copy(_tempWorldGravityTorque).applyQuaternion(_tempBoneWorldQuat.clone().invert());
+            const effectiveGravity = isMass ? 0 : gravity;
+            const gravityGain = isMass ? 0 : 35;
+            jb.velocity.x += _tempLocalGravityTorque.x * effectiveGravity * gravityGain * intensity;
+            jb.velocity.y += _tempLocalGravityTorque.y * effectiveGravity * gravityGain * intensity;
+            jb.velocity.z += _tempLocalGravityTorque.z * effectiveGravity * gravityGain * intensity;
 
-            jb.velocity.x += _tempLocalGravityTorque.x * gravity * 35 * intensity;
-            jb.velocity.y += _tempLocalGravityTorque.y * gravity * 35 * intensity;
-            jb.velocity.z += _tempLocalGravityTorque.z * gravity * 35 * intensity;
-
-            // 3. Reacción inercial tridimensional al movimiento angular y lineal del ancla estructural (cabeza, cuello, pelvis)
-            // CRÍTICO: Usar anchorBone (ancestro no-jiggle) en vez de jb.bone.parent para evitar bucles de amplificación en cadenas de pelo
+            // 3. Inercia del ancla
             const targetAnchor = jb.anchorBone || (jb.bone.parent && !jb.bone.parent.userData?.isJiggleBone ? jb.bone.parent : null);
             if (targetAnchor) {
                 targetAnchor.updateWorldMatrix(true, false);
@@ -988,7 +999,6 @@ export class JigglePhysicsSystem {
                     const safeDt = Math.max(Math.min(delta, 0.05), 0.001);
                     const dtFactor = safeDt * 60;
 
-                    // A. Velocidad angular del ancla estructural (Giro de cabeza / cuello del avatar)
                     _tempDeltaQuat.copy(_tempParentWorldQuat).multiply(_tempParentLastInvQuat.copy(jb.lastParentWorldQuat).invert());
                     if (_tempDeltaQuat.w < 0) {
                         _tempDeltaQuat.x = -_tempDeltaQuat.x;
@@ -1002,95 +1012,74 @@ export class JigglePhysicsSystem {
                         (_tempDeltaQuat.y * 2) / safeDt,
                         (_tempDeltaQuat.z * 2) / safeDt
                     );
-                    _tempParentAngVel.clampLength(0, 4.0); // Clamp estricto para evitar latigazos por giros bruscos de cabeza
+                    _tempParentAngVel.clampLength(0, 4.0);
+
+                    const angInertiaScale = isMass ? 0.22 : 0.012;
+                    const linInertiaScale = isMass ? 0.28 : 0.015;
+                    const inertiaGain = isMass ? 55 : 14;
+                    const angDead = isMass ? 0.12 : 0.008;
+                    const linDead = isMass ? 0.25 : 0.004;
 
                     const angVelSq = _tempParentAngVel.lengthSq();
-                    if (angVelSq > 0.008) {
-                        // El torque de inercia opone el giro de la cabeza con escala controlada y suave para pelo largo
-                        const angInertiaScale = 0.012;
+                    if (angVelSq > angDead) {
                         _tempWorldAngInertia.copy(_tempParentAngVel).negate().multiplyScalar(angInertiaScale * intensity);
                         _tempLocalAngInertia.copy(_tempWorldAngInertia).applyQuaternion(_tempBoneWorldQuat.clone().invert());
-
-                        jb.velocity.x += _tempLocalAngInertia.x * 14 * dtFactor;
-                        jb.velocity.y += _tempLocalAngInertia.y * 14 * dtFactor;
-                        jb.velocity.z += _tempLocalAngInertia.z * 14 * dtFactor;
+                        jb.velocity.x += _tempLocalAngInertia.x * inertiaGain * dtFactor;
+                        jb.velocity.y += _tempLocalAngInertia.y * inertiaGain * dtFactor;
+                        jb.velocity.z += _tempLocalAngInertia.z * inertiaGain * dtFactor;
                     }
 
-                    // B. Velocidad lineal del ancla estructural (traslación de la cabeza/caderas en espacio mundial)
                     _tempParentLinVel.subVectors(_tempParentWorldPos, jb.lastParentWorldPos!).multiplyScalar(1 / safeDt);
                     _tempParentLinVel.clampLength(0, 5.0);
-                    if (_tempParentLinVel.lengthSq() > 0.004) {
-                        const linInertiaScale = 0.015;
+                    if (_tempParentLinVel.lengthSq() > linDead) {
                         _tempWorldInertia.copy(_tempParentLinVel).negate().multiplyScalar(linInertiaScale);
                         _tempWorldInertiaTorque.crossVectors(_tempCurrentWorldDir, _tempWorldInertia);
                         _tempLocalInertiaTorque.copy(_tempWorldInertiaTorque).applyQuaternion(_tempBoneWorldQuat.clone().invert());
-
-                        jb.velocity.x += _tempLocalInertiaTorque.x * 14 * dtFactor;
-                        jb.velocity.y += _tempLocalInertiaTorque.y * 14 * dtFactor;
-                        jb.velocity.z += _tempLocalInertiaTorque.z * 14 * dtFactor;
+                        jb.velocity.x += _tempLocalInertiaTorque.x * inertiaGain * dtFactor;
+                        jb.velocity.y += _tempLocalInertiaTorque.y * inertiaGain * dtFactor;
+                        jb.velocity.z += _tempLocalInertiaTorque.z * inertiaGain * dtFactor;
                     }
 
                     jb.lastParentWorldQuat.copy(_tempParentWorldQuat);
                     jb.lastParentWorldPos!.copy(_tempParentWorldPos);
                 }
-            } else if (this.rootVelocity.lengthSq() > 0.0004) {
-                // Fallback para huesos sin ancla directa
-                _tempWorldInertia.copy(this.rootVelocity).negate().multiplyScalar(0.020);
+            } else if (this.rootVelocity.lengthSq() > (isMass ? 0.08 : 0.0004)) {
+                _tempWorldInertia.copy(this.rootVelocity).negate().multiplyScalar(isMass ? 0.12 : 0.020);
                 _tempWorldInertiaTorque.crossVectors(_tempCurrentWorldDir, _tempWorldInertia);
                 _tempLocalInertiaTorque.copy(_tempWorldInertiaTorque).applyQuaternion(_tempBoneWorldQuat.clone().invert());
-
-                jb.velocity.x += _tempLocalInertiaTorque.x * 16 * intensity;
-                jb.velocity.y += _tempLocalInertiaTorque.y * 16 * intensity;
-                jb.velocity.z += _tempLocalInertiaTorque.z * 16 * intensity;
+                jb.velocity.x += _tempLocalInertiaTorque.x * (isMass ? 40 : 16) * intensity;
+                jb.velocity.y += _tempLocalInertiaTorque.y * (isMass ? 40 : 16) * intensity;
+                jb.velocity.z += _tempLocalInertiaTorque.z * (isMass ? 40 : 16) * intensity;
             }
 
-            // 4. Brisa suave y respiración ambiental orgánica (milimétrica, sin sacudidas bruscas)
-            if (time !== undefined) {
+            // 4. Brisa solo en pelo. En pecho/glúteo el viento mueve el cuerpo en idle.
+            if (time !== undefined && jb.type === 'hair') {
                 const dtFactor = Math.min(delta, 0.05) * 60;
-                if (jb.type === 'hair') {
-                    const phase = (jb.bone.id * 1.37) % (Math.PI * 2);
-                    const subtleBreezeX = (Math.sin(time * 1.1 + phase) * 0.0015 + Math.cos(time * 0.5 + phase * 1.4) * 0.0008);
-                    const subtleBreezeZ = (Math.cos(time * 0.8 + phase * 0.9) * 0.0012);
-                    jb.velocity.x += (this.windX * 0.015 + subtleBreezeX) * intensity * dtFactor;
-                    jb.velocity.z += (this.windZ * 0.015 + subtleBreezeZ) * intensity * dtFactor;
-                } else {
-                    jb.velocity.x += this.windX * 0.03 * intensity * dtFactor;
-                    jb.velocity.z += this.windZ * 0.03 * intensity * dtFactor;
-                }
+                const phase = (jb.bone.id * 1.37) % (Math.PI * 2);
+                const subtleBreezeX = (Math.sin(time * 1.1 + phase) * 0.0015 + Math.cos(time * 0.5 + phase * 1.4) * 0.0008);
+                const subtleBreezeZ = (Math.cos(time * 0.8 + phase * 0.9) * 0.0012);
+                jb.velocity.x += (this.windX * 0.015 + subtleBreezeX) * intensity * dtFactor;
+                jb.velocity.z += (this.windZ * 0.015 + subtleBreezeZ) * intensity * dtFactor;
             }
 
-            // 5. Damping (fricción exponencial estable independiente de fps)
+            // 5. Damping
             const dampFactor = Math.pow(damping, delta * 60);
             jb.velocity.multiplyScalar(dampFactor);
+            jb.velocity.clampLength(0, isMass ? 6.0 : 2.5);
 
-            // Limitar velocidad máxima para evitar oscilaciones violentas o latigazos
-            jb.velocity.clampLength(0, 2.5);
+            // 6. Integrar OFFSET y componer pose del clip + jiggle
+            jb.offset.x += jb.velocity.x * delta;
+            jb.offset.y += jb.velocity.y * delta;
+            jb.offset.z += jb.velocity.z * delta;
 
-            // 6. Integración Verlet / Euler semi-implícita en radianes (usando delta real para estabilidad física continua)
-            jb.bone.rotation.x += jb.velocity.x * delta;
-            jb.bone.rotation.y += jb.velocity.y * delta;
-            jb.bone.rotation.z += jb.velocity.z * delta;
-
-            // Límites angulares para evitar deformaciones no deseadas
             const limitAngle = jb.settings?.maxAngle || (Math.PI / 2.2);
-            jb.bone.rotation.x = THREE.MathUtils.clamp(
-                jb.bone.rotation.x,
-                targetRot.x - limitAngle,
-                targetRot.x + limitAngle
-            );
-            jb.bone.rotation.y = THREE.MathUtils.clamp(
-                jb.bone.rotation.y,
-                targetRot.y - limitAngle,
-                targetRot.y + limitAngle
-            );
-            jb.bone.rotation.z = THREE.MathUtils.clamp(
-                jb.bone.rotation.z,
-                targetRot.z - limitAngle,
-                targetRot.z + limitAngle
-            );
+            jb.offset.x = THREE.MathUtils.clamp(jb.offset.x, -limitAngle, limitAngle);
+            jb.offset.y = THREE.MathUtils.clamp(jb.offset.y, -limitAngle, limitAngle);
+            jb.offset.z = THREE.MathUtils.clamp(jb.offset.z, -limitAngle, limitAngle);
 
-            // Sincronizar quaternion con la rotación integrada antes de colisiones
-            jb.bone.quaternion.setFromEuler(jb.bone.rotation);
+            jb.bone.quaternion.copy(restQ);
+            jb.bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(jb.offset));
+            jb.bone.rotation.setFromQuaternion(jb.bone.quaternion);
 
             // ── FASE 2: RESOLUCIÓN DE COLISIONES CON EL CUERPO Y MANOS ──
             if (this.colliders.length > 0) {
@@ -1310,6 +1299,12 @@ export class JigglePhysicsSystem {
                         }
                     }
                 }
+            }
+
+            // Guardar el offset post-colisión para no perderlo el frame siguiente
+            if (jb.offset) {
+                const offQ = restQ.clone().invert().multiply(jb.bone.quaternion);
+                jb.offset.setFromQuaternion(offQ);
             }
         }
     }

@@ -53,7 +53,7 @@ const CUSTOM_CATS_KEY = 'nova_custom_anim_categories';
 const CUSTOM_GESTURE_CATS_KEY = 'nova_custom_gesture_categories';
 
 // --- Error Boundary local para evitar crasheos del motor 3D ---
-class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback: React.ReactNode}, {hasError: boolean}> {
+class ErrorBoundary extends React.Component<{ children: React.ReactNode, fallback: React.ReactNode }, { hasError: boolean }> {
   constructor(props: any) {
     super(props);
     this.state = { hasError: false };
@@ -136,6 +136,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const [boneMapping, setBoneMapping] = useState<BoneMappingResult[]>([]);
   const [boneMappingRaw, setBoneMappingRaw] = useState<Record<string, string>>({});
   const [modelBones, setModelBones] = useState<string[]>([]);
+  const [boneSearch, setBoneSearch] = useState('');
   const [prefResetTrigger, setPrefResetTrigger] = useState(0);
 
   // Estados para Gestos y Vinculación VMD
@@ -154,7 +155,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
   const saveCustomGestureCategories = (cats: CustomCategory[]) => {
     setCustomGestureCategories(cats);
-    try { localStorage.setItem(CUSTOM_GESTURE_CATS_KEY, JSON.stringify(cats)); } catch {}
+    try { localStorage.setItem(CUSTOM_GESTURE_CATS_KEY, JSON.stringify(cats)); } catch { }
   };
 
   const handleAddCustomGestureCategory = () => {
@@ -232,7 +233,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
   const saveCustomCategories = (cats: CustomCategory[]) => {
     setCustomCategories(cats);
-    try { localStorage.setItem(CUSTOM_CATS_KEY, JSON.stringify(cats)); } catch {}
+    try { localStorage.setItem(CUSTOM_CATS_KEY, JSON.stringify(cats)); } catch { }
   };
 
   const handleAddCustomCategory = () => {
@@ -564,7 +565,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
     };
   }, []);
-  const [availableModels, setAvailableModels] = useState<{name: string, url: string, emoji?: string}[]>([]);
+  const [availableModels, setAvailableModels] = useState<{ name: string, url: string, emoji?: string }[]>([]);
   const [jointValues, setJointValues] = useState<Record<string, number>>({
     rightArmX: -80,
     rightElbow: 0,
@@ -595,9 +596,9 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             const emojis = ['🤖', '🦊', '👤', '🎭', '✨', '🌟', '💎', '🎨'];
             const mappedModels = models.map((m: any, i: number) => ({
               ...m,
-              emoji: m.name.toLowerCase().includes('nova') ? '🌸' : 
-                     m.name.toLowerCase().includes('grok') ? '💖' : 
-                     emojis[i % emojis.length]
+              emoji: m.name.toLowerCase().includes('nova') ? '🌸' :
+                m.name.toLowerCase().includes('grok') ? '💖' :
+                  emojis[i % emojis.length]
             }));
             setAvailableModels(mappedModels);
           } else {
@@ -677,7 +678,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       clearTimeout(actionTimeoutRef.current);
       actionTimeoutRef.current = null;
     }
-    
+
     if (!actionId) {
       setActiveAction(null);
       window.dispatchEvent(new CustomEvent('nova-stop-animation'));
@@ -701,20 +702,20 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     const externalAnim = animationStore.get(targetAnimName) || animationStore.get(actionId);
     const isLooping = !!externalAnim?.loop;
     if (externalAnim) {
-      window.dispatchEvent(new CustomEvent('nova-load-animation', { 
-        detail: { 
-          url: externalAnim.url, 
-          name: externalAnim.name, 
-          type: externalAnim.type, 
+      window.dispatchEvent(new CustomEvent('nova-load-animation', {
+        detail: {
+          url: externalAnim.url,
+          name: externalAnim.name,
+          type: externalAnim.type,
           autoplay: true,
           loop: isLooping
-        } 
+        }
       }));
     }
 
     setActiveAction(actionId);
     window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: actionId } }));
-    
+
     // Si no está en bucle y se pasa una duración fija o calculada, restaurar el botón a estado inactivo al terminar
     const animDuration = duration || (externalAnim?.duration ? externalAnim.duration * 1000 : 0);
     if (!isLooping && animDuration && animDuration > 0) {
@@ -841,8 +842,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
           await animationStore.setAudio(animName, audioFile);
         }
 
-        window.dispatchEvent(new CustomEvent('nova-load-animation', { 
-          detail: { url, name: animName, type: ext, autoplay: false } 
+        window.dispatchEvent(new CustomEvent('nova-load-animation', {
+          detail: { url, name: animName, type: ext, autoplay: false }
         }));
 
         let msg = `✅ "${animName}" cargado`;
@@ -1066,7 +1067,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   return (
     <div className="flex flex-col md:flex-row h-full overflow-hidden bg-[#0e0e18]">
       {/* LEFT PANEL - Controles */}
-      <div className="w-full md:w-[340px] lg:w-[380px] shrink-0 bg-[#0e0e18] border-b md:border-b-0 md:border-r border-white/5 flex flex-col overflow-hidden max-h-[45vh] md:max-h-full">
+      <div className="w-full md:w-[360px] lg:w-[420px] shrink-0 bg-[#0e0e18] border-b md:border-b-0 md:border-r border-white/5 flex flex-col overflow-hidden min-h-0 max-h-[50vh] md:max-h-full">
         <div className="px-4 sm:px-5 pt-3 sm:pt-5 pb-2 sm:pb-3">
           <h1 className="text-base sm:text-lg font-bold flex items-center gap-2">
             <span className="material-symbols-outlined text-lg sm:text-xl text-violet-400">theater_comedy</span>
@@ -1074,12 +1075,11 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
           </h1>
         </div>
 
-        <div className="flex px-3 gap-0.5 border-b border-white/5">
+        <div className="flex flex-wrap px-2 gap-0.5 border-b border-white/5">
           {tabs.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex items-center justify-center gap-1 px-2 py-2.5 text-[10px] font-semibold uppercase tracking-wider border-b-2 transition-all ${
-                activeTab === tab.id ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'
-              }`}>
+              className={`flex items-center justify-center gap-1 px-2 py-2 text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider border-b-2 transition-all min-w-[18%] grow ${activeTab === tab.id ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'
+                }`}>
               <span className="material-symbols-outlined text-xs">{tab.icon}</span>
               {tab.label}
               {tab.id === 'animations' && storedAnims.length > 0 && (
@@ -1090,14 +1090,13 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
         </div>
 
         {uploadStatus && (
-          <div className={`mx-3 mt-3 px-3 py-2 rounded-lg text-[10px] font-medium ${
-            uploadStatus.startsWith('✅') ? 'bg-emerald-500/10 text-emerald-400' :
-            uploadStatus.startsWith('❌') ? 'bg-red-500/10 text-red-400' :
-            'bg-blue-500/10 text-blue-400'
-          }`}>{uploadStatus}</div>
+          <div className={`mx-3 mt-3 px-3 py-2 rounded-lg text-[10px] font-medium ${uploadStatus.startsWith('✅') ? 'bg-emerald-500/10 text-emerald-400' :
+              uploadStatus.startsWith('❌') ? 'bg-red-500/10 text-red-400' :
+                'bg-blue-500/10 text-blue-400'
+            }`}>{uploadStatus}</div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar">
 
           {/* ═══ TAB: MODELO ═══ */}
           {activeTab === 'model' && (<>
@@ -1106,11 +1105,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               <div className="grid grid-cols-2 gap-2">
                 {availableModels.map(p => (
                   <button key={p.url} onClick={() => updateAvatar({ modelUrl: p.url })}
-                    className={`p-3 rounded-xl border-2 transition-all text-center group ${
-                      avatar.modelUrl === p.url
+                    className={`p-3 rounded-xl border-2 transition-all text-center group ${avatar.modelUrl === p.url
                         ? 'border-violet-500 bg-violet-500/10 shadow-lg shadow-violet-500/10'
                         : 'border-white/5 bg-white/[0.02] hover:border-white/20'
-                    }`}>
+                      }`}>
                     <span className="text-2xl block mb-1 group-hover:scale-110 transition-transform">{p.emoji || '📦'}</span>
                     <span className={`text-[9px] font-bold block truncate ${avatar.modelUrl === p.url ? 'text-violet-400' : 'text-slate-400'}`}>
                       {p.name}
@@ -1122,9 +1120,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
             <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               onClick={() => modelInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
-                isDragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 hover:border-violet-500/30'
-              }`}>
+              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${isDragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 hover:border-violet-500/30'
+                }`}>
               <span className="material-symbols-outlined text-2xl text-slate-600 mb-1 block">deployed_code</span>
               <p className="text-[10px] text-slate-400">Arrastra modelo .glb / .vrm / .pmx / .zip / .rar / .7z</p>
               <p className="text-[8px] text-slate-500 mt-0.5">Se guarda automáticamente en tu navegador</p>
@@ -1149,11 +1146,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     return (
                       <div
                         key={item.fileName}
-                        className={`flex items-center justify-between p-2 rounded-lg border transition-all ${
-                          isActive
+                        className={`flex items-center justify-between p-2 rounded-lg border transition-all ${isActive
                             ? 'bg-violet-600/20 border-violet-500 text-white shadow-sm'
                             : 'bg-black/20 border-white/5 hover:border-white/20 text-slate-300'
-                        }`}
+                          }`}
                       >
                         <button
                           type="button"
@@ -1225,9 +1221,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 {HAIR_COLORS.map(hc => (
                   <button key={hc.color} onClick={() => updateAvatar({ hairColor: hc.color })}
                     title={hc.name}
-                    className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 ${
-                      avatar.hairColor === hc.color ? 'border-white ring-2 ring-violet-500 shadow-lg' : 'border-transparent'
-                    }`}
+                    className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 ${avatar.hairColor === hc.color ? 'border-white ring-2 ring-violet-500 shadow-lg' : 'border-transparent'
+                      }`}
                     style={{ backgroundColor: hc.color }} />
                 ))}
               </div>
@@ -1262,11 +1257,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <button
                       key={st.id}
                       onClick={() => stageStore.setActiveStage(st.id)}
-                      className={`p-3 rounded-xl border-2 transition-all text-left group relative ${
-                        activeStageId === st.id
+                      className={`p-3 rounded-xl border-2 transition-all text-left group relative ${activeStageId === st.id
                           ? 'border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10'
                           : 'border-white/5 bg-white/[0.02] hover:border-white/20'
-                      }`}
+                        }`}
                     >
                       <span className="text-2xl block mb-1 group-hover:scale-110 transition-transform">{st.icon}</span>
                       <span className={`text-[10px] font-bold block truncate ${activeStageId === st.id ? 'text-cyan-400' : 'text-slate-300'}`}>
@@ -1395,11 +1389,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <button
                       key={cat.id}
                       onClick={() => setClothingCategoryFilter(cat.id)}
-                      className={`px-2.5 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
-                        clothingCategoryFilter === cat.id
+                      className={`px-2.5 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${clothingCategoryFilter === cat.id
                           ? 'bg-violet-600 text-white shadow-sm'
                           : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-                      }`}
+                        }`}
                     >
                       <span>{cat.icon}</span>
                       <span>{cat.label}</span>
@@ -1506,27 +1499,24 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             <div
                               key={item.name}
                               onClick={() => handleToggleClothingItem(item.name, !item.visible)}
-                              className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-all ${
-                                item.visible
+                              className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-all ${item.visible
                                   ? 'bg-violet-950/20 border-violet-500/30 hover:bg-violet-950/30'
                                   : 'bg-black/20 border-white/5 hover:bg-white/[0.02] opacity-60'
-                              }`}
+                                }`}
                             >
                               <div className="flex items-center gap-2.5 overflow-hidden">
                                 {/* Custom Checkbox */}
-                                <div className={`w-4 h-4 rounded flex items-center justify-center transition-all ${
-                                  item.visible
+                                <div className={`w-4 h-4 rounded flex items-center justify-center transition-all ${item.visible
                                     ? 'bg-violet-600 border border-violet-400 text-white shadow-sm shadow-violet-500/50'
                                     : 'border border-slate-600 bg-black/40'
-                                }`}>
+                                  }`}>
                                   {item.visible && <span className="text-[10px] font-black">✓</span>}
                                 </div>
 
                                 {/* Textos */}
                                 <div className="truncate">
-                                  <span className={`text-[10px] font-bold block truncate ${
-                                    item.visible ? 'text-white' : 'text-slate-400'
-                                  }`}>
+                                  <span className={`text-[10px] font-bold block truncate ${item.visible ? 'text-white' : 'text-slate-400'
+                                    }`}>
                                     {item.displayName}
                                   </span>
                                   <span className="text-[8px] text-slate-500 block truncate font-mono">
@@ -1537,11 +1527,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
                               {/* Indicador visual de estado */}
                               <div className="flex items-center gap-1.5 shrink-0 pl-2">
-                                <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium ${
-                                  item.visible
+                                <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium ${item.visible
                                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                                     : 'bg-slate-800 text-slate-500 border border-slate-700/50'
-                                }`}>
+                                  }`}>
                                   {item.visible ? 'Visible' : 'Oculto'}
                                 </span>
                               </div>
@@ -1583,11 +1572,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     return (
                       <div
                         key={slot.id}
-                        className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between ${
-                          overrideAnim
+                        className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between ${overrideAnim
                             ? 'bg-violet-950/20 border-violet-500/40 shadow-sm'
                             : 'bg-black/20 border-white/5 hover:border-white/10'
-                        }`}
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-center gap-2">
@@ -1595,9 +1583,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             <div>
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[10px] font-bold text-white">{slot.label}</span>
-                                <span className={`text-[7px] px-1 py-0.2 rounded font-semibold uppercase ${
-                                  slot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
-                                }`}>
+                                <span className={`text-[7px] px-1 py-0.2 rounded font-semibold uppercase ${slot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                                  }`}>
                                   {slot.group === 'idle' ? 'Reposo' : 'Habla'}
                                 </span>
                               </div>
@@ -1618,9 +1605,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             <>
                               <button
                                 onClick={() => triggerAction(overrideAnim)}
-                                className={`flex-1 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 transition-all ${
-                                  isPlaying ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
-                                }`}
+                                className={`flex-1 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 transition-all ${isPlaying ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
+                                  }`}
                               >
                                 <span className="material-symbols-outlined text-[11px]">
                                   {isPlaying ? 'pause' : 'play_arrow'}
@@ -1683,11 +1669,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   <button
                     key={cat.id}
                     onClick={() => setGestureCategoryFilter(cat.id)}
-                    className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
-                      gestureCategoryFilter === cat.id
+                    className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${gestureCategoryFilter === cat.id
                         ? 'bg-violet-600 text-white shadow-sm'
                         : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-                    }`}
+                      }`}
                   >
                     <span>{cat.icon}</span>
                     <span>{cat.label}</span>
@@ -1781,15 +1766,14 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     return (
                       <div
                         key={g.id}
-                        className={`flex flex-col justify-between p-2.5 rounded-xl border transition-all ${
-                          isPlaying
+                        className={`flex flex-col justify-between p-2.5 rounded-xl border transition-all ${isPlaying
                             ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
                             : overrideName
                               ? 'bg-white/[0.04] border-cyan-500/30 hover:border-cyan-500/50'
                               : isUserCreated
                                 ? 'bg-violet-950/20 border-violet-500/30 hover:border-violet-500/50'
                                 : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
-                        }`}
+                          }`}
                       >
                         <div>
                           {/* Encabezado: Icono, Nombre e ID */}
@@ -1839,11 +1823,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 )}
                               </div>
                             ) : (
-                              <span className={`text-[8px] font-medium px-1.5 py-0.5 rounded inline-block ${
-                                isUserCreated
+                              <span className={`text-[8px] font-medium px-1.5 py-0.5 rounded inline-block ${isUserCreated
                                   ? 'text-cyan-300 bg-cyan-950/60 border border-cyan-500/30'
                                   : 'text-violet-300 bg-violet-950/60 border border-violet-500/30'
-                              }`}>
+                                }`}>
                                 {isUserCreated ? '✨ Creado por Usuario' : '⚡ Procedural'}
                               </span>
                             )}
@@ -1856,11 +1839,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             {/* Botón Probar */}
                             <button
                               onClick={() => triggerAction(g.id, g.defaultDuration ? g.defaultDuration * 1000 : 2500)}
-                              className={`flex-1 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 transition-all ${
-                                isPlaying
+                              className={`flex-1 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 transition-all ${isPlaying
                                   ? 'bg-amber-500 text-black font-extrabold'
                                   : 'bg-white/10 hover:bg-white/20 text-white'
-                              }`}
+                                }`}
                             >
                               <span className="material-symbols-outlined text-[11px]">
                                 {isPlaying ? 'pause' : 'play_arrow'}
@@ -1945,11 +1927,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <button
                       key={cnt}
                       onClick={() => multiVmdManager.setDancerCount(cnt)}
-                      className={`py-1.5 rounded-lg text-[10px] font-bold border transition-all ${
-                        groupState.dancerCount === cnt
+                      className={`py-1.5 rounded-lg text-[10px] font-bold border transition-all ${groupState.dancerCount === cnt
                           ? 'bg-violet-600 border-violet-400 text-white shadow-sm'
                           : 'bg-white/5 border-white/5 text-slate-400 hover:text-white'
-                      }`}
+                        }`}
                     >
                       {cnt} Personajes
                     </button>
@@ -2112,9 +2093,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             {/* Zona de Arrastre de Animaciones Individuales */}
             <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
-                isDragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 hover:border-violet-500/30'
-              }`}>
+              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${isDragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 hover:border-violet-500/30'
+                }`}>
               <span className="material-symbols-outlined text-3xl text-slate-600 mb-1 block">upload_file</span>
               <p className="text-[10px] font-medium text-slate-300">Arrastra animaciones (.vmd, .fbx, .glb), música o cámaras</p>
               <p className="text-[9px] text-slate-500 mt-1">Soporta packs MMD completos (baile + cámara + música) juntos</p>
@@ -2139,11 +2119,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <button
                       key={cat.id}
                       onClick={() => setAnimCategoryFilter(cat.id)}
-                      className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
-                        animCategoryFilter === cat.id
+                      className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${animCategoryFilter === cat.id
                           ? 'bg-violet-600 text-white shadow-sm'
                           : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-                      }`}
+                        }`}
                     >
                       <span>{cat.icon}</span>
                       <span>{cat.label}</span>
@@ -2223,511 +2202,508 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                       if (animCategoryFilter !== 'all' && (anim.category || 'other') !== animCategoryFilter) return false;
                       if (animSearch) {
                         const q = animSearch.toLowerCase();
-                        return anim.name.toLowerCase().includes(q) || 
-                               (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
-                               (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                        return anim.name.toLowerCase().includes(q) ||
+                          (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                          (anim.customTag && anim.customTag.toLowerCase().includes(q));
                       }
                       return true;
                     })
                     .map(anim => (
-                    <div key={anim.name} className="flex flex-col gap-2 p-2.5 rounded-lg bg-white/[0.02] border border-white/5 group hover:border-violet-500/20 transition-all">
-                      <div className="flex items-center justify-between">
-                        <button onClick={() => triggerAction(anim.name)} className="flex items-center gap-2 flex-1 text-left min-w-0">
-                          <span className={`material-symbols-outlined text-xs shrink-0 ${activeAction === anim.name ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
-                            {activeAction === anim.name ? 'pause_circle' : 'play_circle'}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <span className={`text-[11px] font-bold block truncate ${activeAction === anim.name ? 'text-violet-300' : 'text-white'}`}>
-                              {anim.displayName || anim.name}
+                      <div key={anim.name} className="flex flex-col gap-2 p-2.5 rounded-lg bg-white/[0.02] border border-white/5 group hover:border-violet-500/20 transition-all">
+                        <div className="flex items-center justify-between">
+                          <button onClick={() => triggerAction(anim.name)} className="flex items-center gap-2 flex-1 text-left min-w-0">
+                            <span className={`material-symbols-outlined text-xs shrink-0 ${activeAction === anim.name ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
+                              {activeAction === anim.name ? 'pause_circle' : 'play_circle'}
                             </span>
-                            {anim.displayName && (
-                              <span className="text-[8px] text-slate-500 block truncate font-mono">
-                                Archivo: {anim.name}
+                            <div className="min-w-0 flex-1">
+                              <span className={`text-[11px] font-bold block truncate ${activeAction === anim.name ? 'text-violet-300' : 'text-white'}`}>
+                                {anim.displayName || anim.name}
                               </span>
-                            )}
-                            <span className="text-[8px] text-slate-500 block truncate">
-                              {activeAction === anim.name ? '▶ En reproducción (clic para parar)' : `${anim.source} • .${anim.type}`}
-                            </span>
-                          </div>
-                        </button>
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => {
-                            if (activeAction === anim.name) {
-                              triggerAction(anim.name);
-                            }
-                            animationStore.remove(anim.name);
-                          }}
-                            className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all p-1">
-                            <span className="material-symbols-outlined text-xs">delete</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Alias en español y Categoría para resolver nombres chinos */}
-                      <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-white/5">
-                        <div className="flex flex-col gap-0.5">
-                          <label className="text-[8px] font-bold text-slate-400 uppercase">Alias en español:</label>
-                          <input 
-                            type="text" 
-                            placeholder="Ej: Baile Gokuraku" 
-                            defaultValue={anim.displayName || ''}
-                            onBlur={(e) => {
-                              const val = e.target.value.trim();
-                              animationStore.updateMeta(anim.name, { displayName: val || undefined });
-                            }}
-                            className="w-full bg-black/20 border border-white/10 rounded px-2 py-1 text-[9px] text-cyan-200 placeholder:text-slate-600 outline-none focus:border-cyan-400"
-                          />
-                        </div>
-                        <div className="flex flex-col gap-0.5">
-                          <label className="text-[8px] font-bold text-slate-400 uppercase">Categoría:</label>
-                          <select
-                            value={anim.category || 'other'}
-                            onChange={(e) => {
-                              animationStore.updateMeta(anim.name, { category: e.target.value });
-                            }}
-                            className="w-full bg-black/30 border border-white/10 rounded px-1.5 py-1 text-[9px] text-slate-300 outline-none focus:border-violet-500 cursor-pointer"
-                          >
-                            <option value="dance">💃 Baile / MMD</option>
-                            <option value="greeting">👋 Saludos</option>
-                            <option value="reaction">😊 Reacciones</option>
-                            <option value="charm">💖 Coqueta / Sexy</option>
-                            <option value="song">🎵 Canción</option>
-                            <option value="body">🤸 Posturas</option>
-                            <option value="other">📦 Otros</option>
-                            {customCategories.map(cc => (
-                              <option key={cc.id} value={cc.id}>{cc.icon} {cc.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Si está asignada a un gesto */}
-                      {anim.assignedGesture && (
-                        <div className="flex items-center justify-between px-2 py-1 rounded bg-cyan-950/60 border border-cyan-500/30 text-[9px] text-cyan-300">
-                          <span className="flex items-center gap-1 truncate">
-                            <span className="material-symbols-outlined text-[11px] shrink-0">link</span>
-                            <span className="truncate">
-                              Vinculado a: <strong>{gestureRegistry.getGesture(anim.assignedGesture)?.name || anim.assignedGesture}</strong>
-                            </span>
-                          </span>
-                          <button
-                            onClick={() => gestureRegistry.removeGestureOverride(anim.assignedGesture!)}
-                            className="text-slate-400 hover:text-red-400 text-[9px] shrink-0 ml-1"
-                            title="Desvincular del gesto"
-                          >
-                            Desvincular
-                          </button>
-                        </div>
-                      )}
-                      
-                      <div className="flex flex-col gap-1 w-full">
-                        <input 
-                          type="text" 
-                          placeholder="Etiqueta alternativa (ej: baile)" 
-                          defaultValue={anim.customTag || ''}
-                          onBlur={(e) => {
-                            const val = e.target.value.trim().toLowerCase();
-                            animationStore.updateMeta(anim.name, { customTag: val || undefined });
-                          }}
-                          className="w-full bg-black/20 border border-white/10 rounded px-2 py-1 text-[9px] text-slate-300 placeholder:text-slate-600 outline-none focus:border-violet-500"
-                        />
-                        
-                        {/* NUEVO: Botón Auto-Fix A-Pose */}
-                        <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-1.5">
-                          <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
-                            <span>Auto-Calibración</span>
-                            <span className="material-symbols-outlined text-[10px] text-emerald-400">magic_button</span>
-                          </label>
-                          <button
-                            onClick={() => {
-                              const newPreset = anim.posePreset === 'vrm' ? 'none' : 'vrm';
-                              animationStore.updateMeta(anim.name, { posePreset: newPreset });
-                              const isCurrentlyActive = activeAction === anim.name;
-                              // Recargar la animación y reanudar inmediatamente si está activa
-                              window.dispatchEvent(new CustomEvent('nova-load-animation', { 
-                                detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: isCurrentlyActive } 
-                              }));
-                            }}
-                            className={`w-full py-1.5 text-[10px] font-bold tracking-wider rounded-lg border transition-all ${
-                              anim.posePreset === 'vrm' 
-                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/30' 
-                                : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'
-                            }`}
-                          >
-                            {anim.posePreset === 'vrm' ? '🪄 A-POSE (ANIME) APLICADO' : 'APLICAR FIX A-POSE (ANIME)'}
-                          </button>
-                        </div>
-
-                        {/* 🎛️ Ajuste manual de pose (solo Mixamo/FBX) */}
-                        {(anim.type === 'fbx' || anim.type === 'glb') && (
-                          <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-2">
-                            <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
-                              <span>Ajuste Manual de Pose</span>
-                              <span className="material-symbols-outlined text-[10px] text-cyan-400">tune</span>
-                            </label>
-
-                            {/* Helper para crear un slider */}
-                            {([
-                              { key: 'spineTiltX' as keyof BoneOffsets, label: 'Espalda adelante/atrás', min: -60, max: 60, icon: '🫀' },
-                              { key: 'hipTiltX'   as keyof BoneOffsets, label: 'Cadera adelante/atrás', min: -45, max: 45, icon: '🦴' },
-                              { key: 'armDownL'   as keyof BoneOffsets, label: 'Brazo Izq. abajo',      min: -120, max: 120, icon: '💪' },
-                              { key: 'armDownR'   as keyof BoneOffsets, label: 'Brazo Der. abajo',      min: -120, max: 120, icon: '💪' },
-                              { key: 'spineTiltZ' as keyof BoneOffsets, label: 'Inclin. lateral torso', min: -30, max: 30, icon: '↔️' },
-                            ] as { key: keyof BoneOffsets; label: string; min: number; max: number; icon: string }[]).map(({ key, label, min, max, icon }) => {
-                              const val = anim.boneOffsets?.[key] ?? 0;
-                              return (
-                                <div key={key} className="flex flex-col gap-0.5">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[8px] text-slate-400">{icon} {label}</span>
-                                    <span className="text-[8px] font-mono text-cyan-300">{Number(val).toFixed(0)}°</span>
-                                  </div>
-                                  <input
-                                    type="range"
-                                    min={min}
-                                    max={max}
-                                    step={1}
-                                    value={val as number}
-                                    onChange={(e) => {
-                                      const newOffsets: BoneOffsets = { ...(anim.boneOffsets || {}), [key]: Number(e.target.value) };
-                                      animationStore.updateMeta(anim.name, { boneOffsets: newOffsets });
-                                    }}
-                                    onMouseUp={() => {
-                                      // Recargar animación al soltar para aplicar el offset
-                                      window.dispatchEvent(new CustomEvent('nova-load-animation', {
-                                        detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
-                                      }));
-                                    }}
-                                    className="w-full h-1 accent-cyan-400 cursor-pointer"
-                                  />
-                                </div>
-                              );
-                            })}
-
-                            {/* Botón reset */}
-                            {anim.boneOffsets && Object.values(anim.boneOffsets).some(v => v !== 0 && v !== undefined) && (
-                              <button
-                                onClick={() => {
-                                  animationStore.updateMeta(anim.name, { boneOffsets: {} });
-                                  window.dispatchEvent(new CustomEvent('nova-load-animation', {
-                                    detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
-                                  }));
-                                }}
-                                className="w-full py-1 text-[9px] text-slate-500 hover:text-red-400 border border-white/5 hover:border-red-500/30 rounded transition-all"
-                              >
-                                ↺ Resetear ajustes
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {/* 🎵 Sección de Audio Sincronizado por Animación */}
-                        <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className={`material-symbols-outlined text-xs ${anim.audioUrl ? 'text-violet-400' : 'text-slate-600'}`}>
-                              music_note
-                            </span>
-                            {anim.audioFileName ? (
-                              <span className="text-[9px] text-violet-300 font-medium truncate max-w-[130px]" title={anim.audioFileName}>
-                                {anim.audioFileName}
+                              {anim.displayName && (
+                                <span className="text-[8px] text-slate-500 block truncate font-mono">
+                                  Archivo: {anim.name}
+                                </span>
+                              )}
+                              <span className="text-[8px] text-slate-500 block truncate">
+                                {activeAction === anim.name ? '▶ En reproducción (clic para parar)' : `${anim.source} • .${anim.type}`}
                               </span>
-                            ) : (
-                              <span className="text-[8px] text-slate-500">Sin audio</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => handleSelectAudioForAnim(anim.name)}
-                              className="text-[9px] px-2 py-0.5 rounded bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-all flex items-center gap-0.5"
-                              title="Asignar archivo de música (.mp3, .wav, .ogg)"
-                            >
-                              <span className="material-symbols-outlined text-[10px]">upload</span>
-                              {anim.audioFileName ? 'Cambiar' : 'Audio'}
-                            </button>
-                            {anim.audioFileName && (
-                              <button
-                                onClick={() => handleRemoveAudioForAnim(anim.name)}
-                                className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
-                                title="Quitar audio"
-                              >
-                                <span className="material-symbols-outlined text-[11px]">close</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* 🎥 Sección de Cámara Cinemática VMD */}
-                        <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className={`material-symbols-outlined text-xs ${(anim.cameraUrl || anim.hasCamera) ? (anim.useCamera !== false ? 'text-amber-400' : 'text-slate-500') : 'text-slate-600'}`}>
-                              videocam
-                            </span>
-                            <div className="truncate">
-                              {anim.cameraFileName ? (
-                                <span className="text-[9px] text-amber-300 font-medium truncate max-w-[120px] block" title={anim.cameraFileName}>
-                                  {anim.cameraFileName}
-                                </span>
-                              ) : anim.hasCamera ? (
-                                <span className="text-[9px] text-amber-300 font-medium block">Cámara integrada</span>
-                              ) : (
-                                <span className="text-[8px] text-slate-500 block">Sin cámara VMD</span>
-                              )}
                             </div>
-                          </div>
+                          </button>
                           <div className="flex items-center gap-1">
-                            {(anim.cameraUrl || anim.hasCamera) && (
-                              <button
-                                onClick={() => handleToggleCameraForAnim(anim.name)}
-                                className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${
-                                  anim.useCamera !== false
-                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                                    : 'bg-white/5 text-slate-400 border-white/10'
-                                }`}
-                                title={anim.useCamera !== false ? 'Cámara Cinemática Activada (clic para cámara fija/ratón)' : 'Cámara Libre (clic para activar cinemática)'}
-                              >
-                                {anim.useCamera !== false ? 'CINEMÁTICA' : 'LIBRE'}
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleSelectCameraForAnim(anim.name)}
-                              className="text-[9px] px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all flex items-center gap-0.5"
-                              title="Asignar archivo de cámara VMD (.vmd)"
-                            >
-                              <span className="material-symbols-outlined text-[10px]">upload</span>
-                              {anim.cameraFileName ? 'Cambiar' : 'Cámara'}
+                            <button onClick={() => {
+                              if (activeAction === anim.name) {
+                                triggerAction(anim.name);
+                              }
+                              animationStore.remove(anim.name);
+                            }}
+                              className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all p-1">
+                              <span className="material-symbols-outlined text-xs">delete</span>
                             </button>
-                            {anim.cameraFileName && (
-                              <button
-                                onClick={() => handleRemoveCameraForAnim(anim.name)}
-                                className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
-                                title="Quitar cámara"
-                              >
-                                <span className="material-symbols-outlined text-[11px]">close</span>
-                              </button>
-                            )}
                           </div>
                         </div>
 
-                        {/* 🎭 Sección de Expresiones Faciales VMD */}
-                        <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className={`material-symbols-outlined text-xs ${(anim.facialUrl || anim.hasFacial) ? (anim.useFacial !== false ? 'text-emerald-400' : 'text-slate-500') : 'text-slate-600'}`}>
-                              mood
-                            </span>
-                            <div className="truncate">
-                              {anim.facialFileName ? (
-                                <span className="text-[9px] text-emerald-300 font-medium truncate max-w-[120px] block" title={anim.facialFileName}>
-                                  {anim.facialFileName}
-                                </span>
-                              ) : anim.hasFacial ? (
-                                <span className="text-[9px] text-emerald-300 font-medium block">Facial integrada</span>
-                              ) : (
-                                <span className="text-[8px] text-slate-500 block">Sin facial VMD</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {(anim.facialUrl || anim.hasFacial) && (
-                              <button
-                                onClick={() => handleToggleFacialForAnim(anim.name)}
-                                className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${
-                                  anim.useFacial !== false
-                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                                    : 'bg-white/5 text-slate-400 border-white/10'
-                                }`}
-                                title={anim.useFacial !== false ? 'Expresiones Faciales Activadas' : 'Expresiones Faciales Desactivadas'}
-                              >
-                                {anim.useFacial !== false ? 'FACIAL' : 'OFF'}
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleSelectFacialForAnim(anim.name)}
-                              className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition-all flex items-center gap-0.5"
-                              title="Asignar archivo de expresiones faciales VMD (.vmd)"
-                            >
-                              <span className="material-symbols-outlined text-[10px]">upload</span>
-                              {anim.facialFileName ? 'Cambiar' : 'Facial'}
-                            </button>
-                            {anim.facialFileName && (
-                              <button
-                                onClick={() => handleRemoveFacialForAnim(anim.name)}
-                                className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
-                                title="Quitar facial"
-                              >
-                                <span className="material-symbols-outlined text-[11px]">close</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* 🔁 Sección Bucle Continuo & 🎥 Cámara por Defecto */}
-                        <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between gap-2">
-                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                        {/* Alias en español y Categoría para resolver nombres chinos */}
+                        <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-white/5">
+                          <div className="flex flex-col gap-0.5">
+                            <label className="text-[8px] font-bold text-slate-400 uppercase">Alias en español:</label>
                             <input
-                              type="checkbox"
-                              checked={!!anim.loop}
-                              onChange={(e) => {
-                                const isLoop = e.target.checked;
-                                animationStore.updateMeta(anim.name, { loop: isLoop });
-                                if (activeAction === anim.name) {
-                                  // Re-disparar con el nuevo modo de bucle si está sonando ahora
-                                  triggerAction(anim.name);
-                                }
+                              type="text"
+                              placeholder="Ej: Baile Gokuraku"
+                              defaultValue={anim.displayName || ''}
+                              onBlur={(e) => {
+                                const val = e.target.value.trim();
+                                animationStore.updateMeta(anim.name, { displayName: val || undefined });
                               }}
-                              className="w-3.5 h-3.5 rounded border-white/20 bg-black/40 text-violet-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-violet-500"
+                              className="w-full bg-black/20 border border-white/10 rounded px-2 py-1 text-[9px] text-cyan-200 placeholder:text-slate-600 outline-none focus:border-cyan-400"
                             />
-                            <span className="text-[9px] font-bold text-slate-300 flex items-center gap-1">
-                              <span>🔁</span>
-                              <span className={anim.loop ? 'text-violet-300' : 'text-slate-400'}>
-                                {anim.loop ? 'Bucle infinito' : '1 sola vez'}
-                              </span>
-                            </span>
-                          </label>
-
-                          <div className="flex items-center gap-1">
-                            <span className="text-[8px] font-bold text-slate-500 uppercase">Cámara:</span>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <label className="text-[8px] font-bold text-slate-400 uppercase">Categoría:</label>
                             <select
-                              value={anim.cameraMode || (anim.hasCamera || anim.cameraUrl ? 'vmd' : 'dynamic')}
+                              value={anim.category || 'other'}
                               onChange={(e) => {
-                                const mode = e.target.value as any;
-                                animationStore.updateMeta(anim.name, { cameraMode: mode });
-                                window.dispatchEvent(new CustomEvent('nova-camera-preset', {
-                                  detail: { preset: mode }
-                                }));
+                                animationStore.updateMeta(anim.name, { category: e.target.value });
                               }}
-                              className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[8px] font-semibold text-cyan-300 outline-none focus:border-cyan-400 cursor-pointer"
-                              title="Cámara al reproducir si no tiene VMD cinemático"
+                              className="w-full bg-black/30 border border-white/10 rounded px-1.5 py-1 text-[9px] text-slate-300 outline-none focus:border-violet-500 cursor-pointer"
                             >
-                              <option value="dynamic">🎬 Dinámica (Orbital)</option>
-                              <option value="default">📐 Frontal</option>
-                              <option value="face">👤 Rostro</option>
-                              <option value="full">🧍 Cuerpo entero</option>
-                              <option value="free">🖱️ Libre (Ratón)</option>
+                              <option value="dance">💃 Baile / MMD</option>
+                              <option value="greeting">👋 Saludos</option>
+                              <option value="reaction">😊 Reacciones</option>
+                              <option value="charm">💖 Coqueta / Sexy</option>
+                              <option value="song">🎵 Canción</option>
+                              <option value="body">🤸 Posturas</option>
+                              <option value="other">📦 Otros</option>
+                              {customCategories.map(cc => (
+                                <option key={cc.id} value={cc.id}>{cc.icon} {cc.label}</option>
+                              ))}
                             </select>
                           </div>
                         </div>
 
-                        {/* 👥 SECCIÓN: BAILARINES EXTRA / COREOGRAFÍA GRUPAL (2-5 PERSONAJES) */}
-                        <div className="pt-2.5 mt-1 border-t border-violet-500/20 bg-violet-950/20 rounded-xl p-2.5 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs">👥</span>
-                              <div>
-                                <span className="text-[10px] font-bold text-violet-200 block">
-                                  Bailarines del Grupo ({1 + (anim.extraMotions?.length || 0)}/5)
-                                </span>
-                                <span className="text-[7px] text-slate-400 block">
-                                  Clona a Nova para acompañar en puestos laterales (Dúo, Trío, etc.)
-                                </span>
-                              </div>
-                            </div>
-                            
-                            {/* Selector rápido para añadir bailarines */}
-                            {(!anim.extraMotions || anim.extraMotions.length < 4) && (
-                              <div className="flex items-center gap-1">
-                                {[
-                                  { id: 'dancer_2', name: 'Bailarín 2', role: 'Izquierda', offsetX: -1.8, offsetZ: 0 },
-                                  { id: 'dancer_3', name: 'Bailarín 3', role: 'Derecha', offsetX: 1.8, offsetZ: 0 },
-                                  { id: 'dancer_4', name: 'Bailarín 4', role: 'Extremo Izq.', offsetX: -3.6, offsetZ: -0.3 },
-                                  { id: 'dancer_5', name: 'Bailarín 5', role: 'Extremo Der.', offsetX: 3.6, offsetZ: -0.3 },
-                                ]
-                                  .filter(candidate => !anim.extraMotions?.some(m => m.id === candidate.id))
-                                  .slice(0, 1) // Agregar el siguiente bailarín en orden
-                                  .map(candidate => (
-                                    <button
-                                      key={candidate.id}
-                                      type="button"
-                                      onClick={() => {
-                                        setPickingLibraryForExtra({
-                                          animName: anim.name,
-                                          dancerId: candidate.id,
-                                          name: candidate.name,
-                                          role: candidate.role,
-                                          offsetX: candidate.offsetX,
-                                          offsetZ: candidate.offsetZ
-                                        });
-                                      }}
-                                      className="px-2 py-1 rounded-lg bg-violet-600/40 hover:bg-violet-600/60 border border-violet-400/40 text-violet-200 text-[8px] font-bold flex items-center gap-1 transition-all"
-                                      title={`Añadir ${candidate.name} (${candidate.role})`}
-                                    >
-                                      <span>+</span>
-                                      <span>{candidate.name} ({candidate.role})</span>
-                                    </button>
-                                  ))}
-                              </div>
-                            )}
+                        {/* Si está asignada a un gesto */}
+                        {anim.assignedGesture && (
+                          <div className="flex items-center justify-between px-2 py-1 rounded bg-cyan-950/60 border border-cyan-500/30 text-[9px] text-cyan-300">
+                            <span className="flex items-center gap-1 truncate">
+                              <span className="material-symbols-outlined text-[11px] shrink-0">link</span>
+                              <span className="truncate">
+                                Vinculado a: <strong>{gestureRegistry.getGesture(anim.assignedGesture)?.name || anim.assignedGesture}</strong>
+                              </span>
+                            </span>
+                            <button
+                              onClick={() => gestureRegistry.removeGestureOverride(anim.assignedGesture!)}
+                              className="text-slate-400 hover:text-red-400 text-[9px] shrink-0 ml-1"
+                              title="Desvincular del gesto"
+                            >
+                              Desvincular
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="flex flex-col gap-1 w-full">
+                          <input
+                            type="text"
+                            placeholder="Etiqueta alternativa (ej: baile)"
+                            defaultValue={anim.customTag || ''}
+                            onBlur={(e) => {
+                              const val = e.target.value.trim().toLowerCase();
+                              animationStore.updateMeta(anim.name, { customTag: val || undefined });
+                            }}
+                            className="w-full bg-black/20 border border-white/10 rounded px-2 py-1 text-[9px] text-slate-300 placeholder:text-slate-600 outline-none focus:border-violet-500"
+                          />
+
+                          {/* NUEVO: Botón Auto-Fix A-Pose */}
+                          <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-1.5">
+                            <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                              <span>Auto-Calibración</span>
+                              <span className="material-symbols-outlined text-[10px] text-emerald-400">magic_button</span>
+                            </label>
+                            <button
+                              onClick={() => {
+                                const newPreset = anim.posePreset === 'vrm' ? 'none' : 'vrm';
+                                animationStore.updateMeta(anim.name, { posePreset: newPreset });
+                                const isCurrentlyActive = activeAction === anim.name;
+                                // Recargar la animación y reanudar inmediatamente si está activa
+                                window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                                  detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: isCurrentlyActive }
+                                }));
+                              }}
+                              className={`w-full py-1.5 text-[10px] font-bold tracking-wider rounded-lg border transition-all ${anim.posePreset === 'vrm'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/30'
+                                  : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'
+                                }`}
+                            >
+                              {anim.posePreset === 'vrm' ? '🪄 A-POSE (ANIME) APLICADO' : 'APLICAR FIX A-POSE (ANIME)'}
+                            </button>
                           </div>
 
-                          {/* Lista de bailarines extra ya asignados a este baile */}
-                          {anim.extraMotions && anim.extraMotions.length > 0 && (
-                            <div className="space-y-1.5 pt-1">
-                              {anim.extraMotions.map(dancer => (
-                                <div
-                                  key={dancer.id}
-                                  className="p-2 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between gap-2"
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[9px] font-bold text-white truncate">
-                                        {dancer.name}
-                                      </span>
-                                      <span className="text-[7px] px-1.5 py-0.2 rounded bg-violet-500/20 text-violet-300 font-bold border border-violet-500/30">
-                                        {dancer.role} (X: {dancer.defaultOffsetX}m)
-                                      </span>
-                                    </div>
-                                    <span className="text-[8px] text-cyan-300 block truncate mt-0.5" title={dancer.vmdFileName}>
-                                      Motion: {dancer.vmdFileName || '(Sin archivo)'}
-                                    </span>
-                                  </div>
+                          {/* 🎛️ Ajuste manual de pose (solo Mixamo/FBX) */}
+                          {(anim.type === 'fbx' || anim.type === 'glb') && (
+                            <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-2">
+                              <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                                <span>Ajuste Manual de Pose</span>
+                                <span className="material-symbols-outlined text-[10px] text-cyan-400">tune</span>
+                              </label>
 
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setPickingLibraryForExtra({
-                                          animName: anim.name,
-                                          dancerId: dancer.id,
-                                          name: dancer.name,
-                                          role: dancer.role,
-                                          offsetX: dancer.defaultOffsetX,
-                                          offsetZ: dancer.defaultOffsetZ
-                                        });
+                              {/* Helper para crear un slider */}
+                              {([
+                                { key: 'spineTiltX' as keyof BoneOffsets, label: 'Espalda adelante/atrás', min: -60, max: 60, icon: '🫀' },
+                                { key: 'hipTiltX' as keyof BoneOffsets, label: 'Cadera adelante/atrás', min: -45, max: 45, icon: '🦴' },
+                                { key: 'armDownL' as keyof BoneOffsets, label: 'Brazo Izq. abajo', min: -120, max: 120, icon: '💪' },
+                                { key: 'armDownR' as keyof BoneOffsets, label: 'Brazo Der. abajo', min: -120, max: 120, icon: '💪' },
+                                { key: 'spineTiltZ' as keyof BoneOffsets, label: 'Inclin. lateral torso', min: -30, max: 30, icon: '↔️' },
+                              ] as { key: keyof BoneOffsets; label: string; min: number; max: number; icon: string }[]).map(({ key, label, min, max, icon }) => {
+                                const val = anim.boneOffsets?.[key] ?? 0;
+                                return (
+                                  <div key={key} className="flex flex-col gap-0.5">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[8px] text-slate-400">{icon} {label}</span>
+                                      <span className="text-[8px] font-mono text-cyan-300">{Number(val).toFixed(0)}°</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={min}
+                                      max={max}
+                                      step={1}
+                                      value={val as number}
+                                      onChange={(e) => {
+                                        const newOffsets: BoneOffsets = { ...(anim.boneOffsets || {}), [key]: Number(e.target.value) };
+                                        animationStore.updateMeta(anim.name, { boneOffsets: newOffsets });
                                       }}
-                                      className="px-2 py-0.5 rounded bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-200 text-[8px] font-bold transition-all flex items-center gap-0.5"
-                                      title="Cambiar motion seleccionando de tus 200 bailes"
-                                    >
-                                      <span>📂</span> Biblioteca
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSelectExtraMotionFile(anim.name, dancer.id, dancer.name, dancer.role, dancer.defaultOffsetX, dancer.defaultOffsetZ)}
-                                      className="px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white text-[8px] transition-all"
-                                      title="Subir archivo .vmd para este bailarín"
-                                    >
-                                      ⬆️
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveExtraMotion(anim.name, dancer.id)}
-                                      className="text-slate-500 hover:text-red-400 p-1 text-xs transition-colors"
-                                      title="Eliminar este bailarín del baile"
-                                    >
-                                      ✕
-                                    </button>
+                                      onMouseUp={() => {
+                                        // Recargar animación al soltar para aplicar el offset
+                                        window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                                          detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
+                                        }));
+                                      }}
+                                      className="w-full h-1 accent-cyan-400 cursor-pointer"
+                                    />
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
+
+                              {/* Botón reset */}
+                              {anim.boneOffsets && Object.values(anim.boneOffsets).some(v => v !== 0 && v !== undefined) && (
+                                <button
+                                  onClick={() => {
+                                    animationStore.updateMeta(anim.name, { boneOffsets: {} });
+                                    window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                                      detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
+                                    }));
+                                  }}
+                                  className="w-full py-1 text-[9px] text-slate-500 hover:text-red-400 border border-white/5 hover:border-red-500/30 rounded transition-all"
+                                >
+                                  ↺ Resetear ajustes
+                                </button>
+                              )}
                             </div>
                           )}
 
-                          {(!anim.extraMotions || anim.extraMotions.length === 0) && (
-                            <p className="text-[8px] text-slate-500 italic">
-                              Baile en solitario (1 avatar). Pulsa el botón superior para agregar un bailarín al lado.
-                            </p>
-                          )}
+                          {/* 🎵 Sección de Audio Sincronizado por Animación */}
+                          <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 overflow-hidden">
+                              <span className={`material-symbols-outlined text-xs ${anim.audioUrl ? 'text-violet-400' : 'text-slate-600'}`}>
+                                music_note
+                              </span>
+                              {anim.audioFileName ? (
+                                <span className="text-[9px] text-violet-300 font-medium truncate max-w-[130px]" title={anim.audioFileName}>
+                                  {anim.audioFileName}
+                                </span>
+                              ) : (
+                                <span className="text-[8px] text-slate-500">Sin audio</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleSelectAudioForAnim(anim.name)}
+                                className="text-[9px] px-2 py-0.5 rounded bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 transition-all flex items-center gap-0.5"
+                                title="Asignar archivo de música (.mp3, .wav, .ogg)"
+                              >
+                                <span className="material-symbols-outlined text-[10px]">upload</span>
+                                {anim.audioFileName ? 'Cambiar' : 'Audio'}
+                              </button>
+                              {anim.audioFileName && (
+                                <button
+                                  onClick={() => handleRemoveAudioForAnim(anim.name)}
+                                  className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
+                                  title="Quitar audio"
+                                >
+                                  <span className="material-symbols-outlined text-[11px]">close</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 🎥 Sección de Cámara Cinemática VMD */}
+                          <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 overflow-hidden">
+                              <span className={`material-symbols-outlined text-xs ${(anim.cameraUrl || anim.hasCamera) ? (anim.useCamera !== false ? 'text-amber-400' : 'text-slate-500') : 'text-slate-600'}`}>
+                                videocam
+                              </span>
+                              <div className="truncate">
+                                {anim.cameraFileName ? (
+                                  <span className="text-[9px] text-amber-300 font-medium truncate max-w-[120px] block" title={anim.cameraFileName}>
+                                    {anim.cameraFileName}
+                                  </span>
+                                ) : anim.hasCamera ? (
+                                  <span className="text-[9px] text-amber-300 font-medium block">Cámara integrada</span>
+                                ) : (
+                                  <span className="text-[8px] text-slate-500 block">Sin cámara VMD</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {(anim.cameraUrl || anim.hasCamera) && (
+                                <button
+                                  onClick={() => handleToggleCameraForAnim(anim.name)}
+                                  className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${anim.useCamera !== false
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                                      : 'bg-white/5 text-slate-400 border-white/10'
+                                    }`}
+                                  title={anim.useCamera !== false ? 'Cámara Cinemática Activada (clic para cámara fija/ratón)' : 'Cámara Libre (clic para activar cinemática)'}
+                                >
+                                  {anim.useCamera !== false ? 'CINEMÁTICA' : 'LIBRE'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleSelectCameraForAnim(anim.name)}
+                                className="text-[9px] px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all flex items-center gap-0.5"
+                                title="Asignar archivo de cámara VMD (.vmd)"
+                              >
+                                <span className="material-symbols-outlined text-[10px]">upload</span>
+                                {anim.cameraFileName ? 'Cambiar' : 'Cámara'}
+                              </button>
+                              {anim.cameraFileName && (
+                                <button
+                                  onClick={() => handleRemoveCameraForAnim(anim.name)}
+                                  className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
+                                  title="Quitar cámara"
+                                >
+                                  <span className="material-symbols-outlined text-[11px]">close</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 🎭 Sección de Expresiones Faciales VMD */}
+                          <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 overflow-hidden">
+                              <span className={`material-symbols-outlined text-xs ${(anim.facialUrl || anim.hasFacial) ? (anim.useFacial !== false ? 'text-emerald-400' : 'text-slate-500') : 'text-slate-600'}`}>
+                                mood
+                              </span>
+                              <div className="truncate">
+                                {anim.facialFileName ? (
+                                  <span className="text-[9px] text-emerald-300 font-medium truncate max-w-[120px] block" title={anim.facialFileName}>
+                                    {anim.facialFileName}
+                                  </span>
+                                ) : anim.hasFacial ? (
+                                  <span className="text-[9px] text-emerald-300 font-medium block">Facial integrada</span>
+                                ) : (
+                                  <span className="text-[8px] text-slate-500 block">Sin facial VMD</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {(anim.facialUrl || anim.hasFacial) && (
+                                <button
+                                  onClick={() => handleToggleFacialForAnim(anim.name)}
+                                  className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${anim.useFacial !== false
+                                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                                      : 'bg-white/5 text-slate-400 border-white/10'
+                                    }`}
+                                  title={anim.useFacial !== false ? 'Expresiones Faciales Activadas' : 'Expresiones Faciales Desactivadas'}
+                                >
+                                  {anim.useFacial !== false ? 'FACIAL' : 'OFF'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleSelectFacialForAnim(anim.name)}
+                                className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition-all flex items-center gap-0.5"
+                                title="Asignar archivo de expresiones faciales VMD (.vmd)"
+                              >
+                                <span className="material-symbols-outlined text-[10px]">upload</span>
+                                {anim.facialFileName ? 'Cambiar' : 'Facial'}
+                              </button>
+                              {anim.facialFileName && (
+                                <button
+                                  onClick={() => handleRemoveFacialForAnim(anim.name)}
+                                  className="text-[9px] p-0.5 text-slate-500 hover:text-red-400 transition-colors"
+                                  title="Quitar facial"
+                                >
+                                  <span className="material-symbols-outlined text-[11px]">close</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 🔁 Sección Bucle Continuo & 🎥 Cámara por Defecto */}
+                          <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between gap-2">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={!!anim.loop}
+                                onChange={(e) => {
+                                  const isLoop = e.target.checked;
+                                  animationStore.updateMeta(anim.name, { loop: isLoop });
+                                  if (activeAction === anim.name) {
+                                    // Re-disparar con el nuevo modo de bucle si está sonando ahora
+                                    triggerAction(anim.name);
+                                  }
+                                }}
+                                className="w-3.5 h-3.5 rounded border-white/20 bg-black/40 text-violet-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-violet-500"
+                              />
+                              <span className="text-[9px] font-bold text-slate-300 flex items-center gap-1">
+                                <span>🔁</span>
+                                <span className={anim.loop ? 'text-violet-300' : 'text-slate-400'}>
+                                  {anim.loop ? 'Bucle infinito' : '1 sola vez'}
+                                </span>
+                              </span>
+                            </label>
+
+                            <div className="flex items-center gap-1">
+                              <span className="text-[8px] font-bold text-slate-500 uppercase">Cámara:</span>
+                              <select
+                                value={anim.cameraMode || (anim.hasCamera || anim.cameraUrl ? 'vmd' : 'dynamic')}
+                                onChange={(e) => {
+                                  const mode = e.target.value as any;
+                                  animationStore.updateMeta(anim.name, { cameraMode: mode });
+                                  window.dispatchEvent(new CustomEvent('nova-camera-preset', {
+                                    detail: { preset: mode }
+                                  }));
+                                }}
+                                className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[8px] font-semibold text-cyan-300 outline-none focus:border-cyan-400 cursor-pointer"
+                                title="Cámara al reproducir si no tiene VMD cinemático"
+                              >
+                                <option value="dynamic">🎬 Dinámica (Orbital)</option>
+                                <option value="default">📐 Frontal</option>
+                                <option value="face">👤 Rostro</option>
+                                <option value="full">🧍 Cuerpo entero</option>
+                                <option value="free">🖱️ Libre (Ratón)</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* 👥 SECCIÓN: BAILARINES EXTRA / COREOGRAFÍA GRUPAL (2-5 PERSONAJES) */}
+                          <div className="pt-2.5 mt-1 border-t border-violet-500/20 bg-violet-950/20 rounded-xl p-2.5 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs">👥</span>
+                                <div>
+                                  <span className="text-[10px] font-bold text-violet-200 block">
+                                    Bailarines del Grupo ({1 + (anim.extraMotions?.length || 0)}/5)
+                                  </span>
+                                  <span className="text-[7px] text-slate-400 block">
+                                    Clona a Nova para acompañar en puestos laterales (Dúo, Trío, etc.)
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Selector rápido para añadir bailarines */}
+                              {(!anim.extraMotions || anim.extraMotions.length < 4) && (
+                                <div className="flex items-center gap-1">
+                                  {[
+                                    { id: 'dancer_2', name: 'Bailarín 2', role: 'Izquierda', offsetX: -1.8, offsetZ: 0 },
+                                    { id: 'dancer_3', name: 'Bailarín 3', role: 'Derecha', offsetX: 1.8, offsetZ: 0 },
+                                    { id: 'dancer_4', name: 'Bailarín 4', role: 'Extremo Izq.', offsetX: -3.6, offsetZ: -0.3 },
+                                    { id: 'dancer_5', name: 'Bailarín 5', role: 'Extremo Der.', offsetX: 3.6, offsetZ: -0.3 },
+                                  ]
+                                    .filter(candidate => !anim.extraMotions?.some(m => m.id === candidate.id))
+                                    .slice(0, 1) // Agregar el siguiente bailarín en orden
+                                    .map(candidate => (
+                                      <button
+                                        key={candidate.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setPickingLibraryForExtra({
+                                            animName: anim.name,
+                                            dancerId: candidate.id,
+                                            name: candidate.name,
+                                            role: candidate.role,
+                                            offsetX: candidate.offsetX,
+                                            offsetZ: candidate.offsetZ
+                                          });
+                                        }}
+                                        className="px-2 py-1 rounded-lg bg-violet-600/40 hover:bg-violet-600/60 border border-violet-400/40 text-violet-200 text-[8px] font-bold flex items-center gap-1 transition-all"
+                                        title={`Añadir ${candidate.name} (${candidate.role})`}
+                                      >
+                                        <span>+</span>
+                                        <span>{candidate.name} ({candidate.role})</span>
+                                      </button>
+                                    ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Lista de bailarines extra ya asignados a este baile */}
+                            {anim.extraMotions && anim.extraMotions.length > 0 && (
+                              <div className="space-y-1.5 pt-1">
+                                {anim.extraMotions.map(dancer => (
+                                  <div
+                                    key={dancer.id}
+                                    className="p-2 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between gap-2"
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[9px] font-bold text-white truncate">
+                                          {dancer.name}
+                                        </span>
+                                        <span className="text-[7px] px-1.5 py-0.2 rounded bg-violet-500/20 text-violet-300 font-bold border border-violet-500/30">
+                                          {dancer.role} (X: {dancer.defaultOffsetX}m)
+                                        </span>
+                                      </div>
+                                      <span className="text-[8px] text-cyan-300 block truncate mt-0.5" title={dancer.vmdFileName}>
+                                        Motion: {dancer.vmdFileName || '(Sin archivo)'}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPickingLibraryForExtra({
+                                            animName: anim.name,
+                                            dancerId: dancer.id,
+                                            name: dancer.name,
+                                            role: dancer.role,
+                                            offsetX: dancer.defaultOffsetX,
+                                            offsetZ: dancer.defaultOffsetZ
+                                          });
+                                        }}
+                                        className="px-2 py-0.5 rounded bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-200 text-[8px] font-bold transition-all flex items-center gap-0.5"
+                                        title="Cambiar motion seleccionando de tus 200 bailes"
+                                      >
+                                        <span>📂</span> Biblioteca
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSelectExtraMotionFile(anim.name, dancer.id, dancer.name, dancer.role, dancer.defaultOffsetX, dancer.defaultOffsetZ)}
+                                        className="px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white text-[8px] transition-all"
+                                        title="Subir archivo .vmd para este bailarín"
+                                      >
+                                        ⬆️
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveExtraMotion(anim.name, dancer.id)}
+                                        className="text-slate-500 hover:text-red-400 p-1 text-xs transition-colors"
+                                        title="Eliminar este bailarín del baile"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {(!anim.extraMotions || anim.extraMotions.length === 0) && (
+                              <p className="text-[8px] text-slate-500 italic">
+                                Baile en solitario (1 avatar). Pulsa el botón superior para agregar un bailarín al lado.
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </div>
             )}
@@ -2865,7 +2841,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <span>2. Altura de suelo (Ajuste fino)</span>
                     <span className="text-cyan-300 font-bold font-mono">
                       {((Math.abs(legCalibration.groundY || 0) >= 0.8 ? 0.0 : (legCalibration.groundY || 0)) >= 0 ? '+' : '') +
-                       (Math.abs(legCalibration.groundY || 0) >= 0.8 ? 0.0 : (legCalibration.groundY || 0)).toFixed(2)}m (0 = Suelo natural)
+                        (Math.abs(legCalibration.groundY || 0) >= 0.8 ? 0.0 : (legCalibration.groundY || 0)).toFixed(2)}m (0 = Suelo natural)
                     </span>
                   </div>
                   <input
@@ -2887,7 +2863,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 {/* 3. Offsets pie L / R */}
                 <div className="space-y-1.5 p-2 bg-black/20 rounded-lg border border-white/5">
                   <span className="font-bold text-slate-400 block text-[9px]">3. Offset de Pies (Lateral y Frente/Atrás)</span>
-                  
+
                   {/* Pie Izquierdo */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -3086,7 +3062,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 <span className="material-symbols-outlined text-xs">tune</span>
                 Mando de Pruebas Articulares (QA Manual)
               </label>
-              
+
               <div className="space-y-3 text-[10px]">
                 {/* Brazo Derecho */}
                 <div className="space-y-1">
@@ -3244,12 +3220,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1.5">Huesos Principales</label>
                 <div className="space-y-1">
                   {boneMapping.filter(b => b.priority >= 7).map(b => (
-                    <div key={b.mixamoBone} className={`flex items-center gap-2 p-1.5 rounded text-[9px] ${
-                      b.targetBone ? 'bg-emerald-500/5' : 'bg-red-500/5'
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                        b.confidence > 0.7 ? 'bg-emerald-400' : b.confidence > 0.3 ? 'bg-yellow-400' : 'bg-red-400'
-                      }`}></span>
+                    <div key={b.mixamoBone} className={`flex items-center gap-2 p-1.5 rounded text-[9px] ${b.targetBone ? 'bg-emerald-500/5' : 'bg-red-500/5'
+                      }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.confidence > 0.7 ? 'bg-emerald-400' : b.confidence > 0.3 ? 'bg-yellow-400' : 'bg-red-400'
+                        }`}></span>
                       <span className="text-slate-400 w-[120px] shrink-0 truncate" title={b.mixamoBone}>
                         {b.mixamoBone.replace('mixamorig', '')}
                       </span>
@@ -3271,9 +3245,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 <div className="space-y-0.5 mt-1.5">
                   {boneMapping.filter(b => b.priority < 7).map(b => (
                     <div key={b.mixamoBone} className="flex items-center gap-1.5 px-1 text-[8px]">
-                      <span className={`w-1 h-1 rounded-full shrink-0 ${
-                        b.targetBone ? 'bg-emerald-400/50' : 'bg-slate-600'
-                      }`}></span>
+                      <span className={`w-1 h-1 rounded-full shrink-0 ${b.targetBone ? 'bg-emerald-400/50' : 'bg-slate-600'
+                        }`}></span>
                       <span className="text-slate-500 truncate">{b.mixamoBone.replace('mixamorig', '')}</span>
                       <span className="text-slate-700">→</span>
                       <span className="text-slate-400 truncate font-mono">{b.targetBone || '—'}</span>
@@ -3290,29 +3263,53 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               </div>
             </>)}
 
-            {/* Todos los huesos del modelo */}
+            {/* Todos los huesos del modelo — lista completa con scroll y buscador */}
             {modelBones.length > 0 && (
-              <details className="group" open={boneMapping.filter(b => b.targetBone).length === 0}>
-                <summary className="text-[9px] font-bold text-orange-400/70 uppercase cursor-pointer hover:text-orange-300 transition-colors">
-                  🦴 Huesos del Modelo ({modelBones.filter(b => !b.startsWith('MCH-') && !b.startsWith('VIS_')).length} relevantes / {modelBones.length} total)
-                  <span className="text-slate-600 ml-1">▼</span>
-                </summary>
-                <div className="mt-1.5 p-2 bg-black/30 rounded-lg max-h-64 overflow-y-auto custom-scrollbar">
+              <div className="bg-white/[0.02] border border-orange-500/20 rounded-xl p-3 space-y-2">
+                <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block">
+                  🦴 Huesos del Modelo ({modelBones.length})
+                </label>
+                <input
+                  type="search"
+                  value={boneSearch}
+                  onChange={(e) => setBoneSearch(e.target.value)}
+                  placeholder="Buscar: 尻 胸 siri butt hip…"
+                  className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-slate-200 placeholder:text-slate-600 outline-none focus:border-orange-400/50"
+                />
+                <p className="text-[8px] text-slate-500">Rosa = pecho · Violeta = culo · Copia el nombre exacto si el culo no se mueve.</p>
+                <div className="p-2 bg-black/40 rounded-lg max-h-[min(50vh,28rem)] overflow-y-auto overflow-x-hidden custom-scrollbar">
                   <div className="flex flex-wrap gap-1">
                     {modelBones
-                      .filter(b => !b.startsWith('MCH-') && !b.startsWith('VIS_') && !b.startsWith('VIS-') && !b.includes('tweak') && !b.includes('_parent'))
-                      .slice(0, 200)
-                      .map(bone => (
-                        <span key={bone} className={`px-1.5 py-0.5 rounded text-[7px] font-mono ${
-                          bone.startsWith('DEF-') ? 'bg-emerald-500/10 text-emerald-400' :
-                          bone.includes('J_Bip') ? 'bg-blue-500/10 text-blue-400' :
-                          bone.startsWith('ORG-') ? 'bg-red-500/10 text-red-400/50' :
-                          'bg-slate-500/10 text-slate-400'
-                        }`}>{bone}</span>
-                      ))}
+                      .filter(b => {
+                        const q = boneSearch.trim().toLowerCase();
+                        return !q || b.toLowerCase().includes(q) || b.includes(boneSearch.trim());
+                      })
+                      .map(bone => {
+                        const n = bone.toLowerCase();
+                        const isBreast = n.includes('breast') || n.includes('boob') || n.includes('mune') || n.includes('oppai') || n.includes('bust') || bone.includes('胸') || bone.includes('乳');
+                        const isButt = n.includes('butt') || n.includes('glute') || n.includes('shiri') || n.includes('siri') || n.includes('ass') || bone.includes('尻') || bone.includes('臀') || bone.includes('ケツ') || bone.includes('お尻');
+                        return (
+                          <button
+                            type="button"
+                            key={bone}
+                            title="Clic para copiar"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(bone);
+                              setUploadStatus(`📋 Copiado: ${bone}`);
+                              setTimeout(() => setUploadStatus(''), 2000);
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[8px] font-mono text-left ${isBreast ? 'bg-rose-500/25 text-rose-200 ring-1 ring-rose-400/40' :
+                                isButt ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-400/40' :
+                                  bone.startsWith('DEF-') ? 'bg-emerald-500/10 text-emerald-400' :
+                                    bone.includes('J_Bip') ? 'bg-blue-500/10 text-blue-400' :
+                                      'bg-slate-500/10 text-slate-400'
+                              }`}
+                          >{bone}</button>
+                        );
+                      })}
                   </div>
                 </div>
-              </details>
+              </div>
             )}
           </>)}
 
@@ -3382,7 +3379,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             <div className="text-red-500 text-4xl mb-4">⚠️</div>
             <h3 className="text-white font-bold mb-2">Error en el Visor 3D</h3>
             <p className="text-slate-400 text-xs mb-4">No se pudo cargar el modelo o hubo un fallo de renderizado.</p>
-            <button 
+            <button
               onClick={() => window.location.reload()}
               className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded-lg transition-colors"
             >
@@ -3396,9 +3393,9 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               <p className="text-violet-400 text-[9px] font-medium animate-pulse uppercase">Cargando Motor 3D...</p>
             </div>
           }>
-            <AvatarViewer3D 
+            <AvatarViewer3D
               key={avatar.modelUrl}
-              avatar={avatar} 
+              avatar={avatar}
               activeAction={activeAction}
               emotion="neutral"
               isAiSpeaking={false}
@@ -3407,7 +3404,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             />
           </React.Suspense>
         </ErrorBoundary>
-        
+
         {/* Indicador Live y Selector de Modo de Cámara */}
         <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
           <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10">
@@ -3475,7 +3472,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       {assigningGesture && (
         <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
           <div className="bg-[#121220] border border-white/10 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_60px_rgba(0,0,0,0.85)] overflow-hidden">
-            
+
             {/* Modal Header */}
             <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
               <div className="flex items-center gap-3">
@@ -3528,11 +3525,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   <button
                     key={cat.id}
                     onClick={() => setAnimCategoryFilter(cat.id)}
-                    className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
-                      animCategoryFilter === cat.id
+                    className={`px-2 py-1 rounded-lg text-[9px] font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${animCategoryFilter === cat.id
                         ? 'bg-cyan-600 text-white shadow-sm'
                         : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-                    }`}
+                      }`}
                   >
                     <span>{cat.icon}</span>
                     <span>{cat.label}</span>
@@ -3558,8 +3554,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     if (animSearch) {
                       const q = animSearch.toLowerCase();
                       return anim.name.toLowerCase().includes(q) ||
-                             (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
-                             (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                        (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                        (anim.customTag && anim.customTag.toLowerCase().includes(q));
                     }
                     return true;
                   })
@@ -3570,11 +3566,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     return (
                       <div
                         key={anim.name}
-                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
-                          isCurrentOverride
+                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${isCurrentOverride
                             ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_15px_rgba(6,182,212,0.15)]'
                             : 'bg-white/[0.02] border-white/5 hover:border-white/20'
-                        }`}
+                          }`}
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
@@ -3629,11 +3624,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             onClick={() => triggerAction(anim.name)}
-                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                              isPreviewing
+                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${isPreviewing
                                 ? 'bg-amber-500 text-black'
                                 : 'bg-white/10 hover:bg-white/20 text-white'
-                            }`}
+                              }`}
                             title="Previsualizar animación en el modelo"
                           >
                             <span className="material-symbols-outlined text-[13px]">
@@ -3652,11 +3646,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 triggerAction(assigningGesture.id);
                               }, 100);
                             }}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                              isCurrentOverride
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${isCurrentOverride
                                 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                                 : 'bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white shadow-md'
-                            }`}
+                              }`}
                           >
                             <span className="material-symbols-outlined text-[13px]">check</span>
                             {isCurrentOverride ? 'Asignada' : 'Seleccionar'}
@@ -3689,7 +3682,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       {assigningIdleSlot && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#12121f] border border-violet-500/30 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
-            
+
             {/* Modal Header */}
             <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
               <div className="flex items-center gap-3">
@@ -3697,9 +3690,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     Vincular: <span className="text-violet-400">{assigningIdleSlot.label}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                      assigningIdleSlot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
-                    }`}>
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${assigningIdleSlot.group === 'idle' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                      }`}>
                       {assigningIdleSlot.group === 'idle' ? 'Pose de Reposo' : 'Gesto de Habla'}
                     </span>
                   </h3>
@@ -3751,11 +3743,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     return (
                       <div
                         key={anim.name}
-                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
-                          isCurrentOverride
+                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${isCurrentOverride
                             ? 'bg-violet-950/40 border-violet-500/60 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
                             : 'bg-white/[0.02] border-white/5 hover:border-white/20'
-                        }`}
+                          }`}
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
@@ -3777,9 +3768,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             onClick={() => triggerAction(anim.name)}
-                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                              isPreviewing ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
-                            }`}
+                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${isPreviewing ? 'bg-amber-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
+                              }`}
                           >
                             <span className="material-symbols-outlined text-[13px]">
                               {isPreviewing ? 'pause' : 'play_arrow'}
@@ -3796,11 +3786,10 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 triggerAction(anim.name);
                               }, 100);
                             }}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                              isCurrentOverride
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${isCurrentOverride
                                 ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40'
                                 : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-md'
-                            }`}
+                              }`}
                           >
                             <span className="material-symbols-outlined text-[13px]">check</span>
                             {isCurrentOverride ? 'Asignada' : 'Seleccionar'}
@@ -3831,7 +3820,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
       {showCreateGestureModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#12121f] border border-cyan-500/30 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
-            
+
             {/* Modal Header */}
             <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/40">
               <div className="flex items-center gap-2">
@@ -4025,8 +4014,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   if (animSearch) {
                     const q = animSearch.toLowerCase();
                     return anim.name.toLowerCase().includes(q) ||
-                           (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
-                           (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                      (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                      (anim.customTag && anim.customTag.toLowerCase().includes(q));
                   }
                   return true;
                 })
@@ -4035,9 +4024,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   return (
                     <div
                       key={anim.name}
-                      className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 ${
-                        isCurrent ? 'bg-violet-950/40 border-violet-500/60' : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
-                      }`}
+                      className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 ${isCurrent ? 'bg-violet-950/40 border-violet-500/60' : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
+                        }`}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
@@ -4271,8 +4259,8 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   if (animSearch) {
                     const q = animSearch.toLowerCase();
                     return anim.name.toLowerCase().includes(q) ||
-                           (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
-                           (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                      (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                      (anim.customTag && anim.customTag.toLowerCase().includes(q));
                   }
                   return true;
                 })
