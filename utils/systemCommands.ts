@@ -32,18 +32,18 @@ export function detectSystemCommand(text: string): SystemCommand {
         return { type: 'toggleAvatar', target: 'show' };
     }
 
-    // 🎭 Conmutación de Modo de Personalidad por Voz
+    // 🎭 Conmutación de Modo de Personalidad por Voz (requiere 'modo' o intención clara para evitar falsos positivos)
     const modePatterns: Array<{ regex: RegExp; mode: string }> = [
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+grok|grok|grog|sarc[aá]stica|sarcasmo)/i, mode: 'grok' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+gamer|player\s*2|albion|mazmorras|modo\s+juegos?|modo\s+vicio|geimer)/i, mode: 'gamer' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+chilen[ao]|partner\s+chilen[ao]|habla\s+como\s+chilena|chile|chileno)/i, mode: 'chilean' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+hacker|jaquer|arquitecta|modo\s+c[oó]digo|modo\s+programaci[oó]n|modo\s+desarrollo)/i, mode: 'hacker' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+tsundere|sundere|tundere|mandona|dominante)/i, mode: 'tsundere' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+zen|sen|confidente|psic[oó]loga|relajante)/i, mode: 'zen' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+waifu|waif|wifi|guaifu|guayfu|anime|kawaii|senpai)/i, mode: 'waifu' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+late\s*night|madrugada|lofi|lo-fi|modo\s+noche|susurros|leit\s*nait)/i, mode: 'latenight' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+ninf[oó]mana|ninfo|er[oó]tico|modo\s+bold|modo\s+hot|ponte\s+caliente)/i, mode: 'nympho' },
-        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)?\s*(?:a|al|el)?\s*modo\s+normal|compañera|amiga|default|vuelve\s+a\s+la\s+normalidad)/i, mode: 'companion' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+grok|modo\s+sarc[aá]stic[ao]/i, mode: 'grok' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+gamer|modo\s+juegos?|modo\s+vicio/i, mode: 'gamer' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+chilen[ao]|habla\s+como\s+chilen[ao]/i, mode: 'chilean' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+hacker|modo\s+c[oó]digo|modo\s+programaci[oó]n|modo\s+desarrollo/i, mode: 'hacker' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+tsundere/i, mode: 'tsundere' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+zen/i, mode: 'zen' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+waifu/i, mode: 'waifu' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+late\s*night|modo\s+lofi|modo\s+noche/i, mode: 'latenight' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+ninf[oó]mana|modo\s+bold|modo\s+hot|ponte\s+caliente/i, mode: 'nympho' },
+        { regex: /(?:(?:cambia|cambiar|pasa|pasar|pon|poner|activa|activar|quiero)\s+(?:a|al|el)?\s*)?modo\s+normal|vuelve\s+a\s+la\s+normalidad/i, mode: 'companion' },
         { regex: /(?:cambia|cambiado|cambiar|siguiente|otro)\s+(?:el\s+|de\s+)?modo/i, mode: 'cycle' },
     ];
 
@@ -140,10 +140,10 @@ export function detectSystemCommand(text: string): SystemCommand {
         { regex: /^selfie$/i, type: 'controlCamera', target: 'selfie' },
 
         // Body / Torso / Medio cuerpo
-        { regex: /(?:vista\s+(?:de\s+)?)?(?:enfoca\s+(?:el\s+)?)?cuerpo|medio\s+cuerpo|torso/i, type: 'controlCamera', target: 'body' },
+        { regex: /(?:(?:vista\s+(?:de\s+)?|enfoca\s+(?:el\s+)?)(?:cuerpo|torso)|medio\s+cuerpo)/i, type: 'controlCamera', target: 'body' },
 
         // Back / Espalda / Vista de atrás
-        { regex: /(?:vista\s+(?:de\s+)?)?(?:espalda|atr[aá]s|trasero|posterior)|giro\s+completo|date\s+(?:la\s+)?vuelta|volt[eé]ate/i, type: 'controlCamera', target: 'back' },
+        { regex: /(?:(?:vista\s+(?:de\s+)?|mira\s+(?:hacia\s+)?|enfoca\s+(?:la\s+)?)(?:espalda|atr[aá]s|trasero|posterior)|giro\s+completo|date\s+(?:la\s+)?vuelta|volt[eé]ate)/i, type: 'controlCamera', target: 'back' },
 
         // Default / Reset
         { regex: /vista\s+normal|restablece\s+c[áa]mara|posici[óo]n\s+inicial|reset\s+c[áa]mara/i, type: 'controlCamera', target: 'default' },

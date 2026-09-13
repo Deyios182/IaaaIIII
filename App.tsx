@@ -149,6 +149,39 @@ const AppContent: React.FC<{
   const isDashboardRoute = location.pathname === '/';
   const isAvatarStudioRoute = location.pathname === '/avatar-studio';
 
+  // Estado para ocultar/mostrar menú lateral en desktop (persistente en localStorage)
+  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(() => {
+    return localStorage.getItem('nova_sidebar_hidden') === 'true';
+  });
+
+  const toggleSidebar = () => {
+    if (window.innerWidth < 768) {
+      window.dispatchEvent(new CustomEvent('nova-toggle-sidebar'));
+    } else {
+      setIsSidebarHidden(prev => {
+        const next = !prev;
+        localStorage.setItem('nova_sidebar_hidden', String(next));
+        return next;
+      });
+    }
+  };
+
+  // Atajo de teclado global Ctrl+B / Cmd+B para alternar el menú lateral
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        const target = e.target as HTMLElement;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // 🛑 Al volver al Dashboard (o al salir de Avatar Studio), asegurar que el avatar vuelva a Idle y no quede atrapado en animaciones de prueba
   useEffect(() => {
     if (isDashboardRoute) {
@@ -160,10 +193,24 @@ const AppContent: React.FC<{
   return (
     <div className={`flex h-screen w-full bg-background-dark text-white overflow-hidden transition-colors duration-1000 ${state.avatar.isBoldMode ? 'selection:bg-pink-500' : 'selection:bg-primary'}`}>
       {/* Sidebar - oculto en mini mode */}
-      {!isMiniMode && <Sidebar isPro={state.isPro} isBold={state.avatar.isBoldMode} />}
+      {!isMiniMode && (
+        <Sidebar
+          isPro={state.isPro}
+          isBold={state.avatar.isBoldMode}
+          isHidden={isSidebarHidden}
+          onToggle={toggleSidebar}
+        />
+      )}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header - oculto en mini mode */}
-        {!isMiniMode && <Header userInitials={state.userName.substring(0, 2).toUpperCase()} isBold={state.avatar.isBoldMode} />}
+        {!isMiniMode && (
+          <Header
+            userInitials={state.userName.substring(0, 2).toUpperCase()}
+            isBold={state.avatar.isBoldMode}
+            isSidebarHidden={isSidebarHidden}
+            onToggleSidebar={toggleSidebar}
+          />
+        )}
         <main className="flex-1 overflow-auto relative">
 
           {/* DASHBOARD PERSISTENTE: Oculto cuando estamos en Avatar Studio (tiene su propio visor 3D) */}

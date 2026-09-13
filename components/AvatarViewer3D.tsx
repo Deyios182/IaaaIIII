@@ -30,7 +30,8 @@ import { InteractionToolbar, type InteractionTool } from './InteractionToolbar';
 import { HandTrackingOverlay } from './HandTrackingOverlay';
 import { UserAvatar3D } from './UserAvatar3D';
 import { ActionFeedbackHUD } from './ActionFeedbackHUD';
-
+import { StageRenderer } from './StageRenderer';
+import { GroupDanceOverlay } from './GroupDanceOverlay';
 import { NovaPersonalityMode } from '../types';
 
 const MODE_3D_LIGHTS: Record<NovaPersonalityMode, {
@@ -159,6 +160,8 @@ interface AvatarViewer3DProps {
     hairColor?: string;
     audioAnalyser?: AnalyserNode | null;
     personalityMode?: NovaPersonalityMode;
+    showInteractionTools?: boolean;
+    onCloseInteractionTools?: () => void;
 }
 
 // Simulación de Ruido Perlin simple (Legacy removed - using SimplexNoise class)
@@ -180,6 +183,18 @@ interface AvatarModelInnerProps {
     physicsMaxAngle: number;
     resetPhysicsTrigger: number;
 }
+
+// Pre-allocated static scratch objects for high-frequency useFrame loops (Zero Garbage Collection overhead)
+const _scratchSyncWPos = new THREE.Vector3();
+const _scratchSyncWQuat = new THREE.Quaternion();
+const _scratchSyncTargetWPos = new THREE.Vector3();
+const _scratchSyncTargetWQuat = new THREE.Quaternion();
+const _scratchSyncParentWQuat = new THREE.Quaternion();
+const _scratchHeadWPos = new THREE.Vector3();
+const _scratchHeadWQuat = new THREE.Quaternion();
+const _scratchHeadTargetWPos = new THREE.Vector3();
+const _scratchHeadTargetWQuat = new THREE.Quaternion();
+const _scratchHeadParentWQuat = new THREE.Quaternion();
 
 function AvatarModelInner({
     modelData,
@@ -219,12 +234,19 @@ function AvatarModelInner({
     const pristineRestPositionsRef = useRef<Map<string, THREE.Vector3>>(new Map());
     const pristineWorldRestPosesRef = useRef<Map<string, THREE.Quaternion>>(new Map());
 
+    // Caches pre-computados para eliminar completamente los .traverse dentro de useFrame
+    const cachedSkinnedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
+    const cachedClothingMorphsRef = useRef<{ mesh: THREE.Mesh; indices: number[] }[]>([]);
+
     // Inicializar o sincronizar el IK Solver y capturar la postura prístina si el modelo cargado lo provee
     useEffect(() => {
         if (modelData?.scene) {
             pristineRestPosesRef.current.clear();
             pristineRestPositionsRef.current.clear();
             pristineWorldRestPosesRef.current.clear();
+
+            cachedSkinnedMeshesRef.current = [];
+            cachedClothingMorphsRef.current = [];
 
             modelData.scene.updateMatrixWorld(true);
             modelData.scene.traverse((child: any) => {
@@ -235,8 +257,24 @@ function AvatarModelInner({
                     child.getWorldQuaternion(wq);
                     pristineWorldRestPosesRef.current.set(child.name, wq);
                 }
+                if (child.isSkinnedMesh && child.skeleton) {
+                    cachedSkinnedMeshesRef.current.push(child);
+                }
+                if (child.isMesh && child.morphTargetDictionary && child.morphTargetInfluences) {
+                    const dict = child.morphTargetDictionary;
+                    const clothingIndices: number[] = [];
+                    for (const key in dict) {
+                        if (isClothingOrNudityMorph(key) || !isFacialMorph(key)) {
+                            const idx = dict[key];
+                            if (idx !== undefined) clothingIndices.push(idx);
+                        }
+                    }
+                    if (clothingIndices.length > 0) {
+                        cachedClothingMorphsRef.current.push({ mesh: child, indices: clothingIndices });
+                    }
+                }
             });
-            console.log(`🦴 [AvatarModelInner] Postura prístina capturada para ${pristineRestPosesRef.current.size} huesos.`);
+            console.log(`🦴 [AvatarModelInner] Postura prístina capturada para ${pristineRestPosesRef.current.size} huesos. ${cachedSkinnedMeshesRef.current.length} mallas Skinned cacheadas.`);
 
             ikSolverRef.current = modelData.scene.userData?.ikSolver || null;
             if (!ikSolverRef.current) {
@@ -254,8 +292,14 @@ function AvatarModelInner({
                 }
                 console.log('🦵 [AvatarModelInner] IK Solver vinculado al bucle de animación con rest quaternions cacheados.');
             }
+
+            if (typeof window !== 'undefined') {
+                (window as any).__activeAvatarScene = modelData.scene;
+                (window as any).__activeAvatarIsPMX = isPMX;
+                window.dispatchEvent(new CustomEvent('nova-avatar-scene-ready', { detail: { scene: modelData.scene, isPMX } }));
+            }
         }
-    }, [modelData?.scene]);
+    }, [modelData?.scene, isPMX]);
 
     // Resetea completamente el modelo a su postura de reposo prístina (evita que un baile empiece desde la deformación del anterior)
     const resetToPristinePose = useCallback(() => {
@@ -350,6 +394,7 @@ function AvatarModelInner({
     const poseWeightsRef = useRef({ sit: 0, lie: 0 });
     const leftBreastRef = useRef<THREE.Bone | null>(null);
     const rightBreastRef = useRef<THREE.Bone | null>(null);
+    const chestBoneRef = useRef<THREE.Bone | null>(null);
     const leftButtRef = useRef<THREE.Bone | null>(null);
     const rightButtRef = useRef<THREE.Bone | null>(null);
     const vaginaRef = useRef<THREE.Bone | null>(null);
@@ -411,6 +456,8 @@ function AvatarModelInner({
     const activeOverrideSlotRef = useRef<string | null>(null);
     // 🔒 Dedup: evita que la misma acción se dispare dos veces en <300ms (bug doble load)
     const lastExecutedActionRef = useRef<{ name: string; ts: number }>({ name: '', ts: 0 });
+    // 👥 Control de coreografía grupal activa: evita re-disparar nova-multi-dance-play en bucle
+    const activeGroupDanceRef = useRef<string | null>(null);
 
     // Helper para reproducir una animación de override para un slot de idle o habla
     const checkAndTriggerSlotOverride = useCallback((slotId: IdleSlotId, loop: boolean = false) => {
@@ -442,7 +489,7 @@ function AvatarModelInner({
         // Limpiar animaciones guardadas viejas/descalibradas
         try {
             localStorage.removeItem('nova_custom_anims');
-        } catch (err) {}
+        } catch (err) { }
 
         const handleCustomAnim = (e: any) => {
             if (e.detail) {
@@ -633,12 +680,20 @@ function AvatarModelInner({
             try {
                 (window as any).__novaAnimAudio.pause();
                 (window as any).__novaAnimAudio.currentTime = 0;
-            } catch (_) {}
+            } catch (_) { }
             (window as any).__novaAnimAudio = null;
         }
         // 🎥 Detener cámara cinemática VMD
         window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
-        console.log('🛑 [AvatarViewer3D] Animación, música y cámara detenidas por completo.');
+        // 👥 Detener coreografía grupal de clones si estaba activa
+        activeGroupDanceRef.current = null;
+        window.dispatchEvent(new CustomEvent('nova-multi-dance-stop'));
+
+        // 🔔 NOTIFICAR A LA UI QUE SE DETUVO CUALQUIER ACCIÓN O ANIMACIÓN
+        window.dispatchEvent(new CustomEvent('nova-action-ended'));
+        window.dispatchEvent(new CustomEvent('nova-animation-ended'));
+
+        console.log('🛑 [AvatarViewer3D] Animación, música, cámara y coreografía grupal detenidas por completo.');
     }, [resetToPristinePose]);
 
     // 🎭 Despachador unificado de acciones (Clips de alta calidad vs Gestos Procedurales estándar)
@@ -703,15 +758,15 @@ function AvatarModelInner({
         // 1. Si existe en AnimationStore (VMD/MMD pack completo con audio, cámara y facial)
         const storedAnim = animationStore.get(res.name) || animationStore.get(cleanAction);
         if (storedAnim) {
-            console.log(`🎬 [AvatarViewer3D] Ejecutando pack completo VMD para "${cleanAction}":`, storedAnim.name);
-            window.dispatchEvent(new CustomEvent('nova-load-animation', { 
-                detail: { 
-                    url: storedAnim.url, 
-                    name: storedAnim.name, 
-                    type: storedAnim.type, 
+            console.log(`🎬 [AvatarViewer3D] Ejecutando pack completo VMD para "${cleanAction}":`, storedAnim.name, `(loop=${!!storedAnim.loop})`);
+            window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                detail: {
+                    url: storedAnim.url,
+                    name: storedAnim.name,
+                    type: storedAnim.type,
                     autoplay: true,
-                    loop: false // 🔒 REGLA: Ejecutar SOLO 1 VEZ (LoopOnce), sin bucle infinito
-                } 
+                    loop: !!storedAnim.loop
+                }
             }));
             proceduralAnimatorRef.current?.stop();
             return;
@@ -725,6 +780,9 @@ function AvatarModelInner({
                 loop: false, // 🔒 REGLA: Ejecutar SOLO 1 VEZ
                 onComplete: () => {
                     console.log(`🏁 [AvatarViewer3D] Clip "${res.name}" terminado. Volviendo a Idle.`);
+                    window.dispatchEvent(new CustomEvent('nova-action-ended', { detail: { action: res.name } }));
+                    window.dispatchEvent(new CustomEvent('nova-animation-ended', { detail: { name: res.name } }));
+                    window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
                     stopCurrentAnimation();
                 }
             });
@@ -736,7 +794,13 @@ function AvatarModelInner({
 
         // 2. Fallback: Gesto procedural estándar de Nova con naturalidad biológica garantizada
         if (proceduralAnimatorRef.current) {
-            proceduralAnimatorRef.current.play(res.name, customDuration || res.duration);
+            const dur = customDuration || res.duration || 2.2;
+            proceduralAnimatorRef.current.play(res.name, dur);
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('nova-action-ended', { detail: { action: res.name } }));
+                window.dispatchEvent(new CustomEvent('nova-animation-ended', { detail: { name: res.name } }));
+                window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+            }, dur * 1000);
         }
     }, [stopCurrentAnimation]);
 
@@ -906,10 +970,41 @@ function AvatarModelInner({
                     // FIX CRÍTICO: Evita que desaparezcan partes de la cara al girar
                     child.frustumCulled = false;
 
+                    // FIX CRÍTICO SHADER: Limpiar morphAttributes vacíos para prevenir 'MORPHTARGETS_COUNT undeclared identifier'
+                    if (child.geometry?.morphAttributes) {
+                        for (const key of Object.keys(child.geometry.morphAttributes)) {
+                            const attr = (child.geometry.morphAttributes as any)[key];
+                            if (!attr || (Array.isArray(attr) && attr.length === 0)) {
+                                delete (child.geometry.morphAttributes as any)[key];
+                            }
+                        }
+                    }
+
                     // FIX MATERIALES:
                     if (child.material) {
                         const meshName = child.name.toLowerCase();
                         const fixMaterial = (mat: THREE.Material) => {
+                            // FIX CRÍTICO SHADER: Inyectar safeguard en todos los materiales en caso de discrepancia de morph targets
+                            const origOnBeforeCompile = mat.onBeforeCompile;
+                            mat.onBeforeCompile = (shader: any, renderer: any) => {
+                                if (origOnBeforeCompile) {
+                                    origOnBeforeCompile(shader, renderer);
+                                }
+                                const morphGuard = `
+#ifdef USE_MORPHTARGETS
+  #ifndef MORPHTARGETS_COUNT
+    #define MORPHTARGETS_COUNT 1
+  #endif
+  #ifndef MORPHTARGETS_TEXTURE_STRIDE
+    #define MORPHTARGETS_TEXTURE_STRIDE 1
+  #endif
+#endif
+`;
+                                if (!shader.vertexShader.includes('#define MORPHTARGETS_COUNT')) {
+                                    shader.vertexShader = morphGuard + shader.vertexShader;
+                                }
+                            };
+
                             // FIX CRÍTICO: Los modelos PMX/MMD/calibrados ya tienen sus materiales calibrados con PBR realista y SSS
                             // (MeshStandardMaterial con Normal Maps, rugosidad aterciopelada y reflejos calculados).
                             // NO sobreescribir con roughness=1.0 ni envMapIntensity=0.1 (que los vuelve pálidos y planos).
@@ -1333,10 +1428,47 @@ function AvatarModelInner({
                 }
 
                 // 2. BÚSQUEDA DE HUESOS (Más tolerante: Acepta Object3D si tiene nombre clave)
+                // Excluir rigurosamente cualquier nodo, hueso o malla perteneciente a armas, accesorios o secundarios
+                let isWeaponOrAcc = false;
+                let checkParent: THREE.Object3D | null = child;
+                while (checkParent) {
+                    const pName = (checkParent.name || '').toLowerCase();
+                    if (
+                        pName.includes('weapon') ||
+                        pName.includes('knife') ||
+                        pName.includes('blade') ||
+                        pName.includes('sword') ||
+                        pName.includes('gun') ||
+                        pName.includes('dagger') ||
+                        pName.includes('shield') ||
+                        pName.includes('bow') ||
+                        pName.includes('arrow') ||
+                        pName.includes('sheath') ||
+                        pName.includes('holster') ||
+                        pName.includes('accessory') ||
+                        pName.includes('acc_') ||
+                        pName.includes('prop') ||
+                        pName.includes('item') ||
+                        checkParent.name === 'MMD_Secondary_Weapon'
+                    ) {
+                        isWeaponOrAcc = true;
+                        break;
+                    }
+                    checkParent = checkParent.parent;
+                }
+                if (isWeaponOrAcc) {
+                    return; // Ignorar armas y props para la anatomía corporal
+                }
+
                 const lowerName = child.name.toLowerCase();
-                const isJigglePart = (/breast|ass|pectoral|glute|butt|oppai|mune|shiri/.test(lowerName) ||
-                    child.name.includes('胸') || child.name.includes('尻') || child.name.includes('髪') || child.name.includes('スカート')) &&
-                    !lowerName.includes('glass') && !lowerName.includes('class');
+                const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(lowerName) || lowerName === 'ass') &&
+                    !lowerName.includes('passive') && !lowerName.includes('assault') && !lowerName.includes('glass') &&
+                    !lowerName.includes('grass') && !lowerName.includes('bass') && !lowerName.includes('class') &&
+                    !lowerName.includes('compass') && !lowerName.includes('mass') && !lowerName.includes('asset') &&
+                    !lowerName.includes('assist') && !lowerName.includes('hole') && !lowerName.includes('collision');
+
+                const isJigglePart = (/breast|pectoral|glute|butt|oppai|mune|shiri/.test(lowerName) || isSafeAss ||
+                    child.name.includes('胸') || child.name.includes('尻') || child.name.includes('髪') || child.name.includes('スカート'));
 
                 if (child instanceof THREE.Bone || isJigglePart) {
                     const name = lowerName; // Ya lo tenemos calculado
@@ -1432,11 +1564,53 @@ function AvatarModelInner({
                     if (name === 'def-breast.r' || name === 'def-breast.001.r' || exactName === 'breast_master.R') {
                         rightBreastRef.current = child as any;
                     }
-                    // Búsqueda de huesos deformadores para glúteos
-                    if (name.includes('glute') || name.includes('butt') || name.includes('ass')) {
+                    // Búsqueda de huesos deformadores para glúteos (Inglés + Japonés PMX / MMD)
+                    const isMmdButtL = originalName === '左尻' || originalName === '左尻D' || originalName.startsWith('左尻') ||
+                        originalName === '左ケツ' || originalName.startsWith('左ケツ') ||
+                        originalName === '尻_L' || originalName === '尻.L' || originalName === '尻1_L' || originalName === '尻1.L' ||
+                        originalName === '尻2_L' || originalName === '尻2.L' || originalName === 'butt_L' || originalName === 'butt.L' ||
+                        originalName === 'butt1_L' || originalName === 'butt1.L' || originalName === 'ass_L' || originalName === 'ass.L' ||
+                        originalName === 'glute_L' || originalName === 'glute.L' || originalName === 'お尻_L' || originalName === '臀部_L';
+
+                    const isMmdButtR = originalName === '右尻' || originalName === '右尻D' || originalName.startsWith('右尻') ||
+                        originalName === '右ケツ' || originalName.startsWith('右ケツ') ||
+                        originalName === '尻_R' || originalName === '尻.R' || originalName === '尻1_R' || originalName === '尻1.R' ||
+                        originalName === '尻2_R' || originalName === '尻2.R' || originalName === 'butt_R' || originalName === 'butt.R' ||
+                        originalName === 'butt1_R' || originalName === 'butt1.R' || originalName === 'ass_R' || originalName === 'ass.R' ||
+                        originalName === 'glute_R' || originalName === 'glute.R' || originalName === 'お尻_R' || originalName === '臀部_R';
+
+                    if (isMmdButtL && !leftButtRef.current) {
+                        leftButtRef.current = child as any;
+                        console.log('🍑 ASIGNADO GLÚTEO IZQUIERDO (PMX/MMD):', child.name);
+                    }
+                    if (isMmdButtR && !rightButtRef.current) {
+                        rightButtRef.current = child as any;
+                        console.log('🍑 ASIGNADO GLÚTEO DERECHO (PMX/MMD):', child.name);
+                    }
+
+                    // NUNCA considerar 'pelvis' ni 'hip' como hueso de glúteo porque pelvis.L es el padre de la pierna
+                    // Solo huesos dedicados de glúteo (butt, buttcheek, glute, shiri, 尻, 臀, ケツ) sin hijos que sean piernas
+                    const hasLegChildren = child.children && child.children.some((c: any) => {
+                        const cn = (c.name || '').toLowerCase();
+                        return cn.includes('thigh') || cn.includes('leg') || cn.includes('knee') || cn.includes('foot') || (c.name || '').includes('足');
+                    });
+
+                    const isButtName = (
+                        name.includes('butt') ||
+                        name.includes('glute') ||
+                        name.includes('buttcheek') ||
+                        name.includes('buttock') ||
+                        name.includes('shiri') ||
+                        originalName.includes('尻') ||
+                        originalName.includes('臀') ||
+                        originalName.includes('ケツ') ||
+                        isSafeAss
+                    ) && !name.includes('pelvis') && !name.includes('hip') && !name.includes('thigh') && !name.includes('leg') && !hasLegChildren && child !== hipsRef.current;
+
+                    if (isButtName) {
                         if (!name.includes('hole') && !name.includes('collision')) { // Evitar colliders y otros
-                            const isL = isLeft || name.includes('.l') || name.includes('_l');
-                            const isR = isRight || name.includes('.r') || name.includes('_r');
+                            const isL = isLeft || name.includes('.l') || name.includes('_l') || originalName.includes('左');
+                            const isR = isRight || name.includes('.r') || name.includes('_r') || originalName.includes('右');
                             const isDef = name.includes('def-');
 
                             if (isL) {
@@ -1464,28 +1638,66 @@ function AvatarModelInner({
                             }
                         }
                     }
-                    if (name === 'def-pelvis.l' && !leftButtRef.current) { leftButtRef.current = child as any; console.log('🍑 ASIGNADO GLÚTEO IZQ (PELVIS FALLBACK):', child.name); }
-                    if (name === 'def-pelvis.r' && !rightButtRef.current) { rightButtRef.current = child as any; console.log('🍑 ASIGNADO GLÚTEO DER (PELVIS FALLBACK):', child.name); }
 
-                    // Zonas íntimas y boca (pussy, vagina, asshole, lips)
-                    if (name.includes('pussy') || name.includes('vagina') || name.includes('lip_down') || name.includes('labia')) {
-                        if (!vaginaRef.current) vaginaRef.current = child as any;
+                    // Zonas íntimas y boca (pussy, vagina, asshole, lips) con soporte para MMD japonés y rigs occidentales
+                    const isVaginaBone = name.includes('pussy') || name.includes('vagina') || name.includes('lip_down') || name.includes('labia') ||
+                        originalName.includes('ワギナ') || originalName.includes('オメコ') || originalName.includes('アソコ') ||
+                        originalName.includes('秘部') || originalName.includes('まんこ') || originalName.includes('マンコ') ||
+                        originalName.includes('クリトリス') || originalName.includes('陰唇') || originalName.includes('陰部') ||
+                        name.includes('crotch') || name.includes('genital');
+
+                    if (isVaginaBone && !vaginaRef.current) {
+                        vaginaRef.current = child as any;
+                        console.log('🌸 ASIGNADA VAGINA/ZONA ÍNTIMA:', child.name);
                     }
-                    if (name.includes('asshole') || name.includes('anus')) {
-                        if (!anusRef.current) anusRef.current = child as any;
+
+                    const isAnusBone = name.includes('asshole') || name.includes('anus') || name.includes('anal') ||
+                        originalName.includes('アナル') || originalName.includes('ケツ穴') || originalName.includes('肛門') ||
+                        originalName.includes('後穴');
+
+                    if (isAnusBone && !anusRef.current) {
+                        anusRef.current = child as any;
+                        console.log('🍑 ASIGNADO ANO/TRASERO:', child.name);
                     }
+
                     if (name.includes('lips') || name.includes('mouth')) {
                         if (!lipsRef.current) lipsRef.current = child as any;
                     }
 
-                    // JIGGLE BONES DETECTION (Fuzzy Fallback)
+                    // PRIORIDAD a pecho central / upper chest (上半身2 / def-spine.002 / def-spine.003 / chest)
+                    const isDeformChest = !isNeckBone && (originalName === '上半身2' || name === 'def-spine.002' || name === 'def-spine.003' || name === 'chest' || name === 'upper_chest' || name === 'upperchest' || (originalName === '胸' && !isLeft && !isRight));
+                    if (isDeformChest && !chestBoneRef.current) {
+                        chestBoneRef.current = child as any;
+                    }
+
+                    // JIGGLE BONES DETECTION (Fuzzy Fallback + PMX MMD matching)
                     // Prioridad: "master" > normal > "front"/"tip"
                     // Nota: La detección fuzzy falló antes porque 'masterl' no terminaba en '.l' ni '_l'
                     // Solo activamos fallback si NO se asignó arriba
                     const fuzzyCheck = !leftBreastRef.current || !rightBreastRef.current || !leftButtRef.current || !rightButtRef.current;
 
+                    // Detección directa y específica para MMD PMX (左胸, 右胸, 胸_L, 胸_R, etc.)
+                    const isMmdBreastL = originalName === '左胸' || originalName === '左胸D' || originalName.startsWith('左胸') ||
+                        originalName === '左乳' || originalName.startsWith('左乳') ||
+                        originalName === '胸_L' || originalName === '胸.L' || originalName === '胸1_L' || originalName === '胸1.L' ||
+                        originalName === '胸2_L' || originalName === '胸2.L' || originalName === 'bust_L' || originalName === 'bust.L' ||
+                        originalName === 'bust1_L' || originalName === 'bust1.L' || originalName === 'oppai_L' || originalName === 'oppai.L';
+
+                    const isMmdBreastR = originalName === '右胸' || originalName === '右胸D' || originalName.startsWith('右胸') ||
+                        originalName === '右乳' || originalName.startsWith('右乳') ||
+                        originalName === '胸_R' || originalName === '胸.R' || originalName === '胸1_R' || originalName === '胸1.R' ||
+                        originalName === '胸2_R' || originalName === '胸2.R' || originalName === 'bust_R' || originalName === 'bust.R' ||
+                        originalName === 'bust1_R' || originalName === 'bust1.R' || originalName === 'oppai_R' || originalName === 'oppai.R';
+
+                    if (isMmdBreastL && !leftBreastRef.current) {
+                        leftBreastRef.current = child as any;
+                    }
+                    if (isMmdBreastR && !rightBreastRef.current) {
+                        rightBreastRef.current = child as any;
+                    }
+
                     const isBreastCandidate = name.includes('pectoral') || name.includes('breast') || name.includes('chestlower') ||
-                        name.includes('oppai') || name.includes('mune') || originalName.includes('胸');
+                        name.includes('oppai') || name.includes('mune') || (originalName.includes('胸') && (isLeft || isRight || originalName.includes('左') || originalName.includes('右')));
 
                     if (fuzzyCheck && isBreastCandidate) {
                         if (SHOW_VERBOSE_LOGS) console.log('✅ Found Breast Bone candidate:', originalName);
@@ -1511,14 +1723,12 @@ function AvatarModelInner({
                         if (!hairRef.current || name.includes('front') || name.includes('tail')) hairRef.current = child as any;
                     }
 
-                    // Agregado 'ass' para modelos Rigify/Blender y '尻' para PMX
-                    const isButtCandidate = name.includes('glute') || name.includes('butt') || name.includes('ass_') || name.includes('ass-') ||
-                        name.includes('shiri') || originalName.includes('尻');
+                    const isButtCandidate = isButtName;
 
                     if (isButtCandidate) {
                         if (SHOW_VERBOSE_LOGS) console.log('✅ Found Butt Bone candidate:', originalName);
-                        const isL = isLeft || name.startsWith('lglute') || name.startsWith('l_') || name.includes('.l') || originalName.includes('左');
-                        const isR = isRight || name.startsWith('rglute') || name.startsWith('r_') || name.includes('.r') || originalName.includes('右');
+                        const isL = isLeft || name.startsWith('lglute') || name.startsWith('l_') || name.includes('.l') || name.includes('_l') || originalName.includes('左');
+                        const isR = isRight || name.startsWith('rglute') || name.startsWith('r_') || name.includes('.r') || name.includes('_r') || originalName.includes('右');
 
                         const isMaster = name.includes('master') || name.includes('glute');
 
@@ -1551,7 +1761,7 @@ function AvatarModelInner({
                         const isLeftSide = isLeft || originalName.includes('左') || originalName.includes('.L') || originalName.includes('.l');
                         const isMmdThigh = (originalName === '左足' || originalName === '右足' || originalName === '足.L' || originalName === '足.R' || originalName === '足D.L' || originalName === '足D.R');
                         const isThigh = isMmdThigh || (!name.includes('ik') && !originalName.includes('IK') && !originalName.includes('ＩＫ') && (name.includes('thigh') || name.includes('upleg') || name.includes('upper_leg') || name.includes('upperleg')));
-                        
+
                         if (isThigh) {
                             const isDef = name.startsWith('def-');
                             if (isRightSide && (isDef || !rightLegRef.current)) rightLegRef.current = child as any;
@@ -1791,7 +2001,7 @@ function AvatarModelInner({
                 shinR: rightShineRef.current,
                 footR: rightFootRef.current
             });
-            
+
             // LEG BINDING log silenciado - huesos vinculados correctamente
 
             // === INICIALIZAR NUEVOS SISTEMAS AVANZADOS ===
@@ -1969,8 +2179,8 @@ function AvatarModelInner({
 
                     // Solo anclar huesos que inequívocamente pertenezcan al cabello o rostro
                     return n.includes('hair') || n.includes('bang') || n.includes('ponytail') ||
-                           n.includes('pigtail') || n.includes('ahoge') || b.name.includes('髪') ||
-                           b.name.includes('毛') || n.includes('face') || n.includes('eye');
+                        n.includes('pigtail') || n.includes('ahoge') || b.name.includes('髪') ||
+                        b.name.includes('毛') || n.includes('face') || n.includes('eye');
                 }) as THREE.Bone[];
 
                 if (safeOrphans.length > 0) {
@@ -2226,53 +2436,52 @@ function AvatarModelInner({
             jigglePhysicsRef.current = new JigglePhysicsSystem();
             jigglePhysicsRef.current.initialize(modelRef.current);
 
-            // Forzar registro manual de pechos para asegurar rebote elástico firme (PMX y modelos genéricos)
-            // Firme y turgente: rebote elástico contenido que NUNCA traspasa el sujetador ni la ropa
+            // Pechos: blandos, con peso, 2–3 rebotes
             if (leftBreastRef.current) {
-                jigglePhysicsRef.current.addBone(leftBreastRef.current, { 
-                    stiffness: 0.60, 
-                    damping: 0.90, 
-                    gravity: 0.0005, 
-                    intensity: isPMX ? 0.15 : 0.85, 
-                    maxAngle: isPMX ? (Math.PI / 40) : (Math.PI / 22) 
+                jigglePhysicsRef.current.addBone(leftBreastRef.current, {
+                    stiffness: 0.16,
+                    damping: 0.52,
+                    gravity: 0.14,
+                    intensity: 2.10,
+                    maxAngle: Math.PI / 5.0
                 });
             }
             if (rightBreastRef.current) {
-                jigglePhysicsRef.current.addBone(rightBreastRef.current, { 
-                    stiffness: 0.60, 
-                    damping: 0.90, 
-                    gravity: 0.0005, 
-                    intensity: isPMX ? 0.15 : 0.85, 
-                    maxAngle: isPMX ? (Math.PI / 40) : (Math.PI / 22) 
+                jigglePhysicsRef.current.addBone(rightBreastRef.current, {
+                    stiffness: 0.16,
+                    damping: 0.52,
+                    gravity: 0.14,
+                    intensity: 2.10,
+                    maxAngle: Math.PI / 5.0
                 });
             }
 
-            // Forzar registro manual de glúteos para asegurar rebote elástico y firme
-            // Firme y redondeado: evita que cuelgue hacia abajo o se hunda con el movimiento de piernas
-            if (leftButtRef.current && !leftButtRef.current.name.toLowerCase().includes('pelvis')) {
-                jigglePhysicsRef.current.addBone(leftButtRef.current, { 
-                    stiffness: 0.35, 
-                    damping: 0.78, 
-                    gravity: 0.002, 
-                    intensity: isPMX ? 0.30 : 1.05, 
-                    maxAngle: isPMX ? (Math.PI / 18) : (Math.PI / 9) 
+            // Glúteos: un poco más firmes, menos sag. Nunca stiffness 1 ni gravity 0.002
+            if (leftButtRef.current && leftButtRef.current !== hipsRef.current) {
+                jigglePhysicsRef.current.addBone(leftButtRef.current, {
+                    stiffness: 0.22,
+                    damping: 0.58,
+                    gravity: 0.08,
+                    intensity: 1.70,
+                    maxAngle: Math.PI / 6.0
                 });
             }
-            if (rightButtRef.current && !rightButtRef.current.name.toLowerCase().includes('pelvis')) {
-                jigglePhysicsRef.current.addBone(rightButtRef.current, { 
-                    stiffness: 0.35, 
-                    damping: 0.78, 
-                    gravity: 0.002, 
-                    intensity: isPMX ? 0.30 : 1.05, 
-                    maxAngle: isPMX ? (Math.PI / 18) : (Math.PI / 9) 
+            if (rightButtRef.current && rightButtRef.current !== hipsRef.current) {
+                jigglePhysicsRef.current.addBone(rightButtRef.current, {
+                    stiffness: 0.22,
+                    damping: 0.58,
+                    gravity: 0.08,
+                    intensity: 1.70,
+                    maxAngle: Math.PI / 6.0
                 });
             }
-
-            // 2.6 Dynamic Body Colliders (Anti-clipping, contorno de ropa sobre piernas, agarre y colisión de cráneo con pelo)
+            // 2.6 Dynamic Body Colliders (Anti-clipping, colisión de manos y brazos con pechos/glúteos, y pelo)
             jigglePhysicsRef.current.setupBodyColliders({
                 head: headBoneRef.current,
                 spine: spineRef.current,
                 hips: hipsRef.current,
+                leftUpperArm: leftArmRef.current,
+                rightUpperArm: rightArmRef.current,
                 leftLeg: leftLegRef.current,
                 rightLeg: rightLegRef.current,
                 leftKnee: leftShineRef.current,
@@ -2704,9 +2913,9 @@ function AvatarModelInner({
                                 }
                                 legIkControllerRef.current.bindBones({
                                     hips: (hipsRef.current as any) ||
-                                          (modelRef.current?.getObjectByName('Hips') as any) ||
-                                          (modelRef.current?.getObjectByName('下半身') as any) ||
-                                          (modelRef.current?.getObjectByName('センター') as any),
+                                        (modelRef.current?.getObjectByName('Hips') as any) ||
+                                        (modelRef.current?.getObjectByName('下半身') as any) ||
+                                        (modelRef.current?.getObjectByName('センター') as any),
                                     thighL: leftLegRef.current,
                                     shinL: leftShineRef.current,
                                     footL: leftFootRef.current,
@@ -2734,11 +2943,15 @@ function AvatarModelInner({
                             // Mixamo/FK: NO usar IK Solver → evita piernas rígidas en animaciones de baile
                             hasIKTracksRef.current = false;
                             legIkControllerRef.current?.setIkData(null);
-                            // Retargeteo iniciado
-                            
+                            // Retargeteo iniciado con posicionamiento de cadera y offset de suelo
+                            const groundOffset = (storedAnim?.legCalibration?.groundY !== undefined)
+                                ? storedAnim.legCalibration.groundY
+                                : (isPMX ? -0.05 : 0.0);
+
                             const retargeted = retargetMixamoClip(
                                 clip, boneNames, modelRef.current!,
-                                sourceRestPoses, targetRestPoses, targetWorldRestPoses, posePreset
+                                sourceRestPoses, targetRestPoses, targetWorldRestPoses, posePreset,
+                                targetRestPositions, isPMX, groundOffset, storedAnim?.boneOffsets
                             );
                             retargeted.name = name;
                             processedClips.push(retargeted);
@@ -2754,7 +2967,7 @@ function AvatarModelInner({
                             hasIKTracksRef.current = false;
                             const cleanedTracks = clip.tracks.filter(track => {
                                 const lower = track.name.toLowerCase();
-                                
+
                                 // Eliminar tracks de escala y posición
                                 if (lower.endsWith('.scale') || lower.endsWith('.position')) return false;
 
@@ -2793,14 +3006,16 @@ function AvatarModelInner({
                             activeClipActionRef.current = clipAction;
                             clipAction.reset();
 
-                            // 🔒 REGLA: Reproducir SOLO 1 VEZ (LoopOnce) por defecto. NUNCA bucle infinito a menos que se solicite loop: true
-                            const shouldLoop = (e as CustomEvent).detail?.loop === true;
+                            // 🔒 REGLA: Reproducir en bucle continuo si el usuario lo activó en el checkbox o en el detalle
+                            const shouldLoop = (e as CustomEvent).detail?.loop !== undefined
+                                ? !!(e as CustomEvent).detail?.loop
+                                : !!storedAnim?.loop;
                             clipAction.setLoop(shouldLoop ? THREE.LoopRepeat : THREE.LoopOnce, shouldLoop ? Infinity : 1);
-                            clipAction.clampWhenFinished = true;
+                            clipAction.clampWhenFinished = !shouldLoop;
                             // Fade in suave para una entrada fluida
                             clipAction.fadeIn(0.35);
                             clipAction.play();
-                            
+
                             externalAnimPlayingRef.current = true;
                             console.log(`🎬 Animación "${name}" reproduciéndose (${shouldLoop ? 'bucle' : 'reproducción única (1 sola vez)'})`);
 
@@ -2815,12 +3030,12 @@ function AvatarModelInner({
                                     try {
                                         (window as any).__novaAnimAudio.pause();
                                         (window as any).__novaAnimAudio.currentTime = 0;
-                                    } catch (_) {}
+                                    } catch (_) { }
                                 }
                                 const audio = new Audio(storedAnimForAudio.audioUrl);
                                 audio.loop = shouldLoop;
                                 audio.volume = 0.85;
-                                audio.play().catch(() => {});
+                                audio.play().catch(() => { });
                                 animAudioRef.current = audio;
                                 (window as any).__novaAnimAudio = audio;
                                 console.log(`🎵 Audio "${storedAnimForAudio.audioFileName}" iniciado con animación (loop=${shouldLoop})`);
@@ -2831,7 +3046,7 @@ function AvatarModelInner({
                                     try {
                                         (window as any).__novaAnimAudio.pause();
                                         (window as any).__novaAnimAudio.currentTime = 0;
-                                    } catch (_) {}
+                                    } catch (_) { }
                                     (window as any).__novaAnimAudio = null;
                                 }
                             }
@@ -2844,6 +3059,12 @@ function AvatarModelInner({
                                     finishedFired = true;
                                     mixerRef.current?.removeEventListener('finished', onFinished);
                                     console.log(`🏁 [AvatarViewer3D] Animación "${name}" finalizada (1 sola vez). Regresando suavemente a Idle.`);
+
+                                    // 🔔 NOTIFICAR INMEDIATAMENTE AL SISTEMA QUE LA ANIMACIÓN TERMINÓ
+                                    window.dispatchEvent(new CustomEvent('nova-action-ended', { detail: { action: name } }));
+                                    window.dispatchEvent(new CustomEvent('nova-animation-ended', { detail: { name } }));
+                                    window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
+
                                     clipAction.fadeOut(0.4);
                                     setTimeout(() => {
                                         if (activeClipActionRef.current === clipAction) {
@@ -2858,6 +3079,13 @@ function AvatarModelInner({
                                     }
                                 };
                                 mixerRef.current.addEventListener('finished', onFinished);
+
+                                // Si hay audio de la animación, sincronizar también su evento 'ended'
+                                if (animAudioRef.current) {
+                                    animAudioRef.current.addEventListener('ended', () => {
+                                        cleanupAndReturnToIdle();
+                                    }, { once: true });
+                                }
 
                                 // Fallback de seguridad: duración calculada del clip o audio
                                 const durationSec = Math.max(processedClips[0].duration || 0, storedAnimForAudio?.duration || 0);
@@ -2887,12 +3115,61 @@ function AvatarModelInner({
                             }
 
                             if (cameraClipToPlay && shouldPlayCamera) {
-                                window.dispatchEvent(new CustomEvent('nova-vmd-camera-play', { 
-                                    detail: { clip: cameraClipToPlay, name } 
+                                window.dispatchEvent(new CustomEvent('nova-vmd-camera-play', {
+                                    detail: { clip: cameraClipToPlay, name }
                                 }));
                                 console.log(`🎥 Cámara cinemática VMD iniciada para "${name}"`);
                             } else {
                                 window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
+                                // Si la animación tiene modo de cámara preferido (ej: dynamic, full, face), activarlo
+                                if (storedAnim?.cameraMode && storedAnim.cameraMode !== 'vmd') {
+                                    window.dispatchEvent(new CustomEvent('nova-camera-preset', {
+                                        detail: { preset: storedAnim.cameraMode }
+                                    }));
+                                }
+                            }
+
+                            // 👥 Coreografía Grupal Automática: Disparar bailarines extra si esta animación los tiene asignados
+                            if (storedAnim?.extraMotions && storedAnim.extraMotions.length > 0) {
+                                if (activeGroupDanceRef.current !== name) {
+                                    activeGroupDanceRef.current = name;
+                                    (async () => {
+                                        try {
+                                            const slotsToPlay: any[] = [];
+                                            for (const em of storedAnim.extraMotions!) {
+                                                const buf = await animationStore.getExtraMotionBuffer(storedAnim.name, em.id);
+                                                if (buf && buf.byteLength > 30) {
+                                                    slotsToPlay.push({
+                                                        id: em.id,
+                                                        name: em.name,
+                                                        vmdName: em.vmdFileName,
+                                                        vmdBuffer: buf,
+                                                        defaultOffsetX: em.defaultOffsetX,
+                                                        defaultOffsetZ: em.defaultOffsetZ
+                                                    });
+                                                }
+                                            }
+                                            if (slotsToPlay.length > 0) {
+                                                window.dispatchEvent(new CustomEvent('nova-multi-dance-play', {
+                                                    detail: {
+                                                        slots: slotsToPlay,
+                                                        // Audio y cámara ya se manejan en el flujo principal del avatar
+                                                        audioUrl: undefined,
+                                                        cameraBuffer: undefined
+                                                    }
+                                                }));
+                                                console.log(`💃 [AvatarViewer3D] Coreografía grupal iniciada con ${slotsToPlay.length} bailarines extra para "${name}"`);
+                                            }
+                                        } catch (groupErr) {
+                                            console.warn('⚠️ Error preparando bailarines extra:', groupErr);
+                                        }
+                                    })();
+                                }
+                            } else {
+                                if (activeGroupDanceRef.current !== null) {
+                                    activeGroupDanceRef.current = null;
+                                    window.dispatchEvent(new CustomEvent('nova-multi-dance-stop'));
+                                }
                             }
                         } else {
                             console.log(`🎬 Animación "${name}" registrada exitosamente en background.`);
@@ -2944,10 +3221,32 @@ function AvatarModelInner({
             }
         };
 
+        // Listener para ajuste dinámico de altura de suelo en vivo (FBX y VMD)
+        const calibrationHandler = (e: Event) => {
+            const cal = (e as CustomEvent).detail;
+            if (!cal || !modelRef.current) return;
+
+            // Si hay un clip activo de FBX/Mixamo reproduciéndose, ajustar la altura del hueso Hips o del modelo en vivo
+            if (activeClipActionRef.current && (cal.groundY !== undefined)) {
+                const hips = (hipsRef.current as any) ||
+                    modelRef.current.getObjectByName('mixamorigHips') ||
+                    modelRef.current.getObjectByName('下半身') ||
+                    modelRef.current.getObjectByName('センター') ||
+                    modelRef.current.getObjectByName('Hips');
+
+                if (hips && pristineRestPositionsRef.current.has(hips.name)) {
+                    const origPos = pristineRestPositionsRef.current.get(hips.name)!;
+                    hips.position.y = origPos.y + cal.groundY;
+                }
+            }
+        };
+
         window.addEventListener('nova-load-animation', handler);
+        window.addEventListener('nova-leg-calibration', calibrationHandler);
 
         return () => {
             window.removeEventListener('nova-load-animation', handler);
+            window.removeEventListener('nova-leg-calibration', calibrationHandler);
             if (animAudioRef.current) {
                 animAudioRef.current.pause();
                 animAudioRef.current.currentTime = 0;
@@ -2957,7 +3256,7 @@ function AvatarModelInner({
                 try {
                     (window as any).__novaAnimAudio.pause();
                     (window as any).__novaAnimAudio.currentTime = 0;
-                } catch (_) {}
+                } catch (_) { }
                 (window as any).__novaAnimAudio = null;
             }
         };
@@ -3092,7 +3391,7 @@ function AvatarModelInner({
                 try {
                     (window as any).__novaAnimAudio.pause();
                     (window as any).__novaAnimAudio.currentTime = 0;
-                } catch (_) {}
+                } catch (_) { }
                 (window as any).__novaAnimAudio = null;
             }
             // 🎥 Detener cámara cinemática VMD al volver a Idle
@@ -3142,22 +3441,16 @@ function AvatarModelInner({
 
         if (mixerRef.current) mixerRef.current.update(safeDelta);
 
-        // 🔒 BLINDAJE DE VESTIMENTA: Asegurar que ningún morph de eliminación de ropa, rotura o no-facial permanezca activo
-        if (modelRef.current) {
-            modelRef.current.traverse((child: any) => {
-                if (child.isMesh && child.morphTargetDictionary && child.morphTargetInfluences) {
-                    const dict = child.morphTargetDictionary;
-                    const infl = child.morphTargetInfluences;
-                    for (const key in dict) {
-                        if (isClothingOrNudityMorph(key) || !isFacialMorph(key)) {
-                            const idx = dict[key];
-                            if (idx !== undefined && infl[idx] > 0) {
-                                infl[idx] = 0;
-                            }
-                        }
-                    }
+        // 🔒 BLINDAJE DE VESTIMENTA ULTRA-OPTIMIZADO (Zero .traverse, Zero GC)
+        for (let i = 0; i < cachedClothingMorphsRef.current.length; i++) {
+            const item = cachedClothingMorphsRef.current[i];
+            const infl = item.mesh.morphTargetInfluences;
+            if (infl) {
+                for (let j = 0; j < item.indices.length; j++) {
+                    const idx = item.indices[j];
+                    if (infl[idx] > 0) infl[idx] = 0;
                 }
-            });
+            }
         }
 
         // 2. En modelos PMX, guardar estado limpio del mixer
@@ -3183,11 +3476,9 @@ function AvatarModelInner({
             }
 
             // 3. Actualizar esqueletos para que el skinning en GPU use las nuevas matrices inmediatamente
-            modelRef.current.traverse((child: any) => {
-                if (child.isSkinnedMesh && child.skeleton) {
-                    child.skeleton.update();
-                }
-            });
+            for (let i = 0; i < cachedSkinnedMeshesRef.current.length; i++) {
+                cachedSkinnedMeshesRef.current[i].skeleton?.update();
+            }
         }
 
         // === ACTUALIZAR NUEVOS SISTEMAS (Solo si NO hay animación externa activa para evitar conflicto de mixers y velocidad 2x) ===
@@ -3204,7 +3495,7 @@ function AvatarModelInner({
                     const avg = sum / freqData.length;
                     musicEnergy = avg / 128.0;
                     isMusicPlaying = avg > 6;
-                } catch (_) {}
+                } catch (_) { }
             }
             proceduralAnimatorRef.current.setMusicSync(activeBpmRef.current || 120, musicEnergy, isMusicPlaying);
             proceduralAnimatorRef.current.update(t, safeDelta);
@@ -3250,8 +3541,8 @@ function AvatarModelInner({
 
                 saccadeTimer.current = 0;
                 const isDoubleFixation = Math.random() < 0.15;
-                nextSaccadeTime.current = isThinking 
-                    ? 0.8 + Math.random() * 0.6 
+                nextSaccadeTime.current = isThinking
+                    ? 0.8 + Math.random() * 0.6
                     : (isDoubleFixation ? 0.35 + Math.random() * 0.4 : 1.8 + Math.random() * 2.7);
             }
 
@@ -3487,43 +3778,43 @@ function AvatarModelInner({
                     // BRAZO IZQUIERDO
                     if (leftArmRef.current && leftArmRef.current.userData.baseQuat) {
                         let lP = inhale * 0.02, lR = 0;
-                        if (curState === 'relaxed')      { lP += d2r(3);  lR = Math.sin(t * 0.55) * d2r(3); }
-                        if (curState === 'weight_shift') { lP += d2r(5);  lR = d2r(-4); }
-                        if (curState === 'cute_waist')   { lP += d2r(8);  lR = d2r(-6); }
-                        if (curState === 'thoughtful')   { lP += d2r(18); lR = d2r(-10); }
-                        if (curState === 'curious_look') { lP += d2r(6);  lR = d2r(5); }
+                        if (curState === 'relaxed') { lP += d2r(3); lR = Math.sin(t * 0.55) * d2r(3); }
+                        if (curState === 'weight_shift') { lP += d2r(5); lR = d2r(-4); }
+                        if (curState === 'cute_waist') { lP += d2r(8); lR = d2r(-6); }
+                        if (curState === 'thoughtful') { lP += d2r(18); lR = d2r(-10); }
+                        if (curState === 'curious_look') { lP += d2r(6); lR = d2r(5); }
                         leftArmRef.current.quaternion.slerp(leftArmRef.current.userData.baseQuat.clone().multiply(
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(lP, 0, lR))), 0.06);
                     }
                     // ANTEBRAZO IZQUIERDO
                     if (leftForeArmRef.current && leftForeArmRef.current.userData.baseQuat) {
                         let lfP = 0, lfR = 0;
-                        if (curState === 'relaxed')      { lfP = d2r(5);  lfR = Math.sin(t * 0.6) * d2r(4); }
+                        if (curState === 'relaxed') { lfP = d2r(5); lfR = Math.sin(t * 0.6) * d2r(4); }
                         if (curState === 'weight_shift') { lfP = d2r(10); lfR = d2r(-5); }
-                        if (curState === 'cute_waist')   { lfP = d2r(15); lfR = d2r(-8); }
-                        if (curState === 'thoughtful')   { lfP = d2r(35); lfR = d2r(-5); }
-                        if (curState === 'curious_look') { lfP = d2r(8);  lfR = d2r(6); }
+                        if (curState === 'cute_waist') { lfP = d2r(15); lfR = d2r(-8); }
+                        if (curState === 'thoughtful') { lfP = d2r(35); lfR = d2r(-5); }
+                        if (curState === 'curious_look') { lfP = d2r(8); lfR = d2r(6); }
                         leftForeArmRef.current.quaternion.slerp(leftForeArmRef.current.userData.baseQuat.clone().multiply(
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(lfP, 0, lfR))), 0.06);
                     }
                     // BRAZO DERECHO
                     if (rightArmRef.current && rightArmRef.current.userData.baseQuat) {
                         let rP = inhale * 0.02, rR = 0;
-                        if (curState === 'relaxed')      { rP += d2r(3);  rR = -Math.sin(t * 0.55) * d2r(3); }
-                        if (curState === 'weight_shift') { rP += d2r(6);  rR = d2r(-5) * nymphoMult; }
-                        if (curState === 'cute_waist')   { rP += d2r(4);  rR = d2r(-3); }
-                        if (curState === 'thoughtful')   { rP += d2r(5);  rR = d2r(-4); }
-                        if (curState === 'curious_look') { rP += d2r(8);  rR = d2r(6); }
+                        if (curState === 'relaxed') { rP += d2r(3); rR = -Math.sin(t * 0.55) * d2r(3); }
+                        if (curState === 'weight_shift') { rP += d2r(6); rR = d2r(-5) * nymphoMult; }
+                        if (curState === 'cute_waist') { rP += d2r(4); rR = d2r(-3); }
+                        if (curState === 'thoughtful') { rP += d2r(5); rR = d2r(-4); }
+                        if (curState === 'curious_look') { rP += d2r(8); rR = d2r(6); }
                         rightArmRef.current.quaternion.slerp(rightArmRef.current.userData.baseQuat.clone().multiply(
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(rP, 0, rR))), 0.06);
                     }
                     // ANTEBRAZO DERECHO
                     if (rightForeArmRef.current && rightForeArmRef.current.userData.baseQuat) {
                         let rfP = 0, rfR = 0;
-                        if (curState === 'relaxed')      { rfP = d2r(5);  rfR = -Math.sin(t * 0.6) * d2r(4); }
+                        if (curState === 'relaxed') { rfP = d2r(5); rfR = -Math.sin(t * 0.6) * d2r(4); }
                         if (curState === 'weight_shift') { rfP = d2r(12); rfR = d2r(-7); }
-                        if (curState === 'cute_waist')   { rfP = d2r(8);  rfR = d2r(-5); }
-                        if (curState === 'thoughtful')   { rfP = d2r(10); rfR = d2r(-6); }
+                        if (curState === 'cute_waist') { rfP = d2r(8); rfR = d2r(-5); }
+                        if (curState === 'thoughtful') { rfP = d2r(10); rfR = d2r(-6); }
                         if (curState === 'curious_look') { rfP = d2r(18); rfR = d2r(8); }
                         rightForeArmRef.current.quaternion.slerp(rightForeArmRef.current.userData.baseQuat.clone().multiply(
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(rfP, 0, rfR))), 0.06);
@@ -3678,33 +3969,33 @@ function AvatarModelInner({
                 };
 
                 // Limites anatómicos estrictos para la columna y el tronco
-                applyCustomLimbPose(spineRef, 
-                    { x: pose.torsoX, y: pose.torsoY, z: pose.torsoZ }, 
+                applyCustomLimbPose(spineRef,
+                    { x: pose.torsoX, y: pose.torsoY, z: pose.torsoZ },
                     { minX: -20, maxX: 25, minY: -30, maxY: 30, minZ: -15, maxZ: 15 }
                 );
 
-                applyCustomLimbPose(headBoneRef, 
-                    { x: pose.headX, y: pose.headY, z: pose.headZ }, 
+                applyCustomLimbPose(headBoneRef,
+                    { x: pose.headX, y: pose.headY, z: pose.headZ },
                     { minX: -25, maxX: 25, minY: -40, maxY: 40, minZ: -20, maxZ: 20 }
                 );
 
-                applyCustomLimbPose(leftArmRef, 
-                    { x: pose.leftArmX, z: pose.leftArmZ }, 
+                applyCustomLimbPose(leftArmRef,
+                    { x: pose.leftArmX, z: pose.leftArmZ },
                     { minX: -90, maxX: 90, minZ: -90, maxZ: 90 }
                 );
 
-                applyCustomLimbPose(rightArmRef, 
-                    { x: pose.rightArmX, z: pose.rightArmZ }, 
+                applyCustomLimbPose(rightArmRef,
+                    { x: pose.rightArmX, z: pose.rightArmZ },
                     { minX: -90, maxX: 90, minZ: -90, maxZ: 90 }
                 );
 
-                applyCustomLimbPose(leftLegRef, 
-                    { x: pose.leftLegX, y: pose.leftLegY, z: pose.leftLegZ }, 
+                applyCustomLimbPose(leftLegRef,
+                    { x: pose.leftLegX, y: pose.leftLegY, z: pose.leftLegZ },
                     { minX: -35, maxX: 35, minY: -30, maxY: 30, minZ: -25, maxZ: 25 }
                 );
 
-                applyCustomLimbPose(rightLegRef, 
-                    { x: pose.rightLegX, y: pose.rightLegY, z: pose.rightLegZ }, 
+                applyCustomLimbPose(rightLegRef,
+                    { x: pose.rightLegX, y: pose.rightLegY, z: pose.rightLegZ },
                     { minX: -35, maxX: 35, minY: -30, maxY: 30, minZ: -25, maxZ: 25 }
                 );
 
@@ -4223,28 +4514,22 @@ function AvatarModelInner({
         // después de IK, Custom Poses, y Arrastre (InteractionLayer).
         if (headBoneRef.current && headOrphansRef.current.length > 0) {
             const head = headBoneRef.current;
-            head.updateWorldMatrix(true, false);
-
-            const headWPos = new THREE.Vector3();
-            const headWQuat = new THREE.Quaternion();
-            head.getWorldPosition(headWPos);
-            head.getWorldQuaternion(headWQuat);
+            head.getWorldPosition(_scratchHeadWPos);
+            head.getWorldQuaternion(_scratchHeadWQuat);
 
             headOrphansRef.current.forEach(({ bone, offsetPos, offsetQuat }) => {
                 // Calcular posición y rotación mundial objetivo = headBone + offset (en espacio del head)
-                const targetWPos = offsetPos.clone().applyQuaternion(headWQuat).add(headWPos);
-                const targetWQuat = headWQuat.clone().multiply(offsetQuat);
+                _scratchHeadTargetWPos.copy(offsetPos).applyQuaternion(_scratchHeadWQuat).add(_scratchHeadWPos);
+                _scratchHeadTargetWQuat.copy(_scratchHeadWQuat).multiply(offsetQuat);
 
                 // Convertir a espacio local del padre del hueso de cabello
                 if (bone.parent) {
-                    bone.parent.updateWorldMatrix(true, true);
-                    bone.position.copy(bone.parent.worldToLocal(targetWPos.clone()));
-                    const parentWQuat = new THREE.Quaternion();
-                    bone.parent.getWorldQuaternion(parentWQuat);
-                    bone.quaternion.copy(parentWQuat.clone().invert().multiply(targetWQuat));
+                    bone.position.copy(bone.parent.worldToLocal(_scratchHeadTargetWPos));
+                    bone.parent.getWorldQuaternion(_scratchHeadParentWQuat);
+                    bone.quaternion.copy(_scratchHeadParentWQuat.invert().multiply(_scratchHeadTargetWQuat));
                 } else {
-                    bone.position.copy(targetWPos);
-                    bone.quaternion.copy(targetWQuat);
+                    bone.position.copy(_scratchHeadTargetWPos);
+                    bone.quaternion.copy(_scratchHeadTargetWQuat);
                 }
 
                 // Registrar la rotación base para JigglePhysics
@@ -4252,11 +4537,11 @@ function AvatarModelInner({
             });
         }
 
-        // Mantener escala natural 1.0 para evitar estiramientos o desgarros de malla al bailar o rotar
-        if (leftBreastRef.current) leftBreastRef.current.scale.set(1.0, 1.0, 1.0);
-        if (rightBreastRef.current) rightBreastRef.current.scale.set(1.0, 1.0, 1.0);
-        if (leftButtRef.current) leftButtRef.current.scale.set(1.1, 1.1, 1.1);
-        if (rightButtRef.current) rightButtRef.current.scale.set(1.1, 1.1, 1.1);
+        // Mantener escala natural cuando NO está en interacción o rebote dinámico
+        if (leftBreastRef.current && !leftBreastRef.current.userData.velPos && !leftBreastRef.current.userData.dragStartPos) leftBreastRef.current.scale.set(1.0, 1.0, 1.0);
+        if (rightBreastRef.current && !rightBreastRef.current.userData.velPos && !rightBreastRef.current.userData.dragStartPos) rightBreastRef.current.scale.set(1.0, 1.0, 1.0);
+        if (leftButtRef.current && !leftButtRef.current.userData.velPos && !leftButtRef.current.userData.dragStartPos) leftButtRef.current.scale.set(1.1, 1.1, 1.1);
+        if (rightButtRef.current && !rightButtRef.current.userData.velPos && !rightButtRef.current.userData.dragStartPos) rightButtRef.current.scale.set(1.1, 1.1, 1.1);
         // Mantener escala uniforme de piernas para evitar torcedura ("pierna chueca") y descalibración de botas/anillos
         if (leftLegRef.current) leftLegRef.current.scale.set(1.0, 1.0, 1.0);
         if (rightLegRef.current) rightLegRef.current.scale.set(1.0, 1.0, 1.0);
@@ -4264,10 +4549,6 @@ function AvatarModelInner({
         // =========================================================================
         // 🔧 ZONA DE AJUSTE MANUAL DE ROPA Y ACCESORIOS (Para ti)
         // =========================================================================
-        // Ajusta estos valores (en metros) si ves que la ropa o el brillo de los ojos 
-        // quedan flotando o "más arriba". 
-        // - Valores negativos (ej: -0.05) bajan la pieza 5 centímetros.
-        // - Valores positivos (ej: 0.05) la suben 5 centímetros.
         const manualOffsets = {
             pelvis: 0.0,    // Falda y caderas
             spine: 0.0,     // Espalda baja y estómago
@@ -4280,61 +4561,49 @@ function AvatarModelInner({
         };
         // =========================================================================
 
-        // --- GLOBAL ARMATURE SYNC (Position & Rotation Copy with Offsets) ---
+        // --- GLOBAL ARMATURE SYNC (Position & Rotation Copy with Offsets - Zero GC Allocations) ---
         armatureSyncMapRef.current.forEach(({ secondary, primary, offsetPos, offsetQuat }) => {
-            primary.updateWorldMatrix(true, true);
-            const primWPos = new THREE.Vector3();
-            const primWQuat = new THREE.Quaternion();
-            primary.getWorldPosition(primWPos);
-            primary.getWorldQuaternion(primWQuat);
+            primary.getWorldPosition(_scratchSyncWPos);
+            primary.getWorldQuaternion(_scratchSyncWQuat);
 
             // Sumamos el offset original al mundo conservando la pose de binding
-            const targetWPos = offsetPos.clone().applyQuaternion(primWQuat).add(primWPos);
-            const targetWQuat = primWQuat.clone().multiply(offsetQuat);
+            _scratchSyncTargetWPos.copy(offsetPos).applyQuaternion(_scratchSyncWQuat).add(_scratchSyncWPos);
+            _scratchSyncTargetWQuat.copy(_scratchSyncWQuat).multiply(offsetQuat);
 
             // Aplicar el ajuste manual que configuraste arriba
             const sName = secondary.name.toLowerCase();
-            if (sName.includes('pelvis')) targetWPos.y += manualOffsets.pelvis;
-            else if (sName.includes('spine')) targetWPos.y += manualOffsets.spine;
-            else if (sName.includes('chest')) targetWPos.y += manualOffsets.chest;
+            if (sName.includes('pelvis')) _scratchSyncTargetWPos.y += manualOffsets.pelvis;
+            else if (sName.includes('spine')) _scratchSyncTargetWPos.y += manualOffsets.spine;
+            else if (sName.includes('chest')) _scratchSyncTargetWPos.y += manualOffsets.chest;
             else if (sName.includes('breast')) {
-                targetWPos.y += manualOffsets.breast;
-                secondary.scale.set(1.0, 1.0, 1.0);
-                primary.scale.set(1.0, 1.0, 1.0);
+                _scratchSyncTargetWPos.y += manualOffsets.breast;
             }
-            else if (sName.includes('neck')) targetWPos.y += manualOffsets.neck;
-            else if (sName.includes('head') || sName.includes('eye')) targetWPos.y += manualOffsets.head;
-            else if (sName.includes('leg') || sName.includes('thigh') || sName.includes('calf') || sName.includes('foot') || sName.includes('toe')) targetWPos.y += manualOffsets.leg;
-            else if (sName.includes('arm') || sName.includes('hand') || sName.includes('finger')) targetWPos.y += manualOffsets.arm;
+            else if (sName.includes('neck')) _scratchSyncTargetWPos.y += manualOffsets.neck;
+            else if (sName.includes('head') || sName.includes('eye')) _scratchSyncTargetWPos.y += manualOffsets.head;
+            else if (sName.includes('leg') || sName.includes('thigh') || sName.includes('calf') || sName.includes('foot') || sName.includes('toe')) _scratchSyncTargetWPos.y += manualOffsets.leg;
+            else if (sName.includes('arm') || sName.includes('hand') || sName.includes('finger')) _scratchSyncTargetWPos.y += manualOffsets.arm;
 
             if (secondary.parent) {
-                secondary.parent.updateWorldMatrix(true, true);
-                secondary.position.copy(secondary.parent.worldToLocal(targetWPos.clone()));
-
-                const parentWQuat = new THREE.Quaternion();
-                secondary.parent.getWorldQuaternion(parentWQuat);
-                secondary.quaternion.copy(parentWQuat.clone().invert().multiply(targetWQuat));
+                secondary.position.copy(secondary.parent.worldToLocal(_scratchSyncTargetWPos));
+                secondary.parent.getWorldQuaternion(_scratchSyncParentWQuat);
+                secondary.quaternion.copy(_scratchSyncParentWQuat.invert().multiply(_scratchSyncTargetWQuat));
             } else {
-                secondary.position.copy(targetWPos);
-                secondary.quaternion.copy(targetWQuat);
+                secondary.position.copy(_scratchSyncTargetWPos);
+                secondary.quaternion.copy(_scratchSyncTargetWQuat);
             }
 
             // Registrar rotación base para JigglePhysics (pechos, faldas, etc.)
             secondary.userData.ikBaseRotation = secondary.quaternion.clone();
-
-            secondary.updateMatrixWorld(true);
         });
 
         // 8. Actualizar Jiggle Physics (Ropa, Cabello, Pechos)
         // CRÍTICO: Debe correr DESPUÉS de sincronizar el esqueleto y usar la posición mundial real de caderas/espina
         if (jigglePhysicsRef.current) {
             jigglePhysicsRef.current.update(delta, hipsRef.current || spineRef.current || modelRef.current, t);
-            // Actualizar matrices de esqueletos para que el rebote físico se refleje inmediatamente en los vértices del SkinnedMesh
-            modelRef.current?.traverse((child: any) => {
-                if (child.isSkinnedMesh && child.skeleton) {
-                    child.skeleton.update();
-                }
-            });
+            // Actualizar matrices de esqueletos con array cacheado (0 scene graph traversal)
+            for (let i = 0; i < cachedSkinnedMeshesRef.current.length; i++) {
+                cachedSkinnedMeshesRef.current[i].skeleton?.update();
+            }
         }
 
         // 9. Attach floating boots to the right foot (REMOVED)
@@ -4360,10 +4629,11 @@ function AvatarModelInner({
 
         const handleNovaAction = (event: any) => {
             const act = event.detail?.action;
+            if (!act) return; // Ignorar eventos nulos o vacíos para prevenir bucles infinitos
             console.log('👄 [AvatarViewer3D] Acción:', act);
 
-            // Si se pasa null, 'stop', 'idle' o cadena vacía, detener animación actual y su música
-            if (!act || act === 'stop' || act === 'idle') {
+            // Si se pasa 'stop', 'idle', detener animación actual y su música
+            if (act === 'stop' || act === 'idle') {
                 stopCurrentAnimation();
                 return;
             }
@@ -4979,7 +5249,7 @@ function AvatarModelInner({
             if (detail?.part) {
                 const partName = detail.part;
                 const isBack = partName.toLowerCase().includes('butt') || partName.toLowerCase().includes('anus');
-                
+
                 // 1. Aplicar Impulso Físico Elástico Aislado a la Masa Suave (Soft-flesh Jiggle)
                 if (jigglePhysicsRef.current) {
                     let jiggleTarget = '';
@@ -5036,26 +5306,45 @@ function AvatarModelInner({
 
     // Manejo de eventos de interacción física y envío al systemBus/geminiService
     const handleAvatarInteract = (partName: string, interactionType: string, type?: 'sensory' | 'pose', tool?: string) => {
-        // Evitamos spamear eventos, solo enviamos 'pull' o 'grab' o 'hit'
-        if (interactionType === 'grab' || interactionType === 'pull' || interactionType === 'hit') {
+        // 1. Aplicar impulsos dinámicos elásticos a pechos y glúteos según la acción
+        if (jigglePhysicsRef.current) {
+            const isBack = partName.toLowerCase().includes('butt') || partName.toLowerCase().includes('anus');
+            let jiggleTarget = partName;
+            if (partName === 'leftButt' || partName === 'anus') jiggleTarget = 'ass.l';
+            else if (partName === 'rightButt') jiggleTarget = 'ass.r';
+            else if (partName === 'leftBreast') jiggleTarget = 'breast.l';
+            else if (partName === 'rightBreast') jiggleTarget = 'breast.r';
+            else if (partName === 'mouth' || partName === 'head') jiggleTarget = 'head';
 
-            // Si es un golpe, aplicar físicas de impacto instantáneo (Spank/Hit)
-            if (interactionType === 'hit' && jigglePhysicsRef.current) {
-                const isBack = partName.toLowerCase().includes('butt') || partName.toLowerCase().includes('anus');
-                // Golpe hacia adelante o hacia atrás dependiendo de la zona
-                const impulse = new THREE.Vector3(0, 0, isBack ? 2.5 : -2.5);
-
-                // Mapear el hitbox a los nombres de huesos físicos
-                let jiggleTarget = partName;
-                if (partName === 'leftButt' || partName === 'anus') jiggleTarget = 'ass.l';
-                if (partName === 'rightButt') jiggleTarget = 'ass.r';
-                if (partName === 'leftBreast') jiggleTarget = 'breast.l';
-                if (partName === 'rightBreast') jiggleTarget = 'breast.r';
-                if (partName === 'mouth' || partName === 'head') jiggleTarget = 'head';
-
+            if (interactionType === 'hit') {
+                // Golpe / Azote: gran desplazamiento y sacudida elástica viva (rebote voluptuoso)
+                const impulse = new THREE.Vector3(
+                    (Math.random() - 0.5) * 1.2,
+                    (Math.random() - 0.5) * 1.2,
+                    isBack ? 4.8 : -4.8
+                );
+                jigglePhysicsRef.current.applyImpulse(jiggleTarget, impulse);
+            } else if (interactionType === 'grab' || interactionType === 'pull') {
+                // Toque / Agarre inicial: compresión y sacudida elástica viva
+                const impulse = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.8,
+                    (Math.random() - 0.5) * 0.8,
+                    isBack ? 2.0 : -2.0
+                );
+                jigglePhysicsRef.current.applyImpulse(jiggleTarget, impulse);
+            } else if (interactionType === 'release') {
+                // Soltado elástico: rebote vibrante y jugoso al liberar la masa tras estirarla/moldearla
+                const impulse = new THREE.Vector3(
+                    (Math.random() - 0.5) * 1.0,
+                    (Math.random() - 0.5) * 1.0,
+                    isBack ? -3.2 : 3.2
+                );
                 jigglePhysicsRef.current.applyImpulse(jiggleTarget, impulse);
             }
+        }
 
+        // 2. Enviar evento al bus de Nova
+        if (interactionType === 'grab' || interactionType === 'pull' || interactionType === 'hit') {
             // Si el punto es solo para 'pose' (mover/agitar miembros) y estamos usando la mano, NO enviamos el evento al cerebro (es silencioso).
             if (type === 'pose' && currentTool === 'hand') {
                 return; // Solo se mueven las físicas
@@ -5086,10 +5375,10 @@ function AvatarModelInner({
                 ref={interactionLayerRef}
                 bones={{
                     head: headBoneRef.current,
-                    leftBreast: leftBreastRef.current,
-                    rightBreast: rightBreastRef.current,
-                    leftButt: leftButtRef.current,
-                    rightButt: rightButtRef.current,
+                    leftBreast: leftBreastRef.current || chestBoneRef.current || (spineRef.current as THREE.Bone),
+                    rightBreast: rightBreastRef.current || chestBoneRef.current || (spineRef.current as THREE.Bone),
+                    leftButt: leftButtRef.current || (hipsRef.current as THREE.Bone),
+                    rightButt: rightButtRef.current || (hipsRef.current as THREE.Bone),
                     leftArm: leftArmRef.current,
                     rightArm: rightArmRef.current,
                     leftForeArm: leftForeArmRef.current,
@@ -5098,14 +5387,22 @@ function AvatarModelInner({
                     rightHand: rightHandRef.current,
                     leftLeg: leftLegRef.current,
                     rightLeg: rightLegRef.current,
+                    leftKnee: leftShineRef.current || leftLegRef.current,
+                    rightKnee: rightShineRef.current || rightLegRef.current,
                     leftFoot: leftFootRef.current,
                     rightFoot: rightFootRef.current,
                     hips: hipsRef.current as THREE.Bone,
                     spine: spineRef.current as THREE.Bone,
+                    chest: chestBoneRef.current || (spineRef.current as THREE.Bone),
                     vagina: vaginaRef.current || (hipsRef.current as THREE.Bone),
                     anus: anusRef.current || (hipsRef.current as THREE.Bone),
-                    lips: lipsRef.current || headBoneRef.current
+                    lips: lipsRef.current || headBoneRef.current,
+                    belly: bellyRef.current || (spineRef.current as THREE.Bone),
+                    hair: hairRef.current || headBoneRef.current
                 }}
+                hasDiscreteBreasts={Boolean(leftBreastRef.current && rightBreastRef.current && leftBreastRef.current !== chestBoneRef.current && leftBreastRef.current !== spineRef.current)}
+                hasDiscreteButt={Boolean(leftButtRef.current && rightButtRef.current && leftButtRef.current !== hipsRef.current)}
+                isPMX={isPMX}
                 currentTool={currentTool}
                 onInteract={handleAvatarInteract}
                 isBoldMode={isHotMode}
@@ -5302,8 +5599,8 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             if (!clip) return;
 
             // Guardar posición de cámara y target previos para volver al terminar
-            const currentTarget = controlsRef.current?.target 
-                ? controlsRef.current.target.clone() 
+            const currentTarget = controlsRef.current?.target
+                ? controlsRef.current.target.clone()
                 : (targets[currentViewMode]?.look?.clone() || targets.default.look.clone());
             savedPreVmdState.current = {
                 pos: camera.position.clone(),
@@ -5437,12 +5734,30 @@ function CameraManager({ viewMode, controlsRef }: { viewMode: string, controlsRe
             return;
         }
 
-        // 2. Transición suave de modos de vista o restauración tras cinemática
+        // 2. Modo de cámara DINÁMICA (Cinemática orbital suave cuando no hay VMD o por selección directa)
+        if (currentViewMode === 'dynamic') {
+            const time = state.clock.getElapsedTime() * 0.45;
+            const radius = 3.6 + Math.sin(time * 0.4) * 0.35;
+            const targetY = 1.35 + Math.sin(time * 0.7) * 0.25;
+
+            camera.position.x = Math.sin(time) * radius;
+            camera.position.z = Math.cos(time) * radius;
+            camera.position.y = 2.1 + Math.sin(time * 0.5) * 0.3;
+
+            camera.lookAt(0, targetY, 0);
+            if (controlsRef.current) {
+                controlsRef.current.target.set(0, targetY, 0);
+                controlsRef.current.update();
+            }
+            return;
+        }
+
+        // 3. Transición suave de modos de vista o restauración tras cinemática
         if (!isTransitioning.current) return;
 
         // Si tenemos un estado guardado antes de una cinemática VMD, restaurar hacia ese estado exacto
-        const target = savedPreVmdState.current 
-            ? { pos: savedPreVmdState.current.pos, look: savedPreVmdState.current.target } 
+        const target = savedPreVmdState.current
+            ? { pos: savedPreVmdState.current.pos, look: savedPreVmdState.current.target }
             : (targets[currentViewMode] || targets.default);
         const lerpFactor = 5.0 * delta; // Velocidad de transición
 
@@ -5482,7 +5797,9 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     isHotMode = false,
     hairColor = '#e2b464',
     audioAnalyser = null,
-    personalityMode
+    personalityMode,
+    showInteractionTools = false,
+    onCloseInteractionTools
 }) => {
     const effectiveMode: NovaPersonalityMode = personalityMode || avatar?.personalityMode || (isHotMode ? 'nympho' : 'companion');
     const modeLights = MODE_3D_LIGHTS[effectiveMode] || MODE_3D_LIGHTS.companion;
@@ -5494,6 +5811,13 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     const [showDebugZones, setShowDebugZones] = useState<boolean>(false);
     const [isHandTrackingActive, setIsHandTrackingActive] = useState<boolean>(false);
     const [handPosData, setHandPosData] = useState<{ x: number; y: number; isPinching: boolean; gesture: string } | null>(null);
+
+    // Apagar tracking de manos si se ocultan las herramientas AR
+    useEffect(() => {
+        if (!showInteractionTools && isHandTrackingActive) {
+            setIsHandTrackingActive(false);
+        }
+    }, [showInteractionTools, isHandTrackingActive]);
 
     // Estado de calibración física
     const [physicsSensitivity, setPhysicsSensitivity] = useState(0.015);
@@ -5522,8 +5846,9 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
         }
     };
 
-    // Determinar cursor
+    // Determinar cursor (solo si las herramientas de interacción están visibles)
     const getCursorClass = () => {
+        if (!showInteractionTools) return '';
         if (activeTool === 'hand') return 'cursor-grab active:cursor-grabbing';
         if (activeTool === 'pencil') return 'cursor-crosshair';
         return 'cursor-crosshair'; // Default genérico para otras herramientas
@@ -5532,27 +5857,32 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
     return (
         <div className={`w-full h-full relative rounded-2xl overflow-hidden bg-gradient-to-br ${modeLights.containerBg} ${getCursorClass()}`}>
 
-            <InteractionToolbar
-                isBoldMode={isHotMode || false}
-                activeTool={activeTool}
-                setActiveTool={setActiveTool}
-                showDebugZones={showDebugZones}
-                setShowDebugZones={setShowDebugZones}
-                physicsSensitivity={physicsSensitivity}
-                setPhysicsSensitivity={setPhysicsSensitivity}
-                physicsMaxAngle={physicsMaxAngle}
-                setPhysicsMaxAngle={setPhysicsMaxAngle}
-                resetPhysics={() => setResetPhysicsTrigger(prev => prev + 1)}
-                isHandTrackingActive={isHandTrackingActive}
-                toggleHandTracking={() => setIsHandTrackingActive(prev => !prev)}
-            />
+            {showInteractionTools && (
+                <InteractionToolbar
+                    isBoldMode={isHotMode || false}
+                    activeTool={activeTool}
+                    setActiveTool={setActiveTool}
+                    showDebugZones={showDebugZones}
+                    setShowDebugZones={setShowDebugZones}
+                    physicsSensitivity={physicsSensitivity}
+                    setPhysicsSensitivity={setPhysicsSensitivity}
+                    physicsMaxAngle={physicsMaxAngle}
+                    setPhysicsMaxAngle={setPhysicsMaxAngle}
+                    resetPhysics={() => setResetPhysicsTrigger(prev => prev + 1)}
+                    isHandTrackingActive={isHandTrackingActive}
+                    toggleHandTracking={() => setIsHandTrackingActive(prev => !prev)}
+                    onClose={onCloseInteractionTools}
+                />
+            )}
 
-            <HandTrackingOverlay
-                isActive={isHandTrackingActive}
-                onClose={() => setIsHandTrackingActive(false)}
-                onHandInteract={handleHandInteract}
-                onHandUpdate={(pos) => setHandPosData(pos)}
-            />
+            {showInteractionTools && (
+                <HandTrackingOverlay
+                    isActive={isHandTrackingActive}
+                    onClose={() => setIsHandTrackingActive(false)}
+                    onHandInteract={handleHandInteract}
+                    onHandUpdate={(pos) => setHandPosData(pos)}
+                />
+            )}
 
             {/* HUD DE FEEDBACK VISUAL, ESTADO DE CARGA Y MOTOR DE ANTICIPACIÓN PROACTIVA */}
             <ActionFeedbackHUD
@@ -5609,7 +5939,7 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                 <CameraManager viewMode={viewMode} controlsRef={controlsRef} />
 
                 {/* CUERPO Y HERRAMIENTAS 3D DEL USUARIO DENTRO DEL ESCENARIO WEBGL (Solo activo si el botón AR está encendido) */}
-                {isHandTrackingActive && (
+                {showInteractionTools && isHandTrackingActive && (
                     <UserAvatar3D
                         handPos={handPosData}
                         activeTool={activeTool}
@@ -5669,16 +5999,14 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                     return <Environment preset="studio" environmentIntensity={isPMXModel ? 0.65 : 0.35} />;
                 })()}
 
-                {/* SUELO Y SOMBRA DE CONTACTO: Da anclaje espacial para que los pies no floten en el vacío */}
-                <group position={[0, -1.5, 0]}>
-                    {/* Sombra de contacto circular suave debajo de los pies */}
-                    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]} receiveShadow>
-                        <planeGeometry args={[12, 12]} />
-                        <shadowMaterial opacity={0.35} />
-                    </mesh>
-                    {/* Piso sutil con cuadrícula/reflejo tenue de estudio */}
-                    <gridHelper args={[16, 32, '#38bdf8', '#1e293b']} position={[0, 0, 0]} />
-                </group>
+                {/* ESCENARIO 3D / STAGE: Carga stages MMD (.pmx/.glb/archives) o presets virtuales (Cyberpunk, Idol Concert, etc.) */}
+                <StageRenderer />
+
+                {/* COREOGRAFÍAS GRUPALES: Renderiza clones instanciados (2 a 5 bailarines) sincronizados */}
+                <GroupDanceOverlay
+                    currentAvatarScene={(typeof window !== 'undefined' && (window as any).__activeAvatarScene) || null}
+                    isPMX={!!(typeof window !== 'undefined' && (window as any).__activeAvatarIsPMX)}
+                />
 
                 <Suspense fallback={<FallbackAvatar />}>
                     <AvatarModel

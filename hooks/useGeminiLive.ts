@@ -193,7 +193,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         if (!sessionRef.current) return;
         try {
             sessionRef.current.sendRealtimeInput({
-                audio: {
+                media: {
                     data: encodeBase64(new Uint8Array(pcmData.buffer)),
                     mimeType: 'audio/pcm;rate=16000'
                 }

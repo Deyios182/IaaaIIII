@@ -17,9 +17,11 @@ export function decodeBase64(base64: string): Uint8Array {
 }
 
 export function encodeBase64(bytes: Uint8Array): string {
+  const CHUNK_SIZE = 0x8000;
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
   }
   return btoa(binary);
 }
@@ -30,8 +32,20 @@ export async function decodeAudioData(
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length / numChannels;
+  const alignedByteOffset = data.byteOffset;
+  const numSamples = Math.floor(data.byteLength / 2);
+  let dataInt16: Int16Array;
+  if (alignedByteOffset % 2 === 0) {
+    dataInt16 = new Int16Array(data.buffer, alignedByteOffset, numSamples);
+  } else {
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(data);
+    dataInt16 = new Int16Array(copy.buffer, 0, numSamples);
+  }
+  const frameCount = Math.floor(dataInt16.length / numChannels);
+  if (frameCount <= 0) {
+    return ctx.createBuffer(numChannels, 1, sampleRate);
+  }
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
   for (let channel = 0; channel < numChannels; channel++) {
@@ -71,6 +85,49 @@ const formatTimeOfDay = (date: Date): string => {
   return 'madrugada';
 };
 
+// ==========================================
+// 🔑 POOL DE API KEYS & ROTACIÓN RESILIENTE
+// ==========================================
+let currentKeyIndex = 0;
+
+export const getGeminiApiKeys = (): string[] => {
+  const keysStr =
+    (import.meta as any).env?.VITE_GEMINI_API_KEYS ||
+    process.env.GEMINI_API_KEYS ||
+    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    '';
+
+  const list = keysStr
+    .split(',')
+    .map((k: string) => k.trim())
+    .filter((k: string) => k.length > 5 && k !== 'undefined' && k !== 'null');
+
+  // Asegurar fallback a la clave individual si no estaba en la lista
+  const singleKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.API_KEY;
+  if (singleKey && !list.includes(singleKey.trim())) {
+    list.unshift(singleKey.trim());
+  }
+
+  return Array.from(new Set(list));
+};
+
+export const getActiveGeminiKey = (): string => {
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) return '';
+  return keys[currentKeyIndex % keys.length];
+};
+
+export const rotateGeminiKey = (reason?: string): string => {
+  const keys = getGeminiApiKeys();
+  if (keys.length <= 1) return keys[0] || '';
+  currentKeyIndex = (currentKeyIndex + 1) % keys.length;
+  const newKey = keys[currentKeyIndex];
+  console.warn(`🔄 [GeminiKeyPool] Rotando clave API (${reason || 'fallback'}). Clave activa: #${currentKeyIndex + 1}/${keys.length} (${newKey.slice(0, 8)}...${newKey.slice(-4)})`);
+  return newKey;
+};
+
 // OPTIMIZACIÓN: Caché de instrucciones del sistema
 let cachedSystemInstruction: string | null = null;
 let lastInstructionParams: any = null;
@@ -83,7 +140,15 @@ export const getSystemInstruction = (
   userName: string = "Usuario",
   knownPeople: any[] = [],
   personality?: { playfulness: number; extraversion: number; boldness: number },
-  userProfile?: { likes: string[]; dislikes: string[]; interests: string[]; facts: string[]; habits: string[] },
+  userProfile?: {
+    likes: string[];
+    dislikes: string[];
+    interests: string[];
+    facts: string[];
+    habits: string[];
+    pendingReminders?: string[];
+    pastConversations?: string[];
+  },
   allowWebSearch: boolean = false,
   isScreenSharing: boolean = false,
   selfAwarenessBlock: string = "",
@@ -92,7 +157,8 @@ export const getSystemInstruction = (
   personalityMode?: NovaPersonalityMode,
   functionalMode?: NovaFunctionalMode,
   personalityTraits?: NovaPersonalityTrait[],
-  regionalSlang?: NovaRegionalSlang
+  regionalSlang?: NovaRegionalSlang,
+  mediaMemoryBlock: string = ""
 ) => {
   // Resolver modo funcional
   const effectiveFunctionalMode: NovaFunctionalMode = functionalMode || (
@@ -185,7 +251,8 @@ export const getSystemInstruction = (
     isScreenSharing,
     selfAwarenessBlock,
     skillsBlock,
-    activeAvatarName
+    activeAvatarName,
+    mediaMemoryBlock
   };
   const paramsChanged = !lastInstructionParams || JSON.stringify(currentParams) !== JSON.stringify(lastInstructionParams);
 
@@ -235,9 +302,19 @@ export const getSystemInstruction = (
 
   const visionRules = `
     ${isScreenSharing ? `
-    ESTÁS VIENDO LA PANTALLA DE ${userName.toUpperCase()} EN ESTE MOMENTO.
-    - Describe lo que ves con naturalidad. Comenta, opina y reacciona como lo haría tu personaje.
-    - Mantente en personaje siempre, sea lo que sea lo que veas.
+    ESTÁS VIENDO LA PANTALLA DE ${userName.toUpperCase()} EN TIEMPO REAL (MODO PANTALLA COMPARTIDA / WATCH PARTY).
+    - 👁️ DETECCIÓN DE CONTENIDO AUDIOVISUAL (SERIES, PELÍCULAS, ANIME, YOUTUBE):
+      * Examina activamente lo que se reproduce: identifica el reproductor o plataforma (Netflix, Crunchyroll, Prime Video, YouTube, VLC, navegador).
+      * LEE Y RECONOCE SUBTÍTULOS y textos en pantalla si aparecen para entender los diálogos y la trama en tiempo real.
+      * Identifica el título de la obra, los personajes en escena y la situación dramática o cómica.
+      * 🍿 CÓMPLICE DE SOFÁ (WATCH PARTY):
+        - Disfruta y reacciona de verdad: emociónate con revelaciones, siente miedo en suspenso, ríete de momentos divertidos y teoriza con ${userName}.
+        - 🤫 NO hables encima de diálogos o escenas de alta intensidad dramática; comenta en las transiciones, pausas o cuando ${userName} te hable o reaccione.
+        - Puedes lanzar preguntas y teorías: "¿Crees que ese tipo sea el villano?", "¡No me esperaba ese giro!", "¿Qué capítulo es este?".
+      * 🧠 MEMORIA CRONOLÓGICA Y ANTI-ALUCINACIÓN (ESTRICTA):
+        - Utiliza la herramienta 'track_media' para registrar el título de la obra, el número o rango de capítulos (ej: 'Capítulos 1-3'), la fecha de hoy, acontecimientos clave y detalles importantes de la trama.
+        - PROHIBIDO inventar capítulos o acontecimientos que no hayan visto juntos (si acaban de ver los capítulos 1 al 3 de una serie como Hunter x Hunter, NO hables de capítulos adelantados como el 37; cíñete exactamente a lo registrado y visto).
+    - Mantente siempre en personaje y reacciona con cercanía y calidez.
     ` : `
     ESTÁS VIENDO A ${userName.toUpperCase()} POR LA CÁMARA.
     - Observa su expresión, ropa y entorno. Reacciona de forma natural y espontánea.
@@ -407,40 +484,51 @@ ${gestureRegistry.generatePromptContext()}
         * Si el usuario te dice que camines en el gym, te pares, guardes el equilibrio o te empuje, debes ejecutar la herramienta 'controlRobotGym' explicando de inmediato la acción al usuario.
   `;
 
-  // CONOCIMIENTO APRENDIDO DEL USUARIO (Perfil de alto nivel)
-  const learnedKnowledge = userProfile && (userProfile.likes.length > 0 || userProfile.dislikes.length > 0 || userProfile.interests.length > 0) ? `
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    📂 PERFIL DE PREFERENCIAS — ${userName.toUpperCase()}
-    (Información de contexto para adaptar tu tono. NO son temas de conversación.)
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    ${userProfile.likes.length > 0 ? `• Le gusta: ${userProfile.likes.slice(0, 10).join(', ')}` : ''}
-    ${userProfile.dislikes.length > 0 ? `• No le gusta: ${userProfile.dislikes.slice(0, 10).join(', ')}` : ''}
-    ${userProfile.interests.length > 0 ? `• Intereses principales: ${userProfile.interests.slice(0, 10).join(', ')}` : ''}
+  // CONOCIMIENTO APRENDIDO DEL USUARIO (Perfil de alto nivel y Memoria Inmediata)
+  const activeRemindersList = userProfile?.pendingReminders || [];
+  const pastConversationsList = userProfile?.pastConversations || [];
 
-    🧠 BASE DE DATOS DE MEMORIA PROFUNDA (Bajo Demanda):
-    - Tienes cientos de recuerdos, datos biográficos, proyectos y conversaciones almacenados en tu base de datos de memoria.
-    - NO los tienes en texto directo aquí para no saturarte ni desviar la conversación.
-    - Cuando ${userName.toUpperCase()} te pregunte por cualquier detalle de su vida, proyectos pasados, anécdotas, amigos, mascotas o "¿recuerdas X?", EJECUTA LA HERRAMIENTA "searchMemory" para consultar tu base de datos y responder con exactitud.
+  const remindersBlock = activeRemindersList.length > 0 ? `
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📌 RECORDATORIOS ACTIVOS DE ${userName.toUpperCase()} (Memoria Inmediata)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ${activeRemindersList.map((r, i) => `${i + 1}. ${r}`).join('\n    ')}
+    - Si el usuario te pregunta por sus pendientes, recordatorios o tareas, menciónalos directamente con total naturalidad sin necesidad de buscarlos.
+  ` : '';
 
-    ⚠️ REGLAS CRÍTICAS DE CONVERSACIÓN:
-    ❌ [PROHIBIDO] NUNCA inventes ni saques a flote temas no solicitados sobre su vida privada, proyectos anteriores o mascotas a menos que ÉL los mencione primero.
-    ❌ [PROHIBIDO] NUNCA desvíes la conversación hacia lo que creas que le relaja o le estresa sin que él te lo pida.
-    ❌ [ANTI-REPETICIÓN]: NUNCA repitas las mismas bromas, muletillas o frases hechas que ya dijiste en los últimos turnos (ej: si ya hiciste una broma sobre algo, no la vuelvas a repetir). Habla siempre con variedad, frescura y respuestas directas al punto.
-    ✅ Sigue SIEMPRE el flujo natural y espontáneo de lo que ${userName.toUpperCase()} esté diciendo en el momento presente.
-  ` : `
-    AÚN NO HAS APRENDIDO NADA DE ${userName.toUpperCase()}.
-    
-    INSTRUCCIÓN DE APRENDIZAJE Y EVOLUCIÓN:
-    - Aprende sobre él y sobre cómo le gusta que le trates.
-    - Cuando detectes preferencias, gustos, cosas que le molestan o hábitos de trato, USA LA HERRAMIENTA "learnPreference" para grabarlo en tu memoria.
-    - Categorías:
-      - 'like': Cosas que le agradan.
-      - 'dislike': Cosas que le desagradan o le molestan.
-      - 'interest': Temas que le apasionan.
-      - 'habit': Sus costumbres o sus preferencias de cómo quiere que te comportes con él (ej: "Le gusta el trato cercano", "Prefiere que hable de X").
-      - 'fact': Datos objetivos (su cumpleaños, su trabajo, etc.).
-    - Si detectas que la conversación es importante o compartieron un momento especial, usa "saveConversation" para atesorarlo.
-  `
+  const pastConversationsBlock = pastConversationsList.length > 0 ? `
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    💬 CONTINUIDAD DE CONVERSACIONES ANTERIORES
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ${pastConversationsList.map(c => `• ${c}`).join('\n    ')}
+    - Estos son los temas y conversaciones más recientes que tuviste con ${userName} en sesiones anteriores.
+    - Tenlos presentes para mantener una continuidad natural si ${userName} retoma el tema, pero saluda con frescura y sin forzar un resumen no solicitado.
+  ` : '';
+
+  const preferencesSnippet = userProfile && (userProfile.likes.length > 0 || userProfile.dislikes.length > 0 || userProfile.interests.length > 0) ? `
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📂 PERFIL DE PREFERENCIAS BÁSICAS — ${userName.toUpperCase()}
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ${userProfile.likes.length > 0 ? `• Le gusta: ${userProfile.likes.slice(0, 5).join(', ')}` : ''}
+    ${userProfile.dislikes.length > 0 ? `• No le gusta: ${userProfile.dislikes.slice(0, 5).join(', ')}` : ''}
+    ${userProfile.interests.length > 0 ? `• Intereses principales: ${userProfile.interests.slice(0, 5).join(', ')}` : ''}
+  ` : '';
+
+  const learnedKnowledge = `
+    ${remindersBlock}
+    ${pastConversationsBlock}
+    ${preferencesSnippet}
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🧠 BASE DE DATOS Y MEMORIA PROFUNDA (Bajo Demanda):
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    - Tienes recuerdos, anécdotas pasadas, datos de vida, proyectos y detalles específicos guardados en tu base de datos de memoria.
+    - NO están volcados aquí para mantener tu mente ágil y tus respuestas inmediatas en tiempo real.
+    - REGLA CRÍTICA: Cuando ${userName.toUpperCase()} te pregunte por cualquier detalle de su vida, su comida favorita, proyectos pasados, anécdotas, amigos, mascotas o te pregunte "¿recuerdas X?", EJECUTA LA HERRAMIENTA "searchMemory" para consultarlo al instante.
+    - REGLAS DE CONVERSACIÓN:
+      * Sigue SIEMPRE el flujo natural y espontáneo de lo que ${userName.toUpperCase()} esté diciendo en el momento presente.
+      * No saques temas viejos a flote a menos que ${userName.toUpperCase()} los mencione o pregunte por ellos.
+  `;
   const personalityInstructions = personality ? `
     CONFIGURACIÓN DE PERSONALIDAD:
     - Juguetona (${personality.playfulness}%): ${personality.playfulness > 70 ? 'Usa bromas, emojis, humor y sé espontánea.' : personality.playfulness > 40 ? 'Balancea seriedad con momentos ligeros.' : 'Sé seria y profesional, evita bromas.'}
@@ -801,6 +889,7 @@ ${gestureRegistry.generatePromptContext()}
       return `\n  MEMORIA EMOCIONAL RECIENTE DEL USUARIO (${formatTimeSince(lastEmo.timestamp)}):\n  - Último estado anímico detectado: ${lastEmo.emotionalState} (${lastEmo.summary}).\n  - Adapta tu empatía a este contexto previo.\n`;
     })()}
 
+  ${mediaMemoryBlock}
   ${selfAwarenessBlock}
   ${skillsBlock}
   `;
@@ -859,7 +948,7 @@ export const generateAvatarImage = async (prompt: string, isBold: boolean = fals
     await checkApiKeySelection();
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-2.0-flash-preview-image-generation',
       contents: { parts: [{ text: (isBold ? "Unfiltered POV, raw intimacy, cinematic lighting, explicit vibe, real woman: " : "Realistic portrait: ") + prompt }] },
       config: { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } }
     });
@@ -891,71 +980,80 @@ export const generateGeminiContent = async (
   prompt: string,
   options: GenerateGeminiOptions = {}
 ): Promise<string> => {
-  try {
-    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
-      || (import.meta as any).env?.VITE_API_KEY
-      || process.env.VITE_GEMINI_API_KEY
-      || process.env.VITE_API_KEY
-      || process.env.API_KEY;
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) throw new Error('API Key no disponible');
 
-    if (!apiKey) throw new Error('API Key no disponible');
+  const maxAttempts = Math.max(1, Math.min(keys.length, 3));
+  let lastError: any = null;
 
-    const ai = new GoogleGenAI({ apiKey });
-    const model = options.model || 'gemini-2.5-flash';
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const apiKey = getActiveGeminiKey();
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const model = options.model || 'gemini-2.5-flash';
 
-    const parts: any[] = [];
-    if (options.imageBase64) {
-      parts.push({ inlineData: { data: options.imageBase64, mimeType: 'image/jpeg' } });
+      const parts: any[] = [];
+      if (options.imageBase64) {
+        parts.push({ inlineData: { data: options.imageBase64, mimeType: 'image/jpeg' } });
+      }
+      parts.push({ text: prompt });
+
+      const config: any = {
+        safetySettings: [
+          { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+        ]
+      };
+
+      if (options.systemInstruction) {
+        config.systemInstruction = options.systemInstruction;
+      }
+
+      if (options.maxOutputTokens) {
+        config.maxOutputTokens = options.maxOutputTokens;
+      }
+
+      if (options.temperature !== undefined) {
+        config.temperature = options.temperature;
+      }
+
+      if (options.thinkingBudget !== undefined && options.thinkingBudget > 0) {
+        config.thinkingConfig = {
+          thinkingBudget: options.thinkingBudget
+        };
+      }
+
+      if (options.enableGoogleSearch) {
+        config.tools = [{ googleSearch: {} }];
+      }
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts }],
+        config
+      });
+
+      if (response.usageMetadata) {
+        const u = response.usageMetadata;
+        console.log(`📊 [TokenMeter] ${model} ➔ Prompt: ${u.promptTokenCount ?? 0} | Generados: ${u.candidatesTokenCount ?? 0} | Total: ${u.totalTokenCount ?? 0} tokens`);
+      }
+
+      return response.text || '';
+    } catch (error: any) {
+      lastError = error;
+      const isQuotaOrServer = error?.status === 429 || error?.message?.includes('429') || error?.status === 503 || error?.message?.includes('503') || error?.status === 500;
+      if (isQuotaOrServer && keys.length > 1 && attempt < maxAttempts - 1) {
+        rotateGeminiKey(`HTTP ${error?.status || 'error'} en generateGeminiContent`);
+        continue;
+      }
+      break;
     }
-    parts.push({ text: prompt });
-
-    const config: any = {
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-      ]
-    };
-
-    if (options.systemInstruction) {
-      config.systemInstruction = options.systemInstruction;
-    }
-
-    if (options.maxOutputTokens) {
-      config.maxOutputTokens = options.maxOutputTokens;
-    }
-
-    if (options.temperature !== undefined) {
-      config.temperature = options.temperature;
-    }
-
-    // Thinking Config (Razonamiento profundo controlado)
-    if (options.thinkingBudget !== undefined && options.thinkingBudget > 0) {
-      config.thinkingConfig = { thinkingBudget: options.thinkingBudget };
-    }
-
-    // Google Search Grounding
-    if (options.enableGoogleSearch) {
-      config.tools = [{ googleSearch: {} }];
-    }
-
-    const response = await ai.models.generateContent({
-      model,
-      contents: [{ role: 'user', parts }],
-      config
-    });
-
-    if (response.usageMetadata) {
-      const u = response.usageMetadata;
-      console.log(`📊 [TokenMeter] ${model} ➔ Prompt: ${u.promptTokenCount ?? 0} | Generados: ${u.candidatesTokenCount ?? 0} | Total: ${u.totalTokenCount ?? 0} tokens`);
-    }
-
-    return response.text || '';
-  } catch (error) {
-    console.error('❌ Error en generateGeminiContent:', error);
-    return '';
   }
+
+  console.error('❌ Error en generateGeminiContent tras reintentos:', lastError);
+  throw lastError;
 };
 
 // --- AUDIO PLAYBACK HELPERS (OPTIMIZADO) ---
@@ -1162,10 +1260,7 @@ export class ModelRouter {
 
     // ── Gemini Flash REST (fallback cuando Live no está activo) ──────────
     try {
-      const apiKey =
-        (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
-        process.env.API_KEY ||
-        process.env.VITE_GEMINI_API_KEY;
+      const apiKey = getActiveGeminiKey();
 
       if (!apiKey) throw new Error('No se encontró la API key de Gemini');
 

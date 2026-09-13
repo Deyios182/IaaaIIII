@@ -8,10 +8,15 @@ import {
   deduplicateFacts,
   purgeUnknownPeople
 } from '../services/MemoryService';
+import {
+  getWatchedMediaLibrary,
+  deleteWatchedMedia,
+  type WatchedMedia
+} from '../services/MediaMemoryService';
 
 interface TimelineItem {
   id: string;
-  type: 'memory' | 'fact' | 'reminder' | 'person';
+  type: 'memory' | 'fact' | 'reminder' | 'person' | 'media';
   date: Date;
   title: string;
   description: string;
@@ -19,6 +24,7 @@ interface TimelineItem {
   category?: string;
   completed?: boolean;
   photoData?: string;
+  mediaData?: WatchedMedia;
 }
 
 const MONTH_NAMES = [
@@ -31,7 +37,7 @@ const WEEKDAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MemoriesTimeline: React.FC = () => {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'memory' | 'fact' | 'reminder' | 'person'>('all');
+  const [filter, setFilter] = useState<'all' | 'memory' | 'fact' | 'reminder' | 'person' | 'media'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [actionStatus, setActionStatus] = useState<{ msg: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -102,6 +108,34 @@ const MemoriesTimeline: React.FC = () => {
         });
       });
 
+      // 5. 🎬 Series, Películas y Animes Vistos (MediaMemoryService)
+      try {
+        const mediaLibrary = getWatchedMediaLibrary();
+        mediaLibrary.forEach((m) => {
+          const epTag = m.currentSeason && m.currentEpisode 
+            ? ` (T${m.currentSeason}:E${m.currentEpisode})` 
+            : (m.currentEpisode ? ` (Capítulo ${m.currentEpisode})` : '');
+          
+          const latestSession = m.sessions && m.sessions.length > 0 ? m.sessions[0] : null;
+          const summaryPreview = latestSession?.summary 
+            ? latestSession.summary 
+            : (m.synopsis || 'Obra vista con Deyios.');
+
+          timeline.push({
+            id: `media_${m.id}`,
+            type: 'media',
+            date: new Date(latestSession ? latestSession.timestamp : m.lastWatched || Date.now()),
+            title: `🎬 ${m.title}${epTag}`,
+            description: summaryPreview,
+            extra: m.theories && m.theories.length > 0 ? `Teorías compartidas: ${m.theories.join(' | ')}` : undefined,
+            category: m.mediaType || 'series',
+            mediaData: m
+          });
+        });
+      } catch (mediaErr) {
+        console.warn('⚠️ Error cargando series en Línea de Vida:', mediaErr);
+      }
+
       // Ordenar por fecha descendente
       timeline.sort((a, b) => b.date.getTime() - a.date.getTime());
       setItems(timeline);
@@ -126,6 +160,9 @@ const MemoriesTimeline: React.FC = () => {
         success = await deleteFact(item.id);
       } else if (item.type === 'reminder') {
         success = await deleteReminder(item.id);
+      } else if (item.type === 'media') {
+        const rawId = item.id.replace('media_', '');
+        success = deleteWatchedMedia(rawId);
       } else {
         success = true;
       }
@@ -507,6 +544,7 @@ const MemoriesTimeline: React.FC = () => {
             <div className="flex items-center gap-2 flex-wrap">
               {[
                 { id: 'all', label: 'Todos', icon: 'auto_awesome', count: items.length },
+                { id: 'media', label: '🎬 Series & Películas', icon: 'movie', count: items.filter(i => i.type === 'media').length },
                 { id: 'memory', label: 'Chats / Conversaciones', icon: 'forum', count: items.filter(i => i.type === 'memory').length },
                 { id: 'fact', label: 'Datos Aprendidos', icon: 'lightbulb', count: items.filter(i => i.type === 'fact').length },
                 { id: 'reminder', label: 'Recordatorios', icon: 'event_available', count: items.filter(i => i.type === 'reminder').length },
@@ -572,6 +610,7 @@ const MemoriesTimeline: React.FC = () => {
                       
                       {/* Timeline Dot */}
                       <div className={`absolute -left-[31px] sm:-left-[37px] top-5 size-3.5 sm:size-4 rounded-full border-2 border-[#0a0c12] z-10 transition-transform group-hover:scale-125 ${
+                        item.type === 'media' ? 'bg-pink-500 shadow-[0_0_10px_#ec4899]' :
                         item.type === 'memory' ? 'bg-purple-500 shadow-[0_0_8px_#a855f7]' : 
                         item.type === 'fact' ? 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]' : 
                         item.type === 'reminder' ? 'bg-amber-400 shadow-[0_0_8px_#f59e0b]' :
@@ -579,7 +618,9 @@ const MemoriesTimeline: React.FC = () => {
                       }`} />
 
                       {/* Tarjeta de Recuerdo */}
-                      <div className="bg-surface-dark border border-white/10 rounded-2xl p-4 sm:p-5 transition-all hover:border-white/20 hover:bg-white/[0.03] shadow-xl relative">
+                      <div className={`bg-surface-dark border rounded-2xl p-4 sm:p-5 transition-all hover:border-white/20 hover:bg-white/[0.03] shadow-xl relative ${
+                        item.type === 'media' ? 'border-pink-500/30 shadow-pink-950/20' : 'border-white/10'
+                      }`}>
                         <div className="flex justify-between items-start mb-3 gap-2">
                           <div className="flex items-center gap-3">
                             {item.photoData ? (
@@ -590,23 +631,33 @@ const MemoriesTimeline: React.FC = () => {
                               />
                             ) : (
                               <span className={`material-symbols-outlined p-2 rounded-xl text-sm ${
+                                item.type === 'media' ? 'bg-pink-500/20 text-pink-300' :
                                 item.type === 'memory' ? 'bg-purple-500/20 text-purple-300' : 
                                 item.type === 'fact' ? 'bg-cyan-500/20 text-cyan-300' : 
                                 item.type === 'reminder' ? 'bg-amber-500/20 text-amber-300' :
                                 'bg-emerald-500/20 text-emerald-300'
                               }`}>
-                                {item.type === 'memory' ? 'forum' : item.type === 'fact' ? 'lightbulb' : item.type === 'reminder' ? 'event_available' : 'person'}
+                                {item.type === 'media' ? 'movie' : item.type === 'memory' ? 'forum' : item.type === 'fact' ? 'lightbulb' : item.type === 'reminder' ? 'event_available' : 'person'}
                               </span>
                             )}
                             <div>
-                              <h3 className="text-xs sm:text-sm font-black text-white leading-tight">{item.title}</h3>
+                              <h3 className="text-xs sm:text-sm font-black text-white leading-tight flex items-center gap-2">
+                                {item.title}
+                                {item.type === 'media' && item.mediaData?.status && (
+                                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/30">
+                                    {item.mediaData.status === 'watching' ? 'En Curso' : item.mediaData.status}
+                                  </span>
+                                )}
+                              </h3>
                               <span className="text-[9px] text-slate-500 font-mono">{item.date.toLocaleTimeString()}</span>
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2">
                             {item.category && (
-                              <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-white/5 border border-white/10 text-slate-400 rounded-md">
+                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 border rounded-md ${
+                                item.type === 'media' ? 'bg-pink-500/10 border-pink-500/30 text-pink-300' : 'bg-white/5 border-white/10 text-slate-400'
+                              }`}>
                                 {item.category}
                               </span>
                             )}
@@ -625,17 +676,90 @@ const MemoriesTimeline: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="space-y-2">
-                          <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">
-                            "{item.description}"
-                          </p>
-                          {item.extra && (
-                            <div className="bg-black/40 rounded-xl p-3 text-[11px] text-slate-400 border-l-2 border-purple-500/40 mt-2">
-                              <span className="block text-[9px] font-black text-purple-300 uppercase mb-0.5">Respuesta de Nova</span>
-                              {item.extra}
-                            </div>
-                          )}
-                        </div>
+                        {/* Contenido según tipo */}
+                        {item.type === 'media' && item.mediaData ? (
+                          <div className="space-y-3 mt-2">
+                            {/* Desglose de sesiones por fecha */}
+                            {item.mediaData.sessions && item.mediaData.sessions.length > 0 ? (
+                              <div className="space-y-2.5">
+                                <div className="text-[10px] font-black text-pink-300 uppercase tracking-wider flex items-center gap-1.5">
+                                  <span className="material-symbols-outlined text-xs">calendar_month</span>
+                                  Sesiones de Visionado Registradas ({item.mediaData.sessions.length})
+                                </div>
+                                {item.mediaData.sessions.map((sess, sIdx) => (
+                                  <div key={sIdx} className="bg-black/30 border border-white/5 rounded-xl p-3 space-y-1.5">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="font-bold text-white flex items-center gap-1.5">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-pink-400"></span>
+                                        {sess.date}
+                                      </span>
+                                      {sess.episodes && (
+                                        <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 px-2 py-0.5 rounded">
+                                          {sess.episodes}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {sess.summary && (
+                                      <p className="text-xs text-slate-300 whitespace-pre-line leading-relaxed pl-3 border-l border-pink-500/30">
+                                        {sess.summary}
+                                      </p>
+                                    )}
+                                    {sess.keyDetails && sess.keyDetails.length > 0 && (
+                                      <div className="pt-1 flex items-center gap-1 flex-wrap pl-3">
+                                        <span className="text-[9px] font-black text-slate-500 uppercase">Detalles clave:</span>
+                                        {sess.keyDetails.map((det, dIdx) => (
+                                          <span key={dIdx} className="text-[10px] bg-white/5 border border-white/10 text-slate-300 px-2 py-0.5 rounded-md">
+                                            {det}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {sess.theories && sess.theories.length > 0 && (
+                                      <div className="text-[10px] text-purple-300/90 pl-3 pt-0.5">
+                                        💡 <span className="italic">{sess.theories.join(' • ')}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-medium whitespace-pre-line">
+                                {item.description}
+                              </p>
+                            )}
+
+                            {/* Personajes identificados */}
+                            {item.mediaData.characters && item.mediaData.characters.length > 0 && (
+                              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                                <span className="text-[10px] font-black text-slate-400 uppercase">Personajes:</span>
+                                {item.mediaData.characters.map((c, cIdx) => (
+                                  <span key={cIdx} className="text-[10px] bg-purple-500/10 border border-purple-500/30 text-purple-300 px-2 py-0.5 rounded-full font-medium">
+                                    {c}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Teorías generales */}
+                            {item.extra && (
+                              <div className="bg-purple-950/20 border border-purple-500/20 rounded-xl p-2.5 text-[11px] text-purple-200">
+                                💡 <span className="font-bold">Teorías & Apuntes:</span> {item.extra}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">
+                              "{item.description}"
+                            </p>
+                            {item.extra && (
+                              <div className="bg-black/40 rounded-xl p-3 text-[11px] text-slate-400 border-l-2 border-purple-500/40 mt-2">
+                                <span className="block text-[9px] font-black text-purple-300 uppercase mb-0.5">Respuesta de Nova</span>
+                                {item.extra}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                     </div>

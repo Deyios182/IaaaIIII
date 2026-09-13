@@ -302,16 +302,31 @@ export class ClothingManager {
         return this.items;
     }
 
+    // Aplicar visibilidad física y de render a un item (malla o material de textura)
+    private applyItemVisibility(item: ClothingItem, visible: boolean): void {
+        item.visible = visible;
+        if (item.mesh) {
+            item.mesh.visible = visible;
+        }
+        if (item.material) {
+            const mat = item.material as any;
+            mat.visible = visible;
+            mat.opacity = visible ? 1.0 : 0.0;
+            mat.transparent = !visible;
+            mat.depthWrite = visible;
+            mat.needsUpdate = true;
+        }
+    }
+
     // Toggle visibilidad de un item
     toggleItem(meshName: string): boolean {
         const item = this.items.find(i => i.name === meshName);
         if (item) {
-            item.visible = !item.visible;
-            if (item.mesh) item.mesh.visible = item.visible;
-            if (item.material) item.material.visible = item.visible;
+            const newVis = !item.visible;
+            this.applyItemVisibility(item, newVis);
             this.saveSettings(this.currentModelId);
             this.notify();
-            return item.visible;
+            return newVis;
         }
         return false;
     }
@@ -320,9 +335,7 @@ export class ClothingManager {
     setItemVisibility(meshName: string, visible: boolean): void {
         const item = this.items.find(i => i.name === meshName);
         if (item) {
-            item.visible = visible;
-            if (item.mesh) item.mesh.visible = visible;
-            if (item.material) item.material.visible = visible;
+            this.applyItemVisibility(item, visible);
             this.saveSettings(this.currentModelId);
             this.notify();
         }
@@ -344,9 +357,7 @@ export class ClothingManager {
             .filter(item => item.category === category)
             .forEach(item => {
                 const newVisible = visible !== undefined ? visible : !item.visible;
-                item.visible = newVisible;
-                if (item.mesh) item.mesh.visible = newVisible;
-                if (item.material) item.material.visible = newVisible;
+                this.applyItemVisibility(item, newVisible);
             });
         this.saveSettings(this.currentModelId);
         this.notify();
@@ -370,9 +381,7 @@ export class ClothingManager {
     // Preset: Ropa completa
     presetFullClothed(): void {
         this.items.forEach(item => {
-            item.visible = true;
-            if (item.mesh) item.mesh.visible = true;
-            if (item.material) item.material.visible = true;
+            this.applyItemVisibility(item, true);
         });
         this.currentStripLevel = 0;
         this.saveSettings(this.currentModelId);
@@ -383,13 +392,9 @@ export class ClothingManager {
     presetUnderwear(): void {
         this.items.forEach(item => {
             if (item.category === 'outfit' || item.category === 'shoes') {
-                item.visible = false;
-                if (item.mesh) item.mesh.visible = false;
-                if (item.material) item.material.visible = false;
+                this.applyItemVisibility(item, false);
             } else if (item.category === 'underwear' || item.category === 'accessory') {
-                item.visible = true;
-                if (item.mesh) item.mesh.visible = true;
-                if (item.material) item.material.visible = true;
+                this.applyItemVisibility(item, true);
             }
         });
         this.currentStripLevel = 2;
@@ -401,13 +406,9 @@ export class ClothingManager {
     presetAccessoriesOnly(): void {
         this.items.forEach(item => {
             if (item.category === 'accessory') {
-                item.visible = true;
-                if (item.mesh) item.mesh.visible = true;
-                if (item.material) item.material.visible = true;
+                this.applyItemVisibility(item, true);
             } else {
-                item.visible = false;
-                if (item.mesh) item.mesh.visible = false;
-                if (item.material) item.material.visible = false;
+                this.applyItemVisibility(item, false);
             }
         });
         this.hideNeckAccessories();
@@ -419,9 +420,7 @@ export class ClothingManager {
     // Preset: Mínimo / Desnuda
     presetNaked(): void {
         this.items.forEach(item => {
-            item.visible = false;
-            if (item.mesh) item.mesh.visible = false;
-            if (item.material) item.material.visible = false;
+            this.applyItemVisibility(item, false);
         });
         this.currentStripLevel = 3;
         this.saveSettings(this.currentModelId);
@@ -434,9 +433,7 @@ export class ClothingManager {
         this.items.forEach(item => {
             const lower = item.name.toLowerCase();
             if (keywords.some(k => lower.includes(k))) {
-                item.visible = false;
-                if (item.mesh) item.mesh.visible = false;
-                if (item.material) item.material.visible = false;
+                this.applyItemVisibility(item, false);
             }
         });
     }
@@ -461,9 +458,7 @@ export class ClothingManager {
                 const map = JSON.parse(saved);
                 this.items.forEach(item => {
                     if (map[item.name] !== undefined) {
-                        item.visible = !!map[item.name];
-                        if (item.mesh) item.mesh.visible = item.visible;
-                        if (item.material) item.material.visible = item.visible;
+                        this.applyItemVisibility(item, !!map[item.name]);
                     }
                 });
             }

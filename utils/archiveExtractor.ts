@@ -37,27 +37,35 @@ function detectMagicBytes(bytes: Uint8Array): 'zip' | 'rar' | '7z' | 'tar' | 'gz
  */
 async function findModelInMap(fileMap: Map<string, Blob>): Promise<{ modelPath: string; modelType: ArchiveModelType; secondaryModelPath?: string }> {
   // 1. Prioridad: PMX / PMD (MMD nativo)
-  let bestPmx = '';
-  for (const key of fileMap.keys()) {
-    const l = key.toLowerCase();
-    if (!l.endsWith('.pmx') && !l.endsWith('.pmd')) continue;
+  const pmxEntries = [...fileMap.entries()].filter(([k]) => {
+    const l = k.toLowerCase();
+    return l.endsWith('.pmx') || l.endsWith('.pmd');
+  });
 
-    if (!bestPmx) {
-      bestPmx = key;
-    } else {
-      const currentHasDir = key.includes('/');
-      const bestHasDir = bestPmx.includes('/');
-      if (currentHasDir && !bestHasDir) {
-        bestPmx = key;
-      } else if (currentHasDir === bestHasDir && key.length > bestPmx.length) {
-        bestPmx = key;
-      }
-    }
-  }
+  if (pmxEntries.length > 0) {
+    // Preferir paths con directorios para evitar duplicados por basename
+    const withDirs = pmxEntries.filter(([k]) => k.includes('/'));
+    const candidates = withDirs.length > 0 ? withDirs : pmxEntries;
 
-  if (bestPmx) {
-    const isPmd = bestPmx.toLowerCase().endsWith('.pmd');
-    return { modelPath: bestPmx, modelType: isPmd ? 'pmd' : 'pmx' };
+    // Separar accesorios/props (_weapon, _prop, _acc, _part, weapon, etc.) del personaje principal
+    // y ordenar dando máxima prioridad al cuerpo principal y al archivo de mayor tamaño
+    candidates.sort((a, b) => {
+      const aIsSub = /(_weapon|weapon|arma|_prop|_acc|_part|_smm|sword|gun|shield)/i.test(a[0]);
+      const bIsSub = /(_weapon|weapon|arma|_prop|_acc|_part|_smm|sword|gun|shield)/i.test(b[0]);
+      if (aIsSub !== bIsSub) return aIsSub ? 1 : -1;
+      return b[1].size - a[1].size;
+    });
+
+    const mainPmx = candidates[0][0];
+    const secondaryPmx = candidates.find(([k]) => k !== mainPmx && /(_weapon|weapon|arma|_prop|_acc|_part|_smm|sword|gun)/i.test(k))?.[0];
+
+    const isPmd = mainPmx.toLowerCase().endsWith('.pmd');
+    console.log(`🌸 [ArchiveExtractor] Encontrado modelo PMX/PMD principal: "${mainPmx}" (tamaño: ${(candidates[0][1].size / 1024).toFixed(1)} KB)` + (secondaryPmx ? `, arma/accesorio secundario: "${secondaryPmx}"` : ''));
+    return {
+      modelPath: mainPmx,
+      modelType: isPmd ? 'pmd' : 'pmx',
+      secondaryModelPath: secondaryPmx
+    };
   }
 
   // Segundo pase: firma mágica PMX/PMD

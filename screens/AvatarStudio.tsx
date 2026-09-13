@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import AvatarViewer3D from '../components/AvatarViewer3D';
-import { animationStore, StoredAnimation, LegCalibrationData, DEFAULT_LEG_CALIBRATION } from '../utils/animationStore';
+import { animationStore, StoredAnimation, LegCalibrationData, DEFAULT_LEG_CALIBRATION, BoneOffsets } from '../utils/animationStore';
 import { modelStore, SavedModelInfo } from '../utils/modelStore';
 import { AvatarSettings } from '../types';
 import { BoneMappingResult } from '../utils/mixamoRetargeter';
@@ -14,6 +14,8 @@ import { AvatarLearningService, AvatarPreference } from '../services/AvatarLearn
 import { gestureRegistry, GestureDefinition } from '../utils/gestureRegistry';
 import { idleOverrideRegistry, IDLE_SLOT_DEFINITIONS, IdleSlotDefinition, IdleSlotId } from '../utils/idleOverrideRegistry';
 import { getClothingManager, ClothingItem, ClothingCategory } from '../utils/clothingManager';
+import { stageStore, StagePreset } from '../utils/stageStore';
+import { multiVmdManager, GroupSlotConfig } from '../utils/multiVmdManager';
 
 const CLOTHING_CATEGORIES: { id: string; label: string; icon: string; category?: ClothingCategory }[] = [
   { id: 'all', label: 'Todo', icon: '🌟' },
@@ -109,7 +111,7 @@ const HAIR_COLORS = [
   { color: '#1a1a1a', name: 'Negro' },
 ];
 
-type Tab = 'model' | 'gestures' | 'animations' | 'clothing' | 'calibration' | 'learning';
+type Tab = 'model' | 'stage' | 'clothing' | 'gestures' | 'animations' | 'calibration' | 'learning';
 
 const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allowWebSearch, setAllowWebSearch }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -125,7 +127,11 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const selectedAnimForCameraRef = useRef<string | null>(null);
   const facialInputRef = useRef<HTMLInputElement>(null);
   const selectedAnimForFacialRef = useRef<string | null>(null);
+  const extraMotionInputRef = useRef<HTMLInputElement>(null);
+  const selectedExtraMotionTargetRef = useRef<{ animName: string; dancerId: string; name: string; role: string; offsetX: number; offsetZ: number } | null>(null);
+  const [pickingLibraryForExtra, setPickingLibraryForExtra] = useState<{ animName: string; dancerId: string; name: string; role: string; offsetX: number; offsetZ: number } | null>(null);
   const [savedModelInfo, setSavedModelInfo] = useState<SavedModelInfo | null>(null);
+  const [savedModelList, setSavedModelList] = useState<SavedModelInfo[]>([]);
   const actionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [boneMapping, setBoneMapping] = useState<BoneMappingResult[]>([]);
   const [boneMappingRaw, setBoneMappingRaw] = useState<Record<string, string>>({});
@@ -251,6 +257,173 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     ...customCategories,
   ];
 
+  // Estados para Escenarios (Stages)
+  const [stageList, setStageList] = useState<StagePreset[]>(stageStore.getAll());
+  const [activeStageId, setActiveStageId] = useState<string>(stageStore.getActiveStage().id);
+  const stageInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const unsub = stageStore.subscribe(() => {
+      setStageList(stageStore.getAll());
+      setActiveStageId(stageStore.getActiveStage().id);
+    });
+    return unsub;
+  }, []);
+
+  const handleStageUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    try {
+      setUploadStatus(`⏳ Importando escenario ${file.name}...`);
+      const newStage = await stageStore.addCustomStage(file);
+      setUploadStatus(`✅ Escenario "${newStage.name}" listo`);
+      setTimeout(() => setUploadStatus(''), 3000);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus(`❌ Error importando escenario`);
+    } finally {
+      if (stageInputRef.current) stageInputRef.current.value = '';
+    }
+  };
+
+  // Estados para Coreografías Grupales (2-5 bailarines)
+  const [groupState, setGroupState] = useState(multiVmdManager.getState());
+  const groupSlotInputRef = useRef<HTMLInputElement>(null);
+  const activeSlotIdRef = useRef<string | null>(null);
+  const groupAudioInputRef = useRef<HTMLInputElement>(null);
+  const groupCameraInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    multiVmdManager.init().then(() => {
+      setGroupState(multiVmdManager.getState());
+    });
+    const unsub = multiVmdManager.subscribe(() => {
+      setGroupState(multiVmdManager.getState());
+    });
+    return unsub;
+  }, []);
+
+  // Estados para selector de biblioteca en puestos de grupo y audio/cámara
+  const [assigningSlotAnim, setAssigningSlotAnim] = useState<GroupSlotConfig | null>(null);
+  const [assigningGroupAudio, setAssigningGroupAudio] = useState(false);
+  const [assigningGroupCamera, setAssigningGroupCamera] = useState(false);
+
+  const handleAssignSlotVmd = (slotId: string) => {
+    const slot = groupState.slots.find(s => s.id === slotId);
+    if (slot) {
+      setAssigningSlotAnim(slot);
+    } else {
+      activeSlotIdRef.current = slotId;
+      groupSlotInputRef.current?.click();
+    }
+  };
+
+  const handlePickAnimationForSlot = async (slotId: string, anim: StoredAnimation) => {
+    try {
+      setUploadStatus(`⏳ Asignando "${anim.displayName || anim.name}" al puesto...`);
+      const buffer = await animationStore.getFileBuffer(anim.name);
+      if (!buffer) {
+        setUploadStatus(`⚠️ No se pudo cargar el archivo binario de ${anim.name}`);
+        setTimeout(() => setUploadStatus(''), 2500);
+        return;
+      }
+      multiVmdManager.setSlotVmd(slotId, anim.displayName || anim.name, buffer, undefined, anim.name);
+
+      // Si el slot es el centro o el grupo aún no tiene audio/cámara y la animación sí los tiene, sugerir / autovincularlos
+      if (!groupState.audioUrl && (anim.audioUrl || anim.audioFileName)) {
+        if (anim.audioUrl) {
+          multiVmdManager.setAudio(anim.audioFileName || `Audio ${anim.displayName || anim.name}`, anim.audioUrl);
+        }
+      }
+      if (!groupState.cameraBuffer && (anim.hasCamera || anim.cameraUrl)) {
+        const camBuf = await animationStore.getCameraBuffer(anim.name);
+        if (camBuf) {
+          multiVmdManager.setCamera(anim.cameraFileName || `Cámara ${anim.displayName || anim.name}`, camBuf, anim.name);
+        }
+      }
+
+      setUploadStatus(`💃 ¡"${anim.displayName || anim.name}" asignado con éxito!`);
+      setTimeout(() => setUploadStatus(''), 2500);
+      setAssigningSlotAnim(null);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus(`❌ Error asignando animación al puesto`);
+      setTimeout(() => setUploadStatus(''), 2500);
+    }
+  };
+
+  const handlePickAudioForGroup = (anim: StoredAnimation) => {
+    if (anim.audioUrl) {
+      multiVmdManager.setAudio(anim.audioFileName || `Audio (${anim.displayName || anim.name})`, anim.audioUrl);
+      setUploadStatus(`🎵 Audio vinculado desde "${anim.displayName || anim.name}"`);
+      setTimeout(() => setUploadStatus(''), 2500);
+      setAssigningGroupAudio(false);
+    }
+  };
+
+  const handlePickCameraForGroup = async (anim: StoredAnimation) => {
+    try {
+      setUploadStatus(`⏳ Vinculando cámara de "${anim.displayName || anim.name}"...`);
+      const camBuf = await animationStore.getCameraBuffer(anim.name);
+      if (camBuf) {
+        multiVmdManager.setCamera(anim.cameraFileName || `Cámara (${anim.displayName || anim.name})`, camBuf, anim.name);
+        setUploadStatus(`🎥 Cámara grupal vinculada`);
+      } else {
+        setUploadStatus(`⚠️ Esta animación no tiene archivo de cámara .vmd guardado`);
+      }
+      setTimeout(() => setUploadStatus(''), 2500);
+      setAssigningGroupCamera(false);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus(`❌ Error vinculando cámara`);
+      setTimeout(() => setUploadStatus(''), 2500);
+    }
+  };
+
+  const handleSlotVmdFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const slotId = activeSlotIdRef.current;
+    if (!file || !slotId) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      multiVmdManager.setSlotVmd(slotId, file.name, buffer);
+      setUploadStatus(`💃 VMD asignado a puesto`);
+      setTimeout(() => setUploadStatus(''), 2500);
+    } catch (err) {
+      setUploadStatus(`❌ Error leyendo VMD`);
+    } finally {
+      if (groupSlotInputRef.current) groupSlotInputRef.current.value = '';
+      setAssigningSlotAnim(null);
+    }
+  };
+
+  const handleGroupAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    multiVmdManager.setAudio(file.name, url, file);
+    setUploadStatus(`🎵 Audio grupal listo`);
+    setTimeout(() => setUploadStatus(''), 2500);
+    if (groupAudioInputRef.current) groupAudioInputRef.current.value = '';
+    setAssigningGroupAudio(false);
+  };
+
+  const handleGroupCameraUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      multiVmdManager.setCamera(file.name, buffer);
+      setUploadStatus(`🎥 Cámara grupal vinculada`);
+      setTimeout(() => setUploadStatus(''), 2500);
+    } catch (err) {
+      setUploadStatus(`❌ Error en cámara`);
+    } finally {
+      if (groupCameraInputRef.current) groupCameraInputRef.current.value = '';
+      setAssigningGroupCamera(false);
+    }
+  };
+
   // Estados para Ropa y Accesorios Dinámicos por Modelo
   const [clothingItems, setClothingItems] = useState<ClothingItem[]>([]);
   const [clothingCategoryFilter, setClothingCategoryFilter] = useState<string>('all');
@@ -298,28 +471,28 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   // Estado para calibración de piernas / VMD (Cinemática Inversa)
   const [legCalibration, setLegCalibration] = useState<LegCalibrationData>({ ...DEFAULT_LEG_CALIBRATION });
 
-  // VMD actualmente en reproducción
-  const activeVmdAnim = React.useMemo(() => {
-    return storedAnims.find(a => a.name === activeAction && a.type === 'vmd') || null;
+  // Animación actualmente en reproducción (VMD, FBX o GLB)
+  const activeAnim = React.useMemo(() => {
+    return storedAnims.find(a => a.name === activeAction) || null;
   }, [storedAnims, activeAction]);
 
-  // Sincronizar calibración cuando cambia el VMD en reproducción
+  // Sincronizar calibración cuando cambia la animación en reproducción
   useEffect(() => {
-    if (activeVmdAnim?.legCalibration) {
-      setLegCalibration(activeVmdAnim.legCalibration);
-    } else if (activeVmdAnim) {
+    if (activeAnim?.legCalibration) {
+      setLegCalibration(activeAnim.legCalibration);
+    } else if (activeAnim) {
       setLegCalibration({ ...DEFAULT_LEG_CALIBRATION });
     }
-  }, [activeVmdAnim?.name]);
+  }, [activeAnim?.name]);
 
   const handleLegCalibrationChange = (key: keyof LegCalibrationData, value: any) => {
     const updated = { ...legCalibration, [key]: value };
     setLegCalibration(updated);
-    // ⚡ Efecto EN VIVO instantáneo para el siguiente frame en AvatarViewer3D
+    // ⚡ Efecto EN VIVO instantáneo para el siguiente frame en AvatarViewer3D (VMD y FBX)
     window.dispatchEvent(new CustomEvent('nova-leg-calibration', { detail: updated }));
-    // Si hay un VMD activo, persistir en animationStore
-    if (activeVmdAnim) {
-      animationStore.updateLegCalibration(activeVmdAnim.name, { [key]: value });
+    // Si hay una animación activa, persistir en animationStore
+    if (activeAnim) {
+      animationStore.updateLegCalibration(activeAnim.name, { [key]: value });
     }
   };
 
@@ -356,15 +529,21 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     }
     setLegCalibration(p);
     window.dispatchEvent(new CustomEvent('nova-leg-calibration', { detail: p }));
-    if (activeVmdAnim) {
-      animationStore.updateLegCalibration(activeVmdAnim.name, p);
+    if (activeAnim) {
+      animationStore.updateLegCalibration(activeAnim.name, p);
     }
   };
 
-  // Cargar y escuchar cambios en el modelo persistido en IndexedDB
+  // Cargar y escuchar cambios en el modelo persistido en IndexedDB y la biblioteca
   useEffect(() => {
-    modelStore.getModelInfo().then(info => setSavedModelInfo(info));
-    const unsub = modelStore.subscribe(info => setSavedModelInfo(info));
+    const refreshModels = () => {
+      modelStore.getModelInfo().then(info => setSavedModelInfo(info));
+      modelStore.getAllSavedModels().then(list => setSavedModelList(list));
+    };
+    refreshModels();
+    const unsub = modelStore.subscribe(() => {
+      refreshModels();
+    });
     return unsub;
   }, []);
 
@@ -471,6 +650,28 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     return () => clearInterval(interval);
   }, []);
 
+  // 🔄 Listener para sincronizar estado de reproducción: cuando una animación de 1 sola vez termina,
+  // restaurar activeAction a null para que los botones cambien inmediatamente de "Parar" a "Probar" / "play"
+  useEffect(() => {
+    const handleActionFinished = () => {
+      if (actionTimeoutRef.current) {
+        clearTimeout(actionTimeoutRef.current);
+        actionTimeoutRef.current = null;
+      }
+      setActiveAction(null);
+    };
+
+    window.addEventListener('nova-action-ended', handleActionFinished);
+    window.addEventListener('nova-animation-ended', handleActionFinished);
+    window.addEventListener('nova-stop-animation', handleActionFinished);
+
+    return () => {
+      window.removeEventListener('nova-action-ended', handleActionFinished);
+      window.removeEventListener('nova-animation-ended', handleActionFinished);
+      window.removeEventListener('nova-stop-animation', handleActionFinished);
+    };
+  }, []);
+
   const triggerAction = useCallback((actionId: string | null, duration?: number) => {
     if (actionTimeoutRef.current) {
       clearTimeout(actionTimeoutRef.current);
@@ -480,6 +681,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     if (!actionId) {
       setActiveAction(null);
       window.dispatchEvent(new CustomEvent('nova-stop-animation'));
+      window.dispatchEvent(new CustomEvent('nova-multi-dance-stop'));
       window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
       return;
     }
@@ -488,6 +690,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     if (activeAction === actionId) {
       setActiveAction(null);
       window.dispatchEvent(new CustomEvent('nova-stop-animation'));
+      window.dispatchEvent(new CustomEvent('nova-multi-dance-stop'));
       window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: null } }));
       return;
     }
@@ -496,6 +699,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     const overrideName = gestureRegistry.getGestureOverride(actionId);
     const targetAnimName = overrideName || actionId;
     const externalAnim = animationStore.get(targetAnimName) || animationStore.get(actionId);
+    const isLooping = !!externalAnim?.loop;
     if (externalAnim) {
       window.dispatchEvent(new CustomEvent('nova-load-animation', { 
         detail: { 
@@ -503,7 +707,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
           name: externalAnim.name, 
           type: externalAnim.type, 
           autoplay: true,
-          loop: false
+          loop: isLooping
         } 
       }));
     }
@@ -511,9 +715,9 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     setActiveAction(actionId);
     window.dispatchEvent(new CustomEvent('nova-action', { detail: { action: actionId } }));
     
-    // Si se pasa una duración fija o calculada, restaurar el botón a estado inactivo al terminar
+    // Si no está en bucle y se pasa una duración fija o calculada, restaurar el botón a estado inactivo al terminar
     const animDuration = duration || (externalAnim?.duration ? externalAnim.duration * 1000 : 0);
-    if (animDuration && animDuration > 0) {
+    if (!isLooping && animDuration && animDuration > 0) {
       actionTimeoutRef.current = setTimeout(() => {
         setActiveAction(null);
       }, animDuration);
@@ -781,6 +985,66 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     setTimeout(() => setUploadStatus(''), 2500);
   }, []);
 
+  const handleSelectExtraMotionFile = useCallback((animName: string, dancerId: string, name: string, role: string, offsetX: number, offsetZ: number = 0) => {
+    selectedExtraMotionTargetRef.current = { animName, dancerId, name, role, offsetX, offsetZ };
+    extraMotionInputRef.current?.click();
+  }, []);
+
+  const handleExtraMotionFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const target = selectedExtraMotionTargetRef.current;
+    if (!file || !target) return;
+    try {
+      setUploadStatus(`⏳ Asignando motion ${file.name} a ${target.name}...`);
+      await animationStore.setExtraMotionFile(
+        target.animName,
+        target.dancerId,
+        target.name,
+        target.role,
+        file,
+        target.offsetX,
+        target.offsetZ
+      );
+      setUploadStatus(`💃 Motion "${file.name}" asignado a ${target.name}`);
+      setTimeout(() => setUploadStatus(''), 3000);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus(`❌ Error asignando motion VMD`);
+    } finally {
+      if (extraMotionInputRef.current) extraMotionInputRef.current.value = '';
+      selectedExtraMotionTargetRef.current = null;
+    }
+  }, []);
+
+  const handlePickExtraMotionFromLibrary = useCallback(async (sourceAnim: StoredAnimation) => {
+    const target = pickingLibraryForExtra;
+    if (!target) return;
+    try {
+      setUploadStatus(`⏳ Asignando "${sourceAnim.displayName || sourceAnim.name}" a ${target.name}...`);
+      await animationStore.setExtraMotionFromExisting(
+        target.animName,
+        target.dancerId,
+        target.name,
+        target.role,
+        sourceAnim.name,
+        target.offsetX,
+        target.offsetZ
+      );
+      setUploadStatus(`💃 "${sourceAnim.displayName || sourceAnim.name}" asignado a ${target.name}`);
+      setTimeout(() => setUploadStatus(''), 3000);
+      setPickingLibraryForExtra(null);
+    } catch (err) {
+      console.error(err);
+      setUploadStatus(`❌ Error asignando motion de biblioteca`);
+    }
+  }, [pickingLibraryForExtra]);
+
+  const handleRemoveExtraMotion = useCallback(async (animName: string, dancerId: string) => {
+    await animationStore.removeExtraMotion(animName, dancerId);
+    setUploadStatus(`🗑️ Bailarín removido`);
+    setTimeout(() => setUploadStatus(''), 2500);
+  }, []);
+
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); }, []);
   const handleDragLeave = useCallback(() => setIsDragging(false), []);
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -791,6 +1055,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: 'model', label: 'Modelo', icon: 'face' },
+    { id: 'stage', label: 'Escenario', icon: 'theater_comedy' },
     { id: 'clothing', label: 'Ropa', icon: 'checkroom' },
     { id: 'gestures', label: 'Gestos', icon: 'waving_hand' },
     { id: 'animations', label: 'Anims', icon: 'animation' },
@@ -867,25 +1132,76 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 onChange={(e) => handleModelUpload(e.target.files)} />
             </div>
 
-            {savedModelInfo && (
-              <div className="bg-violet-500/10 border border-violet-500/30 rounded-xl p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2 overflow-hidden">
-                  <span className="material-symbols-outlined text-violet-400 text-sm">save</span>
-                  <div className="truncate">
-                    <span className="text-[10px] font-bold text-violet-300 block truncate">{savedModelInfo.fileName}</span>
-                    <span className="text-[8px] text-slate-400">
-                      Guardado permanente • {(savedModelInfo.fileSize / (1024 * 1024)).toFixed(1)} MB
-                    </span>
-                  </div>
+            {/* 💾 Biblioteca de Modelos Guardados en IndexedDB */}
+            {savedModelList.length > 0 && (
+              <div className="bg-white/[0.02] border border-violet-500/20 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-violet-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">inventory_2</span>
+                    Modelos Guardados ({savedModelList.length})
+                  </label>
+                  <span className="text-[8px] text-slate-500">Persisten al reiniciar</span>
                 </div>
-                <button
-                  onClick={handleResetDefaultModel}
-                  className="text-xs text-slate-400 hover:text-red-400 p-1 transition-colors flex items-center gap-1"
-                  title="Restaurar modelo por defecto"
-                >
-                  <span className="material-symbols-outlined text-sm">restore</span>
-                  <span className="text-[9px]">Reset</span>
-                </button>
+
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {savedModelList.map(item => {
+                    const isActive = savedModelInfo?.fileName === item.fileName;
+                    return (
+                      <div
+                        key={item.fileName}
+                        className={`flex items-center justify-between p-2 rounded-lg border transition-all ${
+                          isActive
+                            ? 'bg-violet-600/20 border-violet-500 text-white shadow-sm'
+                            : 'bg-black/20 border-white/5 hover:border-white/20 text-slate-300'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setUploadStatus(`⏳ Cargando modelo ${item.fileName}...`);
+                            const res = await modelStore.loadModelByName(item.fileName);
+                            if (res) {
+                              updateAvatar({ modelUrl: res.url });
+                              setUploadStatus(`✅ Modelo "${item.fileName}" activado`);
+                              setTimeout(() => setUploadStatus(''), 3000);
+                            }
+                          }}
+                          className="flex items-center gap-2 flex-1 text-left min-w-0"
+                          title="Clic para activar este modelo"
+                        >
+                          <span className={`material-symbols-outlined text-sm shrink-0 ${isActive ? 'text-violet-400' : 'text-slate-500'}`}>
+                            {isActive ? 'check_circle' : 'deployed_code'}
+                          </span>
+                          <div className="min-w-0 truncate">
+                            <span className="text-[10px] font-bold block truncate">{item.fileName}</span>
+                            <span className="text-[8px] text-slate-500 block">
+                              .{item.fileType} • {(item.fileSize / (1024 * 1024)).toFixed(1)} MB {isActive ? '• ACTIVO' : ''}
+                            </span>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (confirm(`¿Eliminar "${item.fileName}" de tus modelos guardados?`)) {
+                              await modelStore.deleteSavedModel(item.fileName);
+                              const list = await modelStore.getAllSavedModels();
+                              setSavedModelList(list);
+                              if (isActive) {
+                                handleResetDefaultModel();
+                              }
+                            }
+                          }}
+                          className="p-1 text-slate-500 hover:text-red-400 transition-colors ml-1"
+                          title="Eliminar de la biblioteca"
+                        >
+                          <span className="material-symbols-outlined text-xs">delete</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -933,6 +1249,75 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               </>
             )}
           </>)}
+
+          {/* ═══ TAB: ESCENARIOS (STAGES) ═══ */}
+          {activeTab === 'stage' && (<>
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                  Escenarios Disponibles ({stageList.length})
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {stageList.map(st => (
+                    <button
+                      key={st.id}
+                      onClick={() => stageStore.setActiveStage(st.id)}
+                      className={`p-3 rounded-xl border-2 transition-all text-left group relative ${
+                        activeStageId === st.id
+                          ? 'border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10'
+                          : 'border-white/5 bg-white/[0.02] hover:border-white/20'
+                      }`}
+                    >
+                      <span className="text-2xl block mb-1 group-hover:scale-110 transition-transform">{st.icon}</span>
+                      <span className={`text-[10px] font-bold block truncate ${activeStageId === st.id ? 'text-cyan-400' : 'text-slate-300'}`}>
+                        {st.name}
+                      </span>
+                      <span className="text-[8px] text-slate-500 block truncate mt-0.5">
+                        {st.description}
+                      </span>
+                      {st.type === 'custom' && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            stageStore.deleteCustomStage(st.id);
+                          }}
+                          className="absolute top-2 right-2 text-slate-500 hover:text-red-400 text-xs"
+                          title="Eliminar escenario"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Zona de subida de escenarios MMD y 3D */}
+              <div
+                onClick={() => stageInputRef.current?.click()}
+                className="border-2 border-dashed border-white/10 hover:border-cyan-500/30 rounded-xl p-4 text-center cursor-pointer transition-all"
+              >
+                <span className="material-symbols-outlined text-2xl text-cyan-400 mb-1 block">theater_comedy</span>
+                <p className="text-[10px] text-slate-300 font-bold">Cargar Escenario MMD / 3D (.pmx, .zip, .rar, .glb)</p>
+                <p className="text-[8px] text-slate-500 mt-0.5">Soporta stages completos con texturas en archivo comprimido</p>
+                <input
+                  ref={stageInputRef}
+                  type="file"
+                  accept=".pmx,.glb,.gltf,.zip,.rar,.7z"
+                  className="hidden"
+                  onChange={(e) => handleStageUpload(e.target.files)}
+                />
+              </div>
+
+              <div className="bg-cyan-950/20 border border-cyan-500/20 rounded-xl p-3 text-[9px] text-slate-400 leading-relaxed">
+                <span className="text-cyan-300 font-bold block mb-1">💡 Consejos para Stages MMD</span>
+                Los escenarios MMD suelen venir en carpetas con un archivo <code className="text-white">.pmx</code> y texturas. Puedes comprimir esa carpeta en un archivo <code className="text-white">.zip</code> o <code className="text-white">.rar</code> y soltarlo directamente aquí.
+              </div>
+            </div>
+          </>)}
+
+
 
           {/* ═══ TAB: ROPA ═══ */}
           {activeTab === 'clothing' && (<>
@@ -1515,6 +1900,216 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
           {/* ═══ TAB: ANIMACIONES ═══ */}
           {activeTab === 'animations' && (<>
+            {/* ═══ MÓDULO INTEGRADO: COREOGRAFÍA GRUPAL (2-5 BAILARINES) ═══ */}
+            <div className="bg-gradient-to-br from-violet-950/40 via-purple-950/20 to-black/30 border border-violet-500/30 rounded-2xl p-3.5 space-y-3.5 shadow-lg shadow-violet-950/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-8 h-8 rounded-xl bg-violet-600/30 border border-violet-400/30 flex items-center justify-center text-base">
+                    👥
+                  </span>
+                  <div>
+                    <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>Coreografía Grupal</span>
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                        {groupState.dancerCount} Bailarines
+                      </span>
+                    </h3>
+                    <p className="text-[8px] text-slate-400">Clona al avatar activo y sincroniza múltiples motions VMD</p>
+                  </div>
+                </div>
+
+                {groupState.isPlaying ? (
+                  <button
+                    onClick={() => multiVmdManager.stopGroupDance()}
+                    className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-[10px] font-bold shadow-lg shadow-red-600/30 transition-all flex items-center gap-1 shrink-0"
+                  >
+                    <span>⏹</span> Detener
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => multiVmdManager.playGroupDance()}
+                    className="px-3 py-1.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 text-white rounded-lg text-[10px] font-bold shadow-lg shadow-violet-600/30 transition-all flex items-center gap-1 shrink-0"
+                  >
+                    <span>▶</span> Iniciar Baile
+                  </button>
+                )}
+              </div>
+
+              {/* Selector de número de bailarines */}
+              <div>
+                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  Cantidad de Bailarines en Escena:
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[2, 3, 4, 5].map(cnt => (
+                    <button
+                      key={cnt}
+                      onClick={() => multiVmdManager.setDancerCount(cnt)}
+                      className={`py-1.5 rounded-lg text-[10px] font-bold border transition-all ${
+                        groupState.dancerCount === cnt
+                          ? 'bg-violet-600 border-violet-400 text-white shadow-sm'
+                          : 'bg-white/5 border-white/5 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {cnt} Personajes
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Slots de bailarines con selector rápido */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Asignación por Puesto:
+                </label>
+                {groupState.slots.map((slot, idx) => (
+                  <div
+                    key={slot.id}
+                    className="p-2 rounded-xl border border-white/5 bg-black/30 flex items-center justify-between"
+                  >
+                    <div className="min-w-0 flex-1 mr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-violet-600/30 text-violet-300 flex items-center justify-center text-[9px] font-bold shrink-0">
+                          {idx + 1}
+                        </span>
+                        <span className="text-[10px] font-bold text-white truncate">{slot.name}</span>
+                      </div>
+                      <span className="text-[8px] text-slate-500 block truncate mt-0.5">
+                        X: {slot.defaultOffsetX}m {slot.vmdName ? `• ${slot.vmdName}` : '• (Sin archivo)'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {slot.vmdName ? (
+                        <>
+                          <span className="text-[8px] text-emerald-400 font-bold mr-1">✓ Listo</span>
+                          <button
+                            onClick={() => handleAssignSlotVmd(slot.id)}
+                            className="px-1.5 py-0.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white rounded text-[8px] transition-all"
+                            title="Cambiar motion VMD"
+                          >
+                            Cambiar
+                          </button>
+                          <button
+                            onClick={() => multiVmdManager.clearSlot(slot.id)}
+                            className="text-slate-500 hover:text-red-400 text-xs px-1"
+                            title="Quitar VMD"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleAssignSlotVmd(slot.id)}
+                            className="px-2 py-0.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 rounded text-[8px] font-bold text-violet-200 transition-all flex items-center gap-0.5"
+                            title="Seleccionar de tus 200+ bailes ya cargados"
+                          >
+                            <span>📂</span> Biblioteca
+                          </button>
+                          <button
+                            onClick={() => {
+                              activeSlotIdRef.current = slot.id;
+                              groupSlotInputRef.current?.click();
+                            }}
+                            className="px-1.5 py-0.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-[8px] text-slate-400 hover:text-cyan-300 transition-all"
+                            title="O subir un archivo .vmd nuevo"
+                          >
+                            ⬆️
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Música y Cámara Cinematográfica Grupal */}
+              <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
+                    <span className="text-xs">🎵</span>
+                    <div className="truncate">
+                      <span className="text-[9px] font-bold text-slate-300 block truncate">Audio / Canción</span>
+                      <span className="text-[8px] text-slate-500 block truncate">{groupState.audioName || 'Opcional'}</span>
+                    </div>
+                  </div>
+                  {groupState.audioName ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setAssigningGroupAudio(true)}
+                        className="text-[8px] px-1.5 py-0.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded"
+                      >
+                        Cambiar
+                      </button>
+                      <button onClick={() => multiVmdManager.clearAudio()} className="text-slate-400 hover:text-red-400 text-xs">✕</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setAssigningGroupAudio(true)}
+                        className="px-2 py-0.5 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 rounded text-[8px] font-bold text-violet-300"
+                        title="Vincular audio de uno de tus bailes ya cargados"
+                      >
+                        📂 De Biblioteca
+                      </button>
+                      <button
+                        onClick={() => groupAudioInputRef.current?.click()}
+                        className="px-2 py-0.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-[8px] text-slate-400 hover:text-white"
+                        title="Subir archivo de audio (.mp3, .wav)"
+                      >
+                        ⬆️ Subir
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between border-t border-white/5 pt-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
+                    <span className="text-xs">🎥</span>
+                    <div className="truncate">
+                      <span className="text-[9px] font-bold text-slate-300 block truncate">Cámara Grupal</span>
+                      <span className="text-[8px] text-slate-500 block truncate">{groupState.cameraName || 'Cámara .vmd'}</span>
+                    </div>
+                  </div>
+                  {groupState.cameraName ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setAssigningGroupCamera(true)}
+                        className="text-[8px] px-1.5 py-0.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded"
+                      >
+                        Cambiar
+                      </button>
+                      <button onClick={() => multiVmdManager.clearCamera()} className="text-slate-400 hover:text-red-400 text-xs">✕</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setAssigningGroupCamera(true)}
+                        className="px-2 py-0.5 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 rounded text-[8px] font-bold text-cyan-300"
+                        title="Vincular cámara de uno de tus bailes ya cargados"
+                      >
+                        📂 De Biblioteca
+                      </button>
+                      <button
+                        onClick={() => groupCameraInputRef.current?.click()}
+                        className="px-2 py-0.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-[8px] text-slate-400 hover:text-white"
+                        title="Subir archivo de cámara .vmd"
+                      >
+                        ⬆️ Subir
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Inputs ocultos para carga de grupo */}
+              <input ref={groupSlotInputRef} type="file" accept=".vmd" className="hidden" onChange={handleSlotVmdFileChange} />
+              <input ref={groupAudioInputRef} type="file" accept=".mp3,.wav,.ogg,.m4a" className="hidden" onChange={handleGroupAudioUpload} />
+              <input ref={groupCameraInputRef} type="file" accept=".vmd" className="hidden" onChange={handleGroupCameraUpload} />
+            </div>
+
+            {/* Zona de Arrastre de Animaciones Individuales */}
             <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
@@ -1655,15 +2250,17 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             </span>
                           </div>
                         </button>
-                        <button onClick={() => {
-                          if (activeAction === anim.name) {
-                            triggerAction(anim.name);
-                          }
-                          animationStore.remove(anim.name);
-                        }}
-                          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all p-1">
-                          <span className="material-symbols-outlined text-xs">delete</span>
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => {
+                            if (activeAction === anim.name) {
+                              triggerAction(anim.name);
+                            }
+                            animationStore.remove(anim.name);
+                          }}
+                            className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all p-1">
+                            <span className="material-symbols-outlined text-xs">delete</span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* Alias en español y Categoría para resolver nombres chinos */}
@@ -1760,6 +2357,68 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             {anim.posePreset === 'vrm' ? '🪄 A-POSE (ANIME) APLICADO' : 'APLICAR FIX A-POSE (ANIME)'}
                           </button>
                         </div>
+
+                        {/* 🎛️ Ajuste manual de pose (solo Mixamo/FBX) */}
+                        {(anim.type === 'fbx' || anim.type === 'glb') && (
+                          <div className="pt-2 mt-1 border-t border-white/5 flex flex-col gap-2">
+                            <label className="text-[9px] font-bold text-slate-500 uppercase flex items-center justify-between">
+                              <span>Ajuste Manual de Pose</span>
+                              <span className="material-symbols-outlined text-[10px] text-cyan-400">tune</span>
+                            </label>
+
+                            {/* Helper para crear un slider */}
+                            {([
+                              { key: 'spineTiltX' as keyof BoneOffsets, label: 'Espalda adelante/atrás', min: -60, max: 60, icon: '🫀' },
+                              { key: 'hipTiltX'   as keyof BoneOffsets, label: 'Cadera adelante/atrás', min: -45, max: 45, icon: '🦴' },
+                              { key: 'armDownL'   as keyof BoneOffsets, label: 'Brazo Izq. abajo',      min: -120, max: 120, icon: '💪' },
+                              { key: 'armDownR'   as keyof BoneOffsets, label: 'Brazo Der. abajo',      min: -120, max: 120, icon: '💪' },
+                              { key: 'spineTiltZ' as keyof BoneOffsets, label: 'Inclin. lateral torso', min: -30, max: 30, icon: '↔️' },
+                            ] as { key: keyof BoneOffsets; label: string; min: number; max: number; icon: string }[]).map(({ key, label, min, max, icon }) => {
+                              const val = anim.boneOffsets?.[key] ?? 0;
+                              return (
+                                <div key={key} className="flex flex-col gap-0.5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[8px] text-slate-400">{icon} {label}</span>
+                                    <span className="text-[8px] font-mono text-cyan-300">{Number(val).toFixed(0)}°</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={min}
+                                    max={max}
+                                    step={1}
+                                    value={val as number}
+                                    onChange={(e) => {
+                                      const newOffsets: BoneOffsets = { ...(anim.boneOffsets || {}), [key]: Number(e.target.value) };
+                                      animationStore.updateMeta(anim.name, { boneOffsets: newOffsets });
+                                    }}
+                                    onMouseUp={() => {
+                                      // Recargar animación al soltar para aplicar el offset
+                                      window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                                        detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
+                                      }));
+                                    }}
+                                    className="w-full h-1 accent-cyan-400 cursor-pointer"
+                                  />
+                                </div>
+                              );
+                            })}
+
+                            {/* Botón reset */}
+                            {anim.boneOffsets && Object.values(anim.boneOffsets).some(v => v !== 0 && v !== undefined) && (
+                              <button
+                                onClick={() => {
+                                  animationStore.updateMeta(anim.name, { boneOffsets: {} });
+                                  window.dispatchEvent(new CustomEvent('nova-load-animation', {
+                                    detail: { url: anim.url, name: anim.name, type: anim.type, autoplay: activeAction === anim.name }
+                                  }));
+                                }}
+                                className="w-full py-1 text-[9px] text-slate-500 hover:text-red-400 border border-white/5 hover:border-red-500/30 rounded transition-all"
+                              >
+                                ↺ Resetear ajustes
+                              </button>
+                            )}
+                          </div>
+                        )}
 
                         {/* 🎵 Sección de Audio Sincronizado por Animación */}
                         <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between">
@@ -1899,6 +2558,173 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                             )}
                           </div>
                         </div>
+
+                        {/* 🔁 Sección Bucle Continuo & 🎥 Cámara por Defecto */}
+                        <div className="pt-2 mt-1 border-t border-white/5 flex items-center justify-between gap-2">
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={!!anim.loop}
+                              onChange={(e) => {
+                                const isLoop = e.target.checked;
+                                animationStore.updateMeta(anim.name, { loop: isLoop });
+                                if (activeAction === anim.name) {
+                                  // Re-disparar con el nuevo modo de bucle si está sonando ahora
+                                  triggerAction(anim.name);
+                                }
+                              }}
+                              className="w-3.5 h-3.5 rounded border-white/20 bg-black/40 text-violet-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-violet-500"
+                            />
+                            <span className="text-[9px] font-bold text-slate-300 flex items-center gap-1">
+                              <span>🔁</span>
+                              <span className={anim.loop ? 'text-violet-300' : 'text-slate-400'}>
+                                {anim.loop ? 'Bucle infinito' : '1 sola vez'}
+                              </span>
+                            </span>
+                          </label>
+
+                          <div className="flex items-center gap-1">
+                            <span className="text-[8px] font-bold text-slate-500 uppercase">Cámara:</span>
+                            <select
+                              value={anim.cameraMode || (anim.hasCamera || anim.cameraUrl ? 'vmd' : 'dynamic')}
+                              onChange={(e) => {
+                                const mode = e.target.value as any;
+                                animationStore.updateMeta(anim.name, { cameraMode: mode });
+                                window.dispatchEvent(new CustomEvent('nova-camera-preset', {
+                                  detail: { preset: mode }
+                                }));
+                              }}
+                              className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[8px] font-semibold text-cyan-300 outline-none focus:border-cyan-400 cursor-pointer"
+                              title="Cámara al reproducir si no tiene VMD cinemático"
+                            >
+                              <option value="dynamic">🎬 Dinámica (Orbital)</option>
+                              <option value="default">📐 Frontal</option>
+                              <option value="face">👤 Rostro</option>
+                              <option value="full">🧍 Cuerpo entero</option>
+                              <option value="free">🖱️ Libre (Ratón)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* 👥 SECCIÓN: BAILARINES EXTRA / COREOGRAFÍA GRUPAL (2-5 PERSONAJES) */}
+                        <div className="pt-2.5 mt-1 border-t border-violet-500/20 bg-violet-950/20 rounded-xl p-2.5 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs">👥</span>
+                              <div>
+                                <span className="text-[10px] font-bold text-violet-200 block">
+                                  Bailarines del Grupo ({1 + (anim.extraMotions?.length || 0)}/5)
+                                </span>
+                                <span className="text-[7px] text-slate-400 block">
+                                  Clona a Nova para acompañar en puestos laterales (Dúo, Trío, etc.)
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {/* Selector rápido para añadir bailarines */}
+                            {(!anim.extraMotions || anim.extraMotions.length < 4) && (
+                              <div className="flex items-center gap-1">
+                                {[
+                                  { id: 'dancer_2', name: 'Bailarín 2', role: 'Izquierda', offsetX: -1.8, offsetZ: 0 },
+                                  { id: 'dancer_3', name: 'Bailarín 3', role: 'Derecha', offsetX: 1.8, offsetZ: 0 },
+                                  { id: 'dancer_4', name: 'Bailarín 4', role: 'Extremo Izq.', offsetX: -3.6, offsetZ: -0.3 },
+                                  { id: 'dancer_5', name: 'Bailarín 5', role: 'Extremo Der.', offsetX: 3.6, offsetZ: -0.3 },
+                                ]
+                                  .filter(candidate => !anim.extraMotions?.some(m => m.id === candidate.id))
+                                  .slice(0, 1) // Agregar el siguiente bailarín en orden
+                                  .map(candidate => (
+                                    <button
+                                      key={candidate.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setPickingLibraryForExtra({
+                                          animName: anim.name,
+                                          dancerId: candidate.id,
+                                          name: candidate.name,
+                                          role: candidate.role,
+                                          offsetX: candidate.offsetX,
+                                          offsetZ: candidate.offsetZ
+                                        });
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-violet-600/40 hover:bg-violet-600/60 border border-violet-400/40 text-violet-200 text-[8px] font-bold flex items-center gap-1 transition-all"
+                                      title={`Añadir ${candidate.name} (${candidate.role})`}
+                                    >
+                                      <span>+</span>
+                                      <span>{candidate.name} ({candidate.role})</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Lista de bailarines extra ya asignados a este baile */}
+                          {anim.extraMotions && anim.extraMotions.length > 0 && (
+                            <div className="space-y-1.5 pt-1">
+                              {anim.extraMotions.map(dancer => (
+                                <div
+                                  key={dancer.id}
+                                  className="p-2 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between gap-2"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[9px] font-bold text-white truncate">
+                                        {dancer.name}
+                                      </span>
+                                      <span className="text-[7px] px-1.5 py-0.2 rounded bg-violet-500/20 text-violet-300 font-bold border border-violet-500/30">
+                                        {dancer.role} (X: {dancer.defaultOffsetX}m)
+                                      </span>
+                                    </div>
+                                    <span className="text-[8px] text-cyan-300 block truncate mt-0.5" title={dancer.vmdFileName}>
+                                      Motion: {dancer.vmdFileName || '(Sin archivo)'}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPickingLibraryForExtra({
+                                          animName: anim.name,
+                                          dancerId: dancer.id,
+                                          name: dancer.name,
+                                          role: dancer.role,
+                                          offsetX: dancer.defaultOffsetX,
+                                          offsetZ: dancer.defaultOffsetZ
+                                        });
+                                      }}
+                                      className="px-2 py-0.5 rounded bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-200 text-[8px] font-bold transition-all flex items-center gap-0.5"
+                                      title="Cambiar motion seleccionando de tus 200 bailes"
+                                    >
+                                      <span>📂</span> Biblioteca
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSelectExtraMotionFile(anim.name, dancer.id, dancer.name, dancer.role, dancer.defaultOffsetX, dancer.defaultOffsetZ)}
+                                      className="px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white text-[8px] transition-all"
+                                      title="Subir archivo .vmd para este bailarín"
+                                    >
+                                      ⬆️
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveExtraMotion(anim.name, dancer.id)}
+                                      className="text-slate-500 hover:text-red-400 p-1 text-xs transition-colors"
+                                      title="Eliminar este bailarín del baile"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {(!anim.extraMotions || anim.extraMotions.length === 0) && (
+                            <p className="text-[8px] text-slate-500 italic">
+                              Baile en solitario (1 avatar). Pulsa el botón superior para agregar un bailarín al lado.
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1933,6 +2759,15 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               onChange={handleFacialFileChange}
             />
 
+            {/* Input oculto para carga de motions de bailarines extra VMD */}
+            <input
+              ref={extraMotionInputRef}
+              type="file"
+              accept=".vmd"
+              className="hidden"
+              onChange={handleExtraMotionFileChange}
+            />
+
             <div className="bg-gradient-to-br from-orange-500/5 to-violet-500/5 border border-white/5 rounded-lg p-3">
               <h3 className="font-semibold text-[10px] flex items-center gap-1 mb-2">💡 Mixamo</h3>
               <ol className="text-[9px] text-slate-400 space-y-1">
@@ -1946,29 +2781,29 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
 
           {/* ═══ TAB: CALIBRACIÓN ═══ */}
           {activeTab === 'calibration' && (<>
-            {/* 🦵 PANEL: PIERNAS / VMD (CINEMÁTICA INVERSA EN VIVO) */}
+            {/* 🦵 PANEL: CALIBRACIÓN DE PIERNAS Y SUELO (FBX / VMD EN VIVO) */}
             <div className="bg-white/[0.02] border border-cyan-500/20 rounded-xl p-4 space-y-4 mb-4">
               <div className="flex items-center justify-between border-b border-white/5 pb-2">
                 <label className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-xs">accessibility_new</span>
-                  Piernas / VMD (Cinemática Inversa)
+                  Calibración de Suelo y Piernas (En Vivo)
                 </label>
-                {activeVmdAnim ? (
+                {activeAnim ? (
                   <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-mono">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                    En vivo: {activeVmdAnim.name}
+                    En vivo: {activeAnim.name} ({activeAnim.type?.toUpperCase() || 'ANIM'})
                   </span>
                 ) : (
                   <span className="text-[8px] text-amber-400/80 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                    Sin VMD activo
+                    Sin animación activa
                   </span>
                 )}
               </div>
 
-              {!activeVmdAnim && (
+              {!activeAnim && (
                 <div className="p-2 bg-amber-500/5 border border-amber-500/15 rounded-lg flex items-center gap-2 text-[9px] text-amber-300/90">
                   <span className="material-symbols-outlined text-xs shrink-0">info</span>
-                  <span>Pon un VMD en Anims para ver el efecto.</span>
+                  <span>Reproduce cualquier animación (FBX o VMD) para calibrar el suelo y las piernas en vivo.</span>
                 </div>
               )}
 
@@ -2195,19 +3030,19 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                   </label>
                 </div>
 
-                {/* Botón Guardar en este VMD */}
-                {activeVmdAnim && (
+                {/* Botón Guardar en esta animación */}
+                {activeAnim && (
                   <button
                     type="button"
                     onClick={() => {
-                      animationStore.updateLegCalibration(activeVmdAnim.name, legCalibration);
-                      setUploadStatus(`💾 Calibración guardada para "${activeVmdAnim.name}"`);
+                      animationStore.updateLegCalibration(activeAnim.name, legCalibration);
+                      setUploadStatus(`💾 Calibración guardada para "${activeAnim.name}"`);
                       setTimeout(() => setUploadStatus(''), 2500);
                     }}
                     className="w-full py-2 bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 hover:text-white border border-cyan-500/40 rounded-lg transition-all font-bold uppercase tracking-wider text-[9px] flex items-center justify-center gap-1"
                   >
                     <span className="material-symbols-outlined text-xs">save</span>
-                    Guardar Calibración para "{activeVmdAnim.name}"
+                    Guardar Calibración para "{activeAnim.name}"
                   </button>
                 )}
 
@@ -2568,17 +3403,64 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               emotion="neutral"
               isAiSpeaking={false}
               isHotMode={avatar.isBoldMode}
+              showInteractionTools={false}
             />
           </React.Suspense>
         </ErrorBoundary>
         
-        {/* Indicador Live */}
-        <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-black/50 backdrop-blur-sm px-2.5 py-1 rounded-full">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-          </span>
-          <span className="text-[9px] font-medium text-slate-400">Preview</span>
+        {/* Indicador Live y Selector de Modo de Cámara */}
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
+          <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+            </span>
+            <span className="text-[9px] font-medium text-slate-300">Preview 3D</span>
+          </div>
+
+          {/* 🎥 Selector Rápido de Cámara */}
+          <div className="flex items-center bg-black/60 backdrop-blur-md p-0.5 rounded-full border border-white/10 shadow-lg">
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
+                window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: 'default' } }));
+              }}
+              className="px-2 py-0.5 rounded-full text-[8px] font-bold text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
+              title="Cámara frontal libre"
+            >
+              🖱️ Libre
+            </button>
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
+                window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: 'dynamic' } }));
+              }}
+              className="px-2 py-0.5 rounded-full text-[8px] font-bold text-cyan-300 hover:text-cyan-200 hover:bg-cyan-500/20 transition-colors"
+              title="Cámara cinemática orbital suave"
+            >
+              🎬 Dinámica
+            </button>
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
+                window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: 'face' } }));
+              }}
+              className="px-2 py-0.5 rounded-full text-[8px] font-bold text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
+              title="Cámara enfocada en el rostro"
+            >
+              👤 Rostro
+            </button>
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('nova-vmd-camera-stop'));
+                window.dispatchEvent(new CustomEvent('nova-camera-preset', { detail: { preset: 'full' } }));
+              }}
+              className="px-2 py-0.5 rounded-full text-[8px] font-bold text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
+              title="Cámara de cuerpo entero"
+            >
+              🧍 Cuerpo
+            </button>
+          </div>
         </div>
 
         {/* Acción activa */}
@@ -3095,6 +3977,355 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+      {/* MODAL: SELECCIONAR ANIMACIÓN DE BIBLIOTECA PARA PUESTO DE GRUPO */}
+      {assigningSlotAnim && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#121220] border border-violet-500/30 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_60px_rgba(0,0,0,0.85)] overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-xl shadow-inner">
+                  👥
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Asignar a Puesto: <strong className="text-violet-400">{assigningSlotAnim.name}</strong></span>
+                    <span className="text-[10px] text-slate-400 font-mono">X: {assigningSlotAnim.defaultOffsetX}m</span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Selecciona uno de tus bailes ya cargados para este bailarín.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAssigningSlotAnim(null)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center text-sm transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Buscador */}
+            <div className="p-3 border-b border-white/5 bg-black/20">
+              <input
+                type="text"
+                value={animSearch}
+                onChange={(e) => setAnimSearch(e.target.value)}
+                placeholder="🔍 Buscar en tus más de 200 bailes..."
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-white placeholder:text-slate-500 outline-none focus:border-violet-400"
+              />
+            </div>
+
+            {/* Lista de animaciones */}
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[55vh]">
+              {storedAnims
+                .filter(anim => {
+                  if (animSearch) {
+                    const q = animSearch.toLowerCase();
+                    return anim.name.toLowerCase().includes(q) ||
+                           (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                           (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                  }
+                  return true;
+                })
+                .map(anim => {
+                  const isCurrent = assigningSlotAnim.vmdName === (anim.displayName || anim.name);
+                  return (
+                    <div
+                      key={anim.name}
+                      className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 ${
+                        isCurrent ? 'bg-violet-950/40 border-violet-500/60' : 'bg-white/[0.02] border-white/5 hover:border-violet-500/30'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">💃</span>
+                          <span className="text-xs font-bold text-white truncate block">
+                            {anim.displayName || anim.name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1 text-[8px] text-slate-400">
+                          <span className="font-mono">.{anim.type}</span>
+                          {anim.hasCamera && <span className="text-amber-400 font-bold">• 🎥 Cámara</span>}
+                          {(anim.audioUrl || anim.audioFileName) && <span className="text-violet-400 font-bold">• 🎵 Música</span>}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => triggerAction(anim.name)}
+                          className="px-2 py-1 rounded text-[9px] bg-white/10 hover:bg-white/20 text-white font-medium"
+                        >
+                          Probar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePickAnimationForSlot(assigningSlotAnim.id, anim)}
+                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-violet-600 hover:bg-violet-500 text-white shadow transition-all"
+                        >
+                          {isCurrent ? '✓ Reasignar' : 'Asignar Puesto'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-between">
+              <span className="text-[10px] text-slate-500">{storedAnims.length} bailes en tu colección</span>
+              <button
+                onClick={() => setAssigningSlotAnim(null)}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SELECCIONAR AUDIO PARA EL GRUPO */}
+      {assigningGroupAudio && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#121220] border border-violet-500/30 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-xl">
+                  🎵
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Elegir Música de tus Bailes</h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Selecciona una canción ya guardada en cualquiera de tus bailes para la coreografía grupal.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAssigningGroupAudio(false)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[55vh]">
+              {storedAnims.filter(a => a.audioUrl || a.audioFileName).length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  No hay canciones vinculadas en tus bailes. Puedes subir una directamente con el botón "Subir".
+                </div>
+              ) : (
+                storedAnims
+                  .filter(a => a.audioUrl || a.audioFileName)
+                  .map(anim => (
+                    <div
+                      key={anim.name}
+                      className="p-2.5 rounded-xl border border-white/5 bg-black/30 flex items-center justify-between"
+                    >
+                      <div className="min-w-0 flex-1 mr-2">
+                        <span className="text-xs font-bold text-white truncate block">
+                          {anim.audioFileName || `Audio de ${anim.displayName || anim.name}`}
+                        </span>
+                        <span className="text-[8px] text-violet-400 block truncate">
+                          Del baile: {anim.displayName || anim.name}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handlePickAudioForGroup(anim)}
+                        className="px-3 py-1 rounded-lg text-[9px] font-bold bg-violet-600 hover:bg-violet-500 text-white shadow"
+                      >
+                        Usar Audio
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-end">
+              <button
+                onClick={() => setAssigningGroupAudio(false)}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SELECCIONAR CÁMARA PARA EL GRUPO */}
+      {assigningGroupCamera && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#121220] border border-cyan-500/30 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-xl">
+                  🎥
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Elegir Cámara Cinemática VMD</h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Vincula una cámara VMD guardada en tus bailes para enfocar la coreografía grupal.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAssigningGroupCamera(false)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[55vh]">
+              {storedAnims.filter(a => a.cameraUrl || a.cameraFileName || a.hasCamera).length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  No hay cámaras cinemáticas guardadas en tus bailes. Puedes subir un .vmd de cámara con el botón "Subir".
+                </div>
+              ) : (
+                storedAnims
+                  .filter(a => a.cameraUrl || a.cameraFileName || a.hasCamera)
+                  .map(anim => (
+                    <div
+                      key={anim.name}
+                      className="p-2.5 rounded-xl border border-white/5 bg-black/30 flex items-center justify-between"
+                    >
+                      <div className="min-w-0 flex-1 mr-2">
+                        <span className="text-xs font-bold text-white truncate block">
+                          {anim.cameraFileName || `Cámara VMD de ${anim.displayName || anim.name}`}
+                        </span>
+                        <span className="text-[8px] text-cyan-400 block truncate">
+                          Del baile: {anim.displayName || anim.name}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handlePickCameraForGroup(anim)}
+                        className="px-3 py-1 rounded-lg text-[9px] font-bold bg-cyan-600 hover:bg-cyan-500 text-white shadow"
+                      >
+                        Usar Cámara
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-end">
+              <button
+                onClick={() => setAssigningGroupCamera(false)}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SELECCIONAR MOTION DE LA BIBLIOTECA PARA BAILARÍN EXTRA */}
+      {pickingLibraryForExtra && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#121220] border border-violet-500/40 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Cabecera */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-600/30 border border-violet-400/30 flex items-center justify-center text-xl">
+                  💃
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Elegir Motion para {pickingLibraryForExtra.name}</span>
+                    <span className="text-[9px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 font-bold border border-violet-500/30">
+                      {pickingLibraryForExtra.role} (X: {pickingLibraryForExtra.offsetX}m)
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Asigna un baile de tu colección para este puesto lateral.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPickingLibraryForExtra(null)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center text-sm transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Buscador */}
+            <div className="p-3 border-b border-white/5 bg-black/20">
+              <input
+                type="text"
+                value={animSearch}
+                onChange={(e) => setAnimSearch(e.target.value)}
+                placeholder="🔍 Buscar en tus más de 200 bailes cargados..."
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-white placeholder:text-slate-500 outline-none focus:border-violet-400"
+              />
+            </div>
+
+            {/* Lista de animaciones */}
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[55vh]">
+              {storedAnims
+                .filter(anim => {
+                  if (animSearch) {
+                    const q = animSearch.toLowerCase();
+                    return anim.name.toLowerCase().includes(q) ||
+                           (anim.displayName && anim.displayName.toLowerCase().includes(q)) ||
+                           (anim.customTag && anim.customTag.toLowerCase().includes(q));
+                  }
+                  return true;
+                })
+                .map(anim => {
+                  return (
+                    <div
+                      key={anim.name}
+                      className="p-2.5 rounded-xl border border-white/5 bg-white/[0.02] hover:border-violet-500/30 transition-all flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">🌸</span>
+                          <span className="text-xs font-bold text-white truncate block">
+                            {anim.displayName || anim.name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1 text-[8px] text-slate-400">
+                          <span className="font-mono">.{anim.type}</span>
+                          {anim.hasCamera && <span className="text-amber-400 font-bold">• 🎥 Cámara</span>}
+                          {(anim.audioUrl || anim.audioFileName) && <span className="text-violet-400 font-bold">• 🎵 Música</span>}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => triggerAction(anim.name)}
+                          className="px-2 py-1 rounded text-[9px] bg-white/10 hover:bg-white/20 text-white font-medium"
+                        >
+                          Probar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePickExtraMotionFromLibrary(anim)}
+                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-violet-600 hover:bg-violet-500 text-white shadow transition-all cursor-pointer"
+                        >
+                          Asignar Puesto
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            <div className="p-3 border-t border-white/10 bg-black/30 flex items-center justify-between">
+              <span className="text-[10px] text-slate-500">{storedAnims.length} bailes disponibles</span>
+              <button
+                onClick={() => setPickingLibraryForExtra(null)}
+                className="px-4 py-1.5 rounded-lg text-[10px] font-semibold bg-white/10 hover:bg-white/15 text-white transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

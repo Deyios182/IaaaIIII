@@ -6,4 +6,5 @@ export * from './MemoryService';
 export * from './SelfAwarenessService';
 export * from './WebLearningService';
 export * from './AutonomyEngine';
+export * from './MediaMemoryService';
 

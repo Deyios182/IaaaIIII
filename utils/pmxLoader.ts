@@ -173,7 +173,8 @@ export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelRe
       return await loadMeshWithGLTFLoader(modelBlobUrl, manager);
     } else {
       const isPmd = modelType === 'pmd';
-      return await loadMeshWithMMDLoader(modelBlobUrl, manager, isPmd ? 'pmd' : 'pmx', fileMap);
+      const secondaryBlobUrl = secondaryModelPath ? (fileMap.get(secondaryModelPath) || fileMap.get(secondaryModelPath.toLowerCase())) : undefined;
+      return await loadMeshWithMMDLoader(modelBlobUrl, manager, isPmd ? 'pmd' : 'pmx', fileMap, secondaryBlobUrl);
     }
   } else {
     // Archivo directo sin comprimir
@@ -828,7 +829,8 @@ function loadMeshWithMMDLoader(
   url: string,
   manager: THREE.LoadingManager,
   forcedExtension: 'pmx' | 'pmd' = 'pmx',
-  fileMap?: Map<string, string>
+  fileMap?: Map<string, string>,
+  secondaryPmxUrl?: string
 ): Promise<PMXModelResult> {
   return new Promise((resolve, reject) => {
     const loader = new MMDLoader(manager);
@@ -1060,11 +1062,50 @@ function loadMeshWithMMDLoader(
                   }
                 }
 
+                // 9. FIX CRÍTICO SHADER: Safeguard contra 'MORPHTARGETS_COUNT undeclared identifier'
+                // Three.js r182 define USE_MORPHTARGETS si geometry.morphAttributes.position !== undefined,
+                // pero si morphTargetsCount es 0, no define MORPHTARGETS_COUNT ni MORPHTARGETS_TEXTURE_STRIDE,
+                // provocando que el shader vertex de MeshToonMaterial (ej. Weapon) falle al compilar.
+                const origOnBeforeCompile = m.onBeforeCompile;
+                m.onBeforeCompile = (shader: any, renderer: any) => {
+                  if (origOnBeforeCompile) {
+                    origOnBeforeCompile(shader, renderer);
+                  }
+                  const morphGuard = `
+#ifdef USE_MORPHTARGETS
+  #ifndef MORPHTARGETS_COUNT
+    #define MORPHTARGETS_COUNT 1
+  #endif
+  #ifndef MORPHTARGETS_TEXTURE_STRIDE
+    #define MORPHTARGETS_TEXTURE_STRIDE 1
+  #endif
+#endif
+`;
+                  if (!shader.vertexShader.includes('#define MORPHTARGETS_COUNT')) {
+                    shader.vertexShader = morphGuard + shader.vertexShader;
+                  }
+                };
+
                 m.needsUpdate = true;
               });
             }
           }
         });
+
+        // ── LIMPIEZA CRÍTICA DE MORPH ATTRIBUTES VACÍOS ──────────────────────────────────────────
+        // Si geometry.morphAttributes.position existe pero está vacío ([]), Three.js r182
+        // activa USE_MORPHTARGETS pero no define MORPHTARGETS_COUNT, rompiendo el vertex shader.
+        mesh.traverse((child: any) => {
+          if (child.isMesh && child.geometry?.morphAttributes) {
+            for (const key of Object.keys(child.geometry.morphAttributes)) {
+              const attr = child.geometry.morphAttributes[key];
+              if (!attr || (Array.isArray(attr) && attr.length === 0)) {
+                delete child.geometry.morphAttributes[key];
+              }
+            }
+          }
+        });
+        // ─────────────────────────────────────────────────────────────────────────────────────────
 
         // ── SEPARACIÓN DE OVERLAYS FACIALES EN SUB-MESH INDEPENDIENTE ──────────────────────────────
         // En Three.js, una sola SkinnedMesh con multi-material renderiza los grupos en orden de
@@ -1097,6 +1138,15 @@ function loadMeshWithMMDLoader(
           // Construir la nueva geometría de overlays con solo los grupos correspondientes
           const overlayGeo = geo.clone();
           overlayGeo.clearGroups();
+          // Limpiar morphAttributes residuales o vacíos en la sub-geometría de overlays
+          if (overlayGeo.morphAttributes) {
+            for (const key of Object.keys(overlayGeo.morphAttributes)) {
+              const attr = overlayGeo.morphAttributes[key];
+              if (!attr || (Array.isArray(attr) && attr.length === 0)) {
+                delete overlayGeo.morphAttributes[key];
+              }
+            }
+          }
 
           const overlayMats: any[] = [];
           // Mapear cada origIdx al nuevo índice de material en la sub-mesh
@@ -1160,6 +1210,80 @@ function loadMeshWithMMDLoader(
           console.log(`👁️ [PMXLoader] Overlays faciales separados: ${overlayIndices.length} materiales → "${overlayMesh.name}"`);
         });
         // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        // ── CARGAR MODELO SECUNDARIO (ARMA / ACCESORIO) SI EXISTE ───────────────────
+        if (secondaryPmxUrl) {
+          loader.load(
+            secondaryPmxUrl,
+            (secMesh: any) => {
+              if (secMesh) {
+                secMesh.name = secMesh.name || 'MMD_Secondary_Weapon';
+                secMesh.castShadow = true;
+                secMesh.receiveShadow = false;
+
+                // Limpiar morphAttributes vacíos
+                if (secMesh.geometry?.morphAttributes) {
+                  for (const key of Object.keys(secMesh.geometry.morphAttributes)) {
+                    const attr = secMesh.geometry.morphAttributes[key];
+                    if (!attr || (Array.isArray(attr) && attr.length === 0)) {
+                      delete secMesh.geometry.morphAttributes[key];
+                    }
+                  }
+                }
+
+                // Calibrar materiales del arma/accesorio con safeguard de shaders
+                const secMats = Array.isArray(secMesh.material) ? secMesh.material : [secMesh.material];
+                secMats.forEach((m: any) => {
+                  if (!m) return;
+                  m.userData = m.userData || {};
+                  m.userData.isCalibrated = true;
+                  if ('gradientMap' in m) m.gradientMap = photorealisticGradient;
+                  m.side = THREE.DoubleSide;
+                  m.transparent = false;
+                  m.depthWrite = true;
+                  m.depthTest = true;
+
+                  const origOnBeforeCompile = m.onBeforeCompile;
+                  m.onBeforeCompile = (shader: any, renderer: any) => {
+                    if (origOnBeforeCompile) origOnBeforeCompile(shader, renderer);
+                    const morphGuard = `
+#ifdef USE_MORPHTARGETS
+  #ifndef MORPHTARGETS_COUNT
+    #define MORPHTARGETS_COUNT 1
+  #endif
+  #ifndef MORPHTARGETS_TEXTURE_STRIDE
+    #define MORPHTARGETS_TEXTURE_STRIDE 1
+  #endif
+#endif
+`;
+                    if (!shader.vertexShader.includes('#define MORPHTARGETS_COUNT')) {
+                      shader.vertexShader = morphGuard + shader.vertexShader;
+                    }
+                  };
+                  m.needsUpdate = true;
+                });
+
+                group.add(secMesh);
+                console.log(`🗡️ [PMXLoader] Arma/accesorio PMX secundario vinculado a la escena: "${secMesh.name}"`);
+              }
+              resolve({
+                scene: group,
+                animations: [],
+                isPMX: true
+              });
+            },
+            undefined,
+            (secErr: any) => {
+              console.warn(`⚠️ [PMXLoader] No se pudo cargar modelo secundario opcional:`, secErr);
+              resolve({
+                scene: group,
+                animations: [],
+                isPMX: true
+              });
+            }
+          );
+          return;
+        }
 
         resolve({
           scene: group,

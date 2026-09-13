@@ -80,6 +80,9 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                 if (isUnmounted) return;
 
                 recognizer = new model.KaldiRecognizer(16000);
+                if (typeof recognizer.setWords === 'function') {
+                    try { recognizer.setWords(true); } catch {}
+                }
 
                 let lastTriggerTime = 0;
                 const triggerActivate = () => {
@@ -90,12 +93,15 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                     callbackRef.current.onActivate?.();
                 };
 
-                // Configurar escucha de resultados
+                let lastLoggedPartial = '';
+
+                // Configurar escucha de resultados finales (frase cerrada tras silencio)
                 recognizer.on('result', (message: any) => {
                     const transcript = (message.result?.text || '').toLowerCase().trim();
+                    lastLoggedPartial = '';
                     if (!transcript) return;
                     setLastDetectedPhrase(transcript);
-                    console.log(`🎤 ${getLogTimestamp()} [WakeWord Vosk] Transcripción: "${transcript}"`);
+                    console.log(`🎤 ${getLogTimestamp()} [WakeWord Vosk] Transcripción final: "${transcript}"`);
 
                     // Notificar transcript completo (para subtítulos durante llamada)
                     callbackRef.current.onTranscript?.(transcript);
@@ -111,14 +117,27 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                     }
                 });
 
+                // Configurar escucha de resultados parciales (en vivo en tiempo real)
                 recognizer.on('partialresult', (message: any) => {
                     const partial = (message.result?.partial || '').toLowerCase().trim();
                     if (!partial) return;
 
+                    // Log inmediato en consola mostrando las palabras a medida que salen de la boca del usuario
+                    if (partial !== lastLoggedPartial) {
+                        lastLoggedPartial = partial;
+                        console.log(`⚡ ${getLogTimestamp()} [Vosk En Vivo] "${partial}…"`);
+                    }
+
                     // Notificar parcial (para subtítulos en tiempo real)
                     callbackRef.current.onPartialTranscript?.(partial);
 
-                    if (partial.includes('nova') || partial.includes('despierta')) {
+                    if (
+                        partial.includes('nova') ||
+                        partial.includes('despierta') ||
+                        partial.includes('hola nova') ||
+                        partial.includes('hey nova') ||
+                        partial.includes('vamos nova')
+                    ) {
                         triggerActivate();
                     }
                 });
@@ -145,16 +164,21 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
 
                 source = audioContext.createMediaStreamSource(mediaStream);
 
-                // Migración a AudioWorkletNode (sin deprecation warning, menor latencia y sin bloquear UI)
+                // Migración a AudioWorkletNode ultra-rápido (64ms latencia con 1024 samples)
                 await audioContext.audioWorklet.addModule('/vosk-processor.js');
                 const workletNode = new AudioWorkletNode(audioContext, 'vosk-audio-processor');
 
                 workletNode.port.onmessage = (event) => {
                     if (recognizer && event.data) {
                         try {
-                            const buffer = audioContext!.createBuffer(1, event.data.length, 16000);
-                            buffer.copyToChannel(event.data, 0);
-                            recognizer.acceptWaveform(buffer);
+                            // Enrutamiento directo Float32Array: 0 asignación de AudioBuffer, ultra-bajo consumo de memoria
+                            if (typeof recognizer.acceptWaveformFloat === 'function') {
+                                recognizer.acceptWaveformFloat(event.data, 16000);
+                            } else {
+                                const buffer = audioContext!.createBuffer(1, event.data.length, 16000);
+                                buffer.copyToChannel(event.data, 0);
+                                recognizer.acceptWaveform(buffer);
+                            }
                         } catch {}
                     }
                 };

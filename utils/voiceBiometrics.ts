@@ -134,7 +134,7 @@ export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16
     const rms = Math.sqrt(sumSq / buffer.length);
     
     // Silence floor
-    if (rms < 0.03) {
+    if (rms < 0.015) {
         return { isSpeech: false, pitch: -1, energy: rms };
     }
 
@@ -149,7 +149,7 @@ export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16
     const isVocalPitch = pitch >= 75 && pitch <= 360;
 
     return {
-        isSpeech: isVocalPitch && rms >= 0.035,
+        isSpeech: isVocalPitch && rms >= 0.02,
         pitch,
         energy: rms
     };

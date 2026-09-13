@@ -15,6 +15,7 @@ interface InteractionToolbarProps {
     resetPhysics: () => void;
     isHandTrackingActive?: boolean;
     toggleHandTracking?: () => void;
+    onClose?: () => void;
 }
 
 export const InteractionToolbar: React.FC<InteractionToolbarProps> = ({
@@ -29,7 +30,8 @@ export const InteractionToolbar: React.FC<InteractionToolbarProps> = ({
     setPhysicsMaxAngle,
     resetPhysics,
     isHandTrackingActive,
-    toggleHandTracking
+    toggleHandTracking,
+    onClose
 }) => {
 
     const safeTools = [
@@ -50,7 +52,19 @@ export const InteractionToolbar: React.FC<InteractionToolbarProps> = ({
     const currentTools = isBoldMode ? boldTools : safeTools;
 
     return (
-        <div className="absolute left-6 top-24 flex flex-col gap-4 z-[999]">
+        <div className="absolute left-6 top-24 flex flex-col gap-3 z-[999]">
+            {/* Botón para Ocultar Barra AR */}
+            {onClose && (
+                <button
+                    onClick={onClose}
+                    title="Ocultar herramientas AR"
+                    className="self-end px-2.5 py-1 rounded-xl bg-slate-900/90 hover:bg-red-500/80 text-slate-400 hover:text-white border border-slate-700 hover:border-red-400/50 backdrop-blur text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-lg transition-all duration-200 pointer-events-auto"
+                >
+                    <span className="material-symbols-outlined text-xs">close</span>
+                    <span>Ocultar</span>
+                </button>
+            )}
+
             {/* Botón de Cámara AR / Tracking de Mano */}
             {toggleHandTracking && (
                 <button

@@ -5,10 +5,18 @@ import PingIndicator from './PingIndicator';
 interface HeaderProps {
   userInitials: string;
   isBold?: boolean;
+  isSidebarHidden?: boolean;
+  onToggleSidebar?: () => void;
   onToggleMobileMenu?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ userInitials, isBold, onToggleMobileMenu }) => {
+const Header: React.FC<HeaderProps> = ({
+  userInitials,
+  isBold,
+  isSidebarHidden = false,
+  onToggleSidebar,
+  onToggleMobileMenu
+}) => {
   const gradientClass = isBold
     ? "from-pink-500 to-purple-600"
     : "from-primary to-purple-500";
@@ -22,7 +30,9 @@ const Header: React.FC<HeaderProps> = ({ userInitials, isBold, onToggleMobileMen
   const handleClose = () => electronAPI?.close();
 
   const handleToggleMenu = () => {
-    if (onToggleMobileMenu) {
+    if (onToggleSidebar) {
+      onToggleSidebar();
+    } else if (onToggleMobileMenu) {
       onToggleMobileMenu();
     } else {
       window.dispatchEvent(new CustomEvent('nova-toggle-sidebar'));
@@ -35,13 +45,15 @@ const Header: React.FC<HeaderProps> = ({ userInitials, isBold, onToggleMobileMen
       style={{ WebkitAppRegion: 'drag' } as any} // Permite arrastrar la ventana
     >
       <div className="flex items-center gap-2 sm:gap-4 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
-        {/* Botón de menú móvil para pantallas pequeñas */}
+        {/* Botón toggle de menú lateral (todas las resoluciones) */}
         <button
           onClick={handleToggleMenu}
-          className="md:hidden p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
-          title="Abrir Menú"
+          className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors flex items-center justify-center"
+          title={isSidebarHidden ? "Mostrar Menú Lateral (Ctrl+B)" : "Ocultar Menú Lateral (Ctrl+B)"}
         >
-          <span className="material-symbols-outlined text-xl">menu</span>
+          <span className="material-symbols-outlined text-xl">
+            {isSidebarHidden ? 'menu' : 'menu_open'}
+          </span>
         </button>
 
         <h2 className="text-sm sm:text-base font-bold tracking-tight truncate max-w-[120px] sm:max-w-none">

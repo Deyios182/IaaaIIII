@@ -12,8 +12,11 @@ class AudioProcessor extends AudioWorkletProcessor {
             for (let i = 0; i < channelData.length; i++) {
                 this.buffer[this.pointer++] = channelData[i];
                 if (this.pointer >= 2048) {
-                    // Enviar los 128ms continuos al hilo principal para Gemini Live
-                    this.port.postMessage(this.buffer.slice());
+                    // Enviar los 128ms continuos junto con el timestamp exacto del reloj de audio
+                    this.port.postMessage({
+                        pcm: this.buffer.slice(),
+                        timestamp: currentTime
+                    });
                     this.pointer = 0;
                 }
             }

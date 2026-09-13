@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState, ChatMessage, PersonEntry, NovaPersonalityMode, NovaFunctionalMode } from '../types';
 import MiniHUD from '../components/MiniHUD';
 
@@ -264,6 +264,9 @@ import {
   AUDIO_SAMPLE_RATE,
   getSystemInstruction,
   TimeContext,
+  getActiveGeminiKey,
+  getGeminiApiKeys,
+  rotateGeminiKey,
 } from '../geminiService';
 import { generateSpeech, playAiVoice, stopAiAudio, stopSpeech } from '../geminiService';
 import AvatarViewer3D from '../components/AvatarViewer3D';
@@ -285,10 +288,12 @@ import { consultGrok, type GrokConsultResponse } from '../services/grokConsultan
 import { SecondOpinionPanel } from '../components/SecondOpinionPanel';
 import { PokerOverlay } from '../components/PokerOverlay';
 import { usePokerAssistant } from '../hooks/usePokerAssistant';
+import { ScreenSharePickerModal } from '../components/ScreenSharePickerModal';
 import { getSelfAwarenessBlock } from '../services/SelfAwarenessService';
 import { requestWebSearch, resolveWebSearch, getLearnedSkills, learnSkill, buildSkillsBlock, searchDuckDuckGo } from '../services/WebLearningService';
 import { createAutonomyEngine, getAutonomyEngine } from '../services/AutonomyEngine';
 import { asmrEngine } from '../services/ASMRSoundEngine';
+import { trackMediaProgress, buildMediaMemoryPromptBlock, getActiveMediaSession, type WatchedMedia } from '../services/MediaMemoryService';
 
 
 // ⏱️ Formateador de Fecha, Hora y Milisegundos [HH:mm:ss.SSS] para Profiling de Latencia
@@ -829,7 +834,22 @@ function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) =>
     window.dispatchEvent(new CustomEvent('nova-fluid', { detail: { target, intensity } }));
   }
 
-  // 10. Parser para emociones [EXCITED], [HAPPY], etc.
+  // 10. Parser para track_media (Fallback en texto)
+  const trackMediaRegex = /\[(?:track_media|TRACK_MEDIA):\s*title=['"]?([^'"]+)['"]?(?:[\s,]+(?:event|plotEvent)=['"]?([^'"]+)['"]?)?(?:[\s,]+(?:theory)=['"]?([^'"]+)['"]?)?(?:[\s,]+(?:episodes|episodesRange)=['"]?([^'"]+)['"]?)?(?:[\s,]+(?:date)=['"]?([^'"]+)['"]?)?[^\]]*\]/gi;
+  let tmMatch: RegExpExecArray | null;
+  while ((tmMatch = trackMediaRegex.exec(rawText)) !== null) {
+    const title = tmMatch[1]?.trim();
+    const plotEvent = tmMatch[2]?.trim();
+    const theory = tmMatch[3]?.trim();
+    const episodesRange = tmMatch[4]?.trim();
+    const date = tmMatch[5]?.trim();
+    if (title) {
+      console.log('🎬 [Text Tag] track_media detectado:', { title, plotEvent, theory, episodesRange, date });
+      trackMediaProgress({ title, plotEvent, theory, episodesRange, date });
+    }
+  }
+
+  // 11. Parser para emociones [EXCITED], [HAPPY], etc.
   if (setEmotionFn) {
     const emotionRegex = /\[(EXCITED|HAPPY|SURPRISED|SAD|ANGRY|CONFUSED|THINKING|NEUTRAL)\]/gi;
     let emoMatch: RegExpExecArray | null;
@@ -844,7 +864,7 @@ function cleanAllAiTags(text: string): string {
   if (!text) return '';
   return text
     .replace(/<ctrl\d+>/gi, '')
-    .replace(/(?:\[)?(?:openUrl|open_url|end_call|endcall|endCall|hang_up|hangup|openApp|runTerminalCommand|runMacro|performAction|changePose|simulateFluid|changeIntimatePose|manageClothing|controlBody|controlCamera)\s*(?:\([^)]*\)|:[^\]]+\])/gi, '')
+    .replace(/(?:\[)?(?:openUrl|open_url|end_call|endcall|endCall|hang_up|hangup|openApp|runTerminalCommand|runMacro|performAction|changePose|simulateFluid|changeIntimatePose|manageClothing|controlBody|controlCamera|track_media|TRACK_MEDIA)\s*(?:\([^)]*\)|:[^\]]+\])/gi, '')
     .replace(/\[[\s\S]*?\]/g, '')
     .replace(/\*.*?\*/g, '')
     .replace(/\s{2,}/g, ' ')
@@ -877,6 +897,8 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [isInCall, setIsInCall] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const isAiSpeakingRef = useRef(false);
+  // Estado para visibilidad de herramientas AR / Interacción (por defecto ocultas)
+  const [showARTools, setShowARTools] = useState<boolean>(false);
 
   // 🎧 ASMR Procedural Sound States
   const [isAsmrPlaying, setIsAsmrPlaying] = useState(false);
@@ -981,8 +1003,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     onPartialTranscript: (partial) => {
       if (!isInCallRef.current) return;
       // Texto parcial en tiempo real (aparece instantáneamente mientras el usuario habla)
-      if (partial.length > 2) {
-        setLiveUserTranscript(partial + '…');
+      const trimmed = partial.trim();
+      if (trimmed) {
+        setLiveUserTranscript(trimmed + '…');
       }
     },
     debug: false,
@@ -1118,6 +1141,28 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const [pendingSearch, setPendingSearch] = useState<{ id: string; query: string } | null>(null);
   const pendingSearchRef = useRef<{ id: string; query: string; callId?: string } | null>(null);
 
+  // SISTEMA DE MEMORIA PERSISTENTE
+  const [novaMemory, setNovaMemory] = useState<NovaMemory>(() => loadMemory());
+
+  // 🧠 Helper para construir el perfil de memoria inmediata (recordatorios activos y continuidad de sesiones anteriores)
+  const getMemoryProfileForInstruction = () => {
+    const pendingReminders = (novaMemory.reminders || [])
+      .filter(r => !r.completed)
+      .slice(0, 8)
+      .map(r => r.message);
+
+    const pastConversations = (novaMemory.conversations || [])
+      .slice(-5)
+      .map(c => `[${c.userMessage}] → Nova: "${c.aiResponse.slice(0, 100)}"`);
+
+    return {
+      ...novaMemory,
+      habits: [],
+      pendingReminders,
+      pastConversations
+    };
+  };
+
   // Autonomy Refs
 
   const idleIntervalRef = useRef(null);
@@ -1126,6 +1171,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const isSearchingRef = useRef(false); // Ref para bloqueo síncrono inmediato
   const isStartingCallRef = useRef(false); // Prevenir AbortError en play()
   const canSendAudioRef = useRef(true); // Control de VAD para Text Injection
+  const silenceFramesSentRef = useRef(0); // Contador de frames de silencio limpio post-habla
 
   // ⏱️ LATENCY PROFILING REFS (High-Precision Voice Pipeline Metrics)
   const userSpeechStartRef = useRef<number>(0);
@@ -1140,10 +1186,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const reconnectContextRef = useRef<string>(''); // Resumen contextual de la charla reciente para inyectar tras reconexión
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSpeakingRef = useRef<boolean>(false);
+  const lastAiAudioPlayedAtRef = useRef<number>(0); // Marca de tiempo del fin de reproducción de audio de Nova
   const cadenceAnalyzerRef = useRef<VoiceCadenceAnalyzer>(new VoiceCadenceAnalyzer());
 
   const [excitationLevel, setExcitationLevel] = useState(30); // Empieza bajo para crecer gradualmente
   const [isScreenSharing, setIsScreenSharing] = useState(false); // Nueva: Compartir pantalla
+  const [isScreenPickerOpen, setIsScreenPickerOpen] = useState(false); // 🖥️ Modal selector estilo Meet
   const [isCameraCapturing, setIsCameraCapturing] = useState(false);
   const [isScreenCapturing, setIsScreenCapturing] = useState(false);
   const [highlightCamera, setHighlightCamera] = useState(false);
@@ -1373,7 +1421,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
         setIsVisionSyncing(true);
         // @ts-ignore
         liveSessionRef.current.sendRealtimeInput({
-          video: { mimeType: 'image/jpeg', data: cleanData }
+          media: { mimeType: 'image/jpeg', data: cleanData }
         });
         setTimeout(() => setIsVisionSyncing(false), 400);
 
@@ -1449,10 +1497,11 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
           systemInstruction: getSystemInstruction(
             isBold, state.avatar.voiceTone, excitationLevel,
             getLiveTimeContext(), state.userName, state.knownPeople,
-            state.avatar.personality, { ...novaMemory, habits: [] },
+            state.avatar.personality, getMemoryProfileForInstruction(),
             state.allowWebSearch, source === 'screen', selfAwarenessBlock, skillsBlock,
             state.avatar.name, state.avatar.personalityMode,
-            state.avatar.functionalMode, state.avatar.personalityTraits, state.avatar.regionalSlang
+            state.avatar.functionalMode, state.avatar.personalityTraits, state.avatar.regionalSlang,
+            buildMediaMemoryPromptBlock()
           )
         }
       });
@@ -1787,6 +1836,126 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     addMessage({ text: '🖥️ Análisis de pantalla desactivado.', sender: 'ai' });
   };
 
+  /**
+   * Inicia la compartición continua de pantalla usando la fuente y opción de audio seleccionadas.
+   * Conecta el audio del sistema al mezclador SIN interrumpir ni desconectar el micrófono del usuario.
+   */
+  const handleStartScreenShareWithSource = async (sourceId?: string, captureAudio: boolean = true, sourceName?: string) => {
+    try {
+      const result = await startScreenCapture({
+        width: 1280,
+        height: 720,
+        captureAudio,
+        sourceId
+      });
+
+      if (!result.success) {
+        addMessage({ text: '❌ No se pudo compartir la pantalla seleccionada.', sender: 'ai' });
+        return;
+      }
+
+      setIsScreenSharing(true);
+
+      // Si el usuario eligió incluir audio del sistema y está disponible
+      if (captureAudio && result.hasAudio && inputAudioContextRef.current && audioMixerRef.current) {
+        const sysStream = getSystemAudioStream();
+        if (sysStream) {
+          try {
+            // Desconectar previo si hubiera
+            if (systemSourceRef.current) {
+              try { systemSourceRef.current.disconnect(); } catch (e) { }
+            }
+            if (systemGainNodeRef.current) {
+              try { systemGainNodeRef.current.disconnect(); } catch (e) { }
+            }
+
+            const sysSource = inputAudioContextRef.current.createMediaStreamSource(sysStream);
+            systemSourceRef.current = sysSource;
+
+            const sysGain = inputAudioContextRef.current.createGain();
+            sysGain.gain.value = 0.35; // Volumen balanceado para que no tape la voz del usuario
+            systemGainNodeRef.current = sysGain;
+
+            const lowPass = inputAudioContextRef.current.createBiquadFilter();
+            lowPass.type = 'lowpass';
+            lowPass.frequency.value = 4500;
+            lowPass.Q.value = 0.7;
+
+            sysSource.connect(lowPass);
+            lowPass.connect(sysGain);
+            // Conectar al mezclador general: El micrófono sigue conectado en paralelo
+            sysGain.connect(audioMixerRef.current);
+            console.log('🔊 [ScreenAudio] Audio del sistema mezclado con éxito al pipeline de Gemini');
+          } catch (err) {
+            console.error('Error conectando audio sistema:', err);
+            systemGainNodeRef.current = null;
+          }
+        }
+      } else {
+        if (systemSourceRef.current) {
+          try { systemSourceRef.current.disconnect(); } catch (e) { }
+          systemSourceRef.current = null;
+        }
+        if (systemGainNodeRef.current) {
+          try { systemGainNodeRef.current.disconnect(); } catch (e) { }
+          systemGainNodeRef.current = null;
+        }
+      }
+
+      if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
+
+      screenCaptureIntervalRef.current = setInterval(() => {
+        if (checkScreenSharing() && isLiveSessionOpen(liveSessionRef.current)) {
+          try {
+            const { frame } = captureOptimizedFrame({
+              quality: 0.55,
+              changeThreshold: 0.015,
+              heartbeatIntervalMs: 6000
+            });
+            if (frame) {
+              const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
+              setIsVisionSyncing(true);
+              // @ts-ignore
+              liveSessionRef.current.sendRealtimeInput({
+                media: { mimeType: 'image/jpeg', data: cleanData }
+              });
+              setTimeout(() => setIsVisionSyncing(false), 250);
+              if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
+            }
+          } catch (e) {
+            console.warn('⚠️ Error enviando frame de pantalla:', e);
+          }
+        }
+      }, 1000);
+
+      if (liveSessionRef.current) {
+        const isGamerMode = state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer';
+        const winTitle = sourceName ? ` (Ventana activa: "${sourceName}")` : '';
+        const isMediaStream = sourceName && /(netflix|crunchyroll|prime|disney|hbo|max|vlc|player|youtube|cuevana|anime|movie|stream)/i.test(sourceName);
+        
+        let screenSharePrompt = '';
+        if (isGamerMode) {
+          screenSharePrompt = `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA${winTitle}. Eres su coach táctica y Player 2. Analiza activamente su interfaz y da callouts rápidos, precisos y consejos técnicos funcionales.]`;
+        } else if (isMediaStream) {
+          screenSharePrompt = `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR CONTENIDO MULTIMEDIA${winTitle}. ¡Modo Watch Party / Cine activado! Presta atención a subtítulos, personajes, música y trama. Comenta giros y teorías de forma cómplice como si estuvieras en el sofá a su lado, sin interrumpir diálogos clave. Usa la herramienta 'track_media' cuando identifiques la obra o hitos de la trama.]`;
+        } else {
+          screenSharePrompt = `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA${winTitle}. Ahora estás viendo su monitor en tiempo real. Si ven series, anime, YouTube o películas, comenta los momentos clave con complicidad; si trabaja o navega, acompáñalo con naturalidad.]`;
+        }
+
+        // @ts-ignore
+        liveSessionRef.current.sendRealtimeInput({ text: screenSharePrompt });
+      }
+
+      addMessage({
+        text: `🖥️ Compartiendo pantalla${sourceName ? ` ("${sourceName}")` : ''}${captureAudio ? ' con audio del sistema' : ' (solo video)'}.`,
+        sender: 'ai'
+      });
+    } catch (err: any) {
+      console.error('Error al iniciar compartir pantalla:', err);
+      addMessage({ text: `❌ Error al compartir pantalla: ${err?.message || 'Cancelado'}`, sender: 'ai' });
+    }
+  };
+
 
   // DEEP MEMORY: Track when we last announced/injected context about a person to avoid spam
   const personAnnouncementRef = useRef<Record<string, number>>({});
@@ -1938,11 +2107,15 @@ ${sessionLog}
           const data = await orResponse.json();
           const rawContent = data.choices?.[0]?.message?.content?.trim();
           if (rawContent) {
-            const cleanJson = rawContent.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+            const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0].trim() : rawContent.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
             const result = JSON.parse(cleanJson);
             if (result.hasLearned && result.content && result.category) {
               console.log('🧠 [MemoryService:OpenRouter] Consolidación exitosa:', result.content);
               await addFactToCloud(result.content, result.category);
+              return;
+            } else if (result.hasLearned === false) {
+              console.log('🧠 [MemoryService:OpenRouter] Sesión analizada. No se detectaron hechos nuevos para consolidar.');
               return;
             }
           }
@@ -1952,40 +2125,55 @@ ${sessionLog}
       }
     }
 
-    // 2. Intento Secundario: Gemini API
-    if (geminiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: [{ role: 'user', parts: [{ text: promptConsolidacion }] }],
-          config: {
-            responseMimeType: 'application/json'
-          }
-        });
+    // 2. Intento Secundario: Gemini API con rotación de claves
+    const geminiKeys = getGeminiApiKeys();
+    if (geminiKeys.length > 0) {
+      const maxAttempts = Math.min(geminiKeys.length, 3);
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const activeKey = getActiveGeminiKey();
+        try {
+          const ai = new GoogleGenAI({ apiKey: activeKey });
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: [{ role: 'user', parts: [{ text: promptConsolidacion }] }],
+            config: {
+              responseMimeType: 'application/json'
+            }
+          });
 
-        const jsonText = response.text?.trim();
-        if (jsonText) {
-          const result = JSON.parse(jsonText);
-          if (result.hasLearned && result.content && result.category) {
-            console.log('🧠 [MemoryService:Gemini] Consolidación exitosa. Hecho consolidado:', result.content);
-            await addFactToCloud(result.content, result.category);
+          const jsonText = response.text?.trim();
+          if (jsonText) {
+            const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0].trim() : jsonText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+            const result = JSON.parse(cleanJson);
+            if (result.hasLearned && result.content && result.category) {
+              console.log('🧠 [MemoryService:Gemini] Consolidación exitosa. Hecho consolidado:', result.content);
+              await addFactToCloud(result.content, result.category);
+              return;
+            } else if (result.hasLearned === false) {
+              console.log('🧠 [MemoryService:Gemini] Sesión analizada. No se detectaron hechos nuevos.');
+              return;
+            }
           }
-        }
-      } catch (e: any) {
-        if (e?.status === 429 || e?.message?.includes('429') || e?.message?.includes('Quota')) {
-          console.warn('ℹ️ [MemoryService] Cuota de Gemini en descanso. Consolidación pospuesta para la siguiente sesión.');
-        } else if (e?.status === 503 || e?.code === 503 || e?.message?.includes('503') || e?.message?.includes('high demand') || e?.message?.includes('UNAVAILABLE')) {
-          console.warn('ℹ️ [MemoryService] Gemini 2.5 Flash con alta demanda temporal (503). Consolidación pospuesta.');
-        } else {
-          console.warn('⚠️ [MemoryService] Error en consolidación:', e);
+          break;
+        } catch (e: any) {
+          const isQuotaOrServer = e?.status === 429 || e?.message?.includes('429') || e?.message?.includes('Quota') || e?.status === 503 || e?.code === 503 || e?.status === 500;
+          if (isQuotaOrServer && geminiKeys.length > 1 && attempt < maxAttempts - 1) {
+            rotateGeminiKey('consolidateMemory retry');
+            continue;
+          }
+          if (e?.status === 429 || e?.message?.includes('429') || e?.message?.includes('Quota')) {
+            console.warn('ℹ️ [MemoryService] Cuota de Gemini en descanso. Consolidación pospuesta para la siguiente sesión.');
+          } else if (e?.status === 503 || e?.code === 503 || e?.message?.includes('503') || e?.message?.includes('high demand') || e?.message?.includes('UNAVAILABLE')) {
+            console.warn('ℹ️ [MemoryService] Gemini 2.5 Flash con alta demanda temporal (503). Consolidación pospuesta.');
+          } else {
+            console.warn('⚠️ [MemoryService] Error en consolidación:', e);
+          }
+          break;
         }
       }
     }
   };
-
-  // SISTEMA DE MEMORIA PERSISTENTE
-  const [novaMemory, setNovaMemory] = useState<NovaMemory>(() => loadMemory());
 
   // 🧠 FUNCIÓN DE CONSULTA A GROK
   const handleConsultGrok = async () => {
@@ -2062,6 +2250,41 @@ ${sessionLog}
       cloudMemory.dislikes.forEach(d => { if (!newMemory.dislikes.includes(d)) { newMemory.dislikes.push(d); changed = true; } });
       cloudMemory.interests.forEach(i => { if (!newMemory.interests.includes(i)) { newMemory.interests.push(i); changed = true; } });
 
+      // Merge recordatorios pendientes de la nube
+      if (cloudMemory.pendingReminders && cloudMemory.pendingReminders.length > 0) {
+        if (!newMemory.reminders) newMemory.reminders = [];
+        cloudMemory.pendingReminders.forEach(r => {
+          if (!newMemory.reminders.some(existing => existing.message === r.message)) {
+            newMemory.reminders.push({
+              id: r.id || `rem-${Date.now()}-${Math.random()}`,
+              message: r.message,
+              triggerTime: r.trigger_time ? new Date(r.trigger_time).getTime() : Date.now(),
+              created: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+              completed: !!r.completed
+            });
+            changed = true;
+          }
+        });
+      }
+
+      // Merge recuerdos de conversaciones recientes para continuidad
+      if (cloudMemory.recentMemories && cloudMemory.recentMemories.length > 0) {
+        if (!newMemory.conversations) newMemory.conversations = [];
+        cloudMemory.recentMemories.slice(0, 10).forEach(m => {
+          if (!newMemory.conversations.some(existing => existing.userMessage === m.user_message && existing.aiResponse === m.ai_response)) {
+            newMemory.conversations.push({
+              id: m.id || `conv-${Date.now()}-${Math.random()}`,
+              timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+              userMessage: m.user_message,
+              aiResponse: m.ai_response,
+              emotion: m.emotion,
+              important: !!m.is_important
+            });
+            changed = true;
+          }
+        });
+      }
+
       // Update Known People in AppState (parent)
       const currentPeopleIds = state.knownPeople.map(p => p.id);
       const newPeople = cloudMemory.knownPeople
@@ -2082,7 +2305,7 @@ ${sessionLog}
       }
 
       if (changed) {
-        console.log('🧠 Memoria sincronizada con la nube');
+        console.log('🧠 Memoria sincronizada con la nube (Hechos, Recordatorios y Conversaciones)');
         setNovaMemory(newMemory);
       }
     });
@@ -2284,6 +2507,8 @@ ${sessionLog}
   const aiSpeechAnalyserRef = useRef<AnalyserNode | null>(null); // 👄 Analizador para Lipsync
   const liveSessionRef = useRef<any>(null);
   const nextStartTimeRef = useRef(0);
+  const audioChunkQueueRef = useRef<string[]>([]);
+  const isProcessingAudioQueueRef = useRef<boolean>(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameIntervalRef = useRef<number | null>(null);
@@ -2298,6 +2523,9 @@ ${sessionLog}
   const lastUserQuery = useRef(''); // Backup del último input para búsqueda diferida
   const currentOutputTranscription = useRef('');
   const aiAudioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const lastAiSpokenTextRef = useRef<string>('');
+  const lastAiSpokenTimeRef = useRef<number>(0);
+  const isDuplicateTurnRef = useRef<boolean>(false);
 
   // Buffer para comandos de voz (acumula transcripción)
   const commandBufferRef = useRef('');
@@ -2330,14 +2558,25 @@ ${sessionLog}
   const [emotion, setEmotion] = useState<Emotion>('neutral');
   const [action, setAction] = useState<string | null>(null);
 
-  // Listener para acciones disparadas desde Avatar Studio
+  // Listener para acciones disparadas desde Avatar Studio o automatizaciones
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       setAction(detail?.action || null);
     };
+    const endHandler = () => {
+      setAction(null);
+    };
     window.addEventListener('nova-action', handler);
-    return () => window.removeEventListener('nova-action', handler);
+    window.addEventListener('nova-action-ended', endHandler);
+    window.addEventListener('nova-animation-ended', endHandler);
+    window.addEventListener('nova-stop-animation', endHandler);
+    return () => {
+      window.removeEventListener('nova-action', handler);
+      window.removeEventListener('nova-action-ended', endHandler);
+      window.removeEventListener('nova-animation-ended', endHandler);
+      window.removeEventListener('nova-stop-animation', endHandler);
+    };
   }, []);
 
   // Listener para interacciones físicas estilo VR-Hot
@@ -2375,8 +2614,15 @@ ${sessionLog}
       const zoneNames: Record<string, string> = {
         head: 'la cabeza', leftBreast: 'el pecho izquierdo', rightBreast: 'el pecho derecho',
         leftButt: 'el glúteo izquierdo', rightButt: 'el glúteo derecho',
-        leftArm: 'el brazo izquierdo', rightArm: 'el brazo derecho',
+        leftArm: 'el hombro/brazo izquierdo', rightArm: 'el hombro/brazo derecho',
+        leftForeArm: 'el codo/antebrazo izquierdo', rightForeArm: 'el codo/antebrazo derecho',
+        leftHand: 'la mano izquierda', rightHand: 'la mano derecha',
+        leftThigh: 'el muslo izquierdo', rightThigh: 'el muslo derecho',
+        leftKnee: 'la rodilla izquierda', rightKnee: 'la rodilla derecha',
         leftLeg: 'la pierna izquierda', rightLeg: 'la pierna derecha',
+        leftFoot: 'el pie izquierdo', rightFoot: 'el pie derecho',
+        belly: 'el vientre/abdomen',
+        mouth: 'la boca y labios',
         vagina: 'tu zona íntima (vagina)', anus: 'tu trasero (ano)',
         leftArmpit: 'la axila izquierda', rightArmpit: 'la axila derecha',
         tongue: 'tu boca y lengua', hair: 'tu cabello'
@@ -2925,142 +3171,139 @@ ${sessionLog}
     }
   };
 
-  const playAiVoice = async (base64Audio: string) => {
-    // Si el contexto está cerrado o no existe, crear uno nuevo
-    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
-      aiSpeechAnalyserRef.current = null;
-      aiVoiceGainNodeRef.current = null;
-    }
-    const ctx = audioContextRef.current;
-    if (ctx.state === 'suspended') await ctx.resume();
-
-    // Crear AnalyserNode si no existe
-    if (!aiSpeechAnalyserRef.current) {
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.5;
-      aiSpeechAnalyserRef.current = analyser;
-    }
-
-    // Crear GainNode para la voz de Nova (Anti-Echo / Auto-Volume como Copilot)
-    if (!aiVoiceGainNodeRef.current || aiVoiceGainNodeRef.current.context !== ctx) {
-      const voiceGain = ctx.createGain();
-      voiceGain.gain.setValueAtTime(0.88, ctx.currentTime); // Volumen equilibrado anti-saturación
-      voiceGain.connect(ctx.destination);
-      aiVoiceGainNodeRef.current = voiceGain;
-    } else {
-      // Restaurar ganancia si venía de un ducking anterior
-      aiVoiceGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
-      aiVoiceGainNodeRef.current.gain.setValueAtTime(0.88, ctx.currentTime);
-    }
-
-    setIsAiSpeaking(true);
-    isAiSpeakingRef.current = true;
+  const processAudioChunkQueue = async () => {
+    if (isProcessingAudioQueueRef.current) return;
+    isProcessingAudioQueueRef.current = true;
 
     try {
-      const audioBytes = decodeBase64(base64Audio);
-      const buffer = await decodeAudioData(audioBytes, ctx, OUTPUT_SAMPLE_RATE, 1);
+      while (audioChunkQueueRef.current.length > 0) {
+        const base64Audio = audioChunkQueueRef.current.shift();
+        if (!base64Audio) continue;
 
-      // GUARD: después del await, verificar que el contexto no fue reemplazado
-      if (audioContextRef.current !== ctx) {
-        console.warn('⚠️ AudioContext fue reemplazado durante decodificación, descartando chunk.');
-        setIsAiSpeaking(false);
-        isAiSpeakingRef.current = false;
-        return;
-      }
-
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      // Aplicar PITCH (velocidad de reproducción afecta el tono)
-      source.playbackRate.value = state.avatar.voicePitch || 1.0;
-
-      // Asegurar que el AnalyserNode pertenece al mismo contexto
-      if (!aiSpeechAnalyserRef.current || (aiSpeechAnalyserRef.current.context !== ctx)) {
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.5;
-        aiSpeechAnalyserRef.current = analyser;
-      }
-
-      // Conectar a AnalyserNode (para lipSync) y al GainNode maestro de voz
-      source.connect(aiSpeechAnalyserRef.current);
-      if (aiVoiceGainNodeRef.current) {
-        source.connect(aiVoiceGainNodeRef.current);
-      } else {
-        source.connect(ctx.destination);
-      }
-
-      // Guardar referencia al audio actual en el array de fuentes activas
-      aiAudioSourcesRef.current.push(source);
-
-      // Si la cola se quedó atrás respecto a currentTime, damos un colchón inicial de 25ms para evitar cortes por jitter de red
-      const baseTime = nextStartTimeRef.current < ctx.currentTime ? ctx.currentTime + 0.025 : nextStartTimeRef.current;
-      const startTime = baseTime;
-
-      // --- IMPERATIVE DUCKING (Solo durante llamada de voz activa) ---
-      if (systemGainNodeRef.current && isInCallRef.current) {
-        systemGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
-        systemGainNodeRef.current.gain.setValueAtTime(0, ctx.currentTime);
-      }
-
-      source.start(startTime);
-      const effectiveDuration = buffer.duration / (source.playbackRate.value || 1.0);
-      nextStartTimeRef.current = startTime + effectiveDuration;
-
-      // Safety watchdog: si por cualquier desincronización el source no finaliza limpiamente, liberar el micrófono
-      const safetyTimeoutMs = Math.round((effectiveDuration + 0.4) * 1000);
-      setTimeout(() => {
-        if (aiAudioSourcesRef.current.length === 0 && isAiSpeakingRef.current) {
-          setIsAiSpeaking(false);
-          isAiSpeakingRef.current = false;
-          canSendAudioRef.current = true;
+        // Si el contexto está cerrado o no existe, crear uno nuevo
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
+          aiSpeechAnalyserRef.current = null;
+          aiVoiceGainNodeRef.current = null;
         }
-      }, safetyTimeoutMs);
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') {
+          await ctx.resume().catch(() => {});
+        }
 
-      source.onended = () => {
-        // Eliminar este source del array cuando termine
-        aiAudioSourcesRef.current = aiAudioSourcesRef.current.filter(s => s !== source);
-        if (aiAudioSourcesRef.current.length === 0) {
-          const remainingDelay = Math.max(0, (nextStartTimeRef.current - ctx.currentTime) * 1000);
-          setTimeout(() => {
-            if (aiAudioSourcesRef.current.length === 0) {
+        // Crear AnalyserNode si no existe
+        if (!aiSpeechAnalyserRef.current || aiSpeechAnalyserRef.current.context !== ctx) {
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.5;
+          aiSpeechAnalyserRef.current = analyser;
+        }
+
+        // Crear GainNode para la voz de Nova
+        if (!aiVoiceGainNodeRef.current || aiVoiceGainNodeRef.current.context !== ctx) {
+          const voiceGain = ctx.createGain();
+          voiceGain.gain.setValueAtTime(0.88, ctx.currentTime);
+          voiceGain.connect(ctx.destination);
+          aiVoiceGainNodeRef.current = voiceGain;
+        }
+
+        setIsAiSpeaking(true);
+        isAiSpeakingRef.current = true;
+
+        try {
+          const audioBytes = decodeBase64(base64Audio);
+          const buffer = await decodeAudioData(audioBytes, ctx, OUTPUT_SAMPLE_RATE, 1);
+
+          if (audioContextRef.current !== ctx || !buffer || buffer.length === 0) {
+            continue;
+          }
+
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.playbackRate.value = state.avatar.voicePitch || 1.0;
+
+          // Conectar a AnalyserNode (para lipSync) y al GainNode maestro de voz
+          if (aiSpeechAnalyserRef.current) {
+            source.connect(aiSpeechAnalyserRef.current);
+          }
+          if (aiVoiceGainNodeRef.current) {
+            source.connect(aiVoiceGainNodeRef.current);
+          } else {
+            source.connect(ctx.destination);
+          }
+
+          aiAudioSourcesRef.current.push(source);
+
+          // ⚡ PROGRAMACIÓN SECUENCIAL Y ATÓMICA:
+          // Si la cola está retrasada respecto a currentTime, damos colchón de 25ms
+          // Si ya hay audio sonando, este chunk se encadena EXACTAMENTE después del anterior
+          const now = ctx.currentTime;
+          const startTime = Math.max(nextStartTimeRef.current, now + 0.025);
+          const effectiveDuration = buffer.duration / (source.playbackRate.value || 1.0);
+
+          // Ducking imperativo del audio del sistema
+          if (systemGainNodeRef.current && isInCallRef.current) {
+            systemGainNodeRef.current.gain.cancelScheduledValues(now);
+            systemGainNodeRef.current.gain.setValueAtTime(0, now);
+          }
+
+          source.start(startTime);
+          nextStartTimeRef.current = startTime + effectiveDuration;
+          lastAiAudioPlayedAtRef.current = Date.now() + Math.max(0, Math.round((nextStartTimeRef.current - now) * 1000));
+
+          source.onended = () => {
+            aiAudioSourcesRef.current = aiAudioSourcesRef.current.filter(s => s !== source);
+            // Solo marcar fin si NO quedan chunks encolados Y no quedan fuentes activas
+            if (aiAudioSourcesRef.current.length === 0 && audioChunkQueueRef.current.length === 0) {
+              nextStartTimeRef.current = 0;
               setIsAiSpeaking(false);
               isAiSpeakingRef.current = false;
-              canSendAudioRef.current = true; // 🎙️ Reabrir micrófono inmediatamente
+              canSendAudioRef.current = true;
 
-              // 👋 Si había una despedida en curso y Nova terminó de hablar su audio por completo:
-              if (isPendingHangupRef.current && isInCallRef.current) {
-                console.log('👋 [GracefulHangup] Nova terminó su despedida. Cerrando llamada suavemente...');
-                setTimeout(() => {
-                  if (isPendingHangupRef.current && isInCallRef.current) {
-                    isPendingHangupRef.current = false;
-                    if (hangupSafetyTimerRef.current) clearTimeout(hangupSafetyTimerRef.current);
-                    endCallRef.current();
-                  }
-                }, 900); // 900ms para permitir que el avatar termine de animar la boca
-              }
+                // Despedida pendiente
+                if (isPendingHangupRef.current && isInCallRef.current) {
+                  console.log('👋 [GracefulHangup] Nova terminó su despedida. Cerrando llamada suavemente...');
+                  setTimeout(() => {
+                    if (isPendingHangupRef.current && isInCallRef.current) {
+                      isPendingHangupRef.current = false;
+                      if (hangupSafetyTimerRef.current) clearTimeout(hangupSafetyTimerRef.current);
+                      endCallRef.current();
+                    }
+                  }, 900);
+                }
 
-              // Restaurar audio del sistema
-              if (systemGainNodeRef.current && isInCallRef.current) {
-                systemGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
-                systemGainNodeRef.current.gain.setTargetAtTime(1.0, ctx.currentTime, 0.2);
-                console.log('🔊 DUCKING IMPERATIVO: DESACTIVADO');
+                // Restaurar audio del sistema
+                if (systemGainNodeRef.current && isInCallRef.current && ctx.state !== 'closed') {
+                  systemGainNodeRef.current.gain.cancelScheduledValues(ctx.currentTime);
+                  systemGainNodeRef.current.gain.setTargetAtTime(1.0, ctx.currentTime, 0.2);
+                  console.log('🔊 DUCKING IMPERATIVO: DESACTIVADO');
+                }
               }
-            }
-          }, Math.min(remainingDelay, 120));
+            };
+          } catch (decErr) {
+          console.error('⚠️ Error decodificando chunk de audio:', decErr);
         }
-      };
-    } catch (e) {
-      console.error('Error reproduciendo audio:', e);
-      setIsAiSpeaking(false);
-      isAiSpeakingRef.current = false;
-      canSendAudioRef.current = true;
+      }
+    } catch (err) {
+      console.error('❌ Error en cola de audio IA:', err);
+    } finally {
+      isProcessingAudioQueueRef.current = false;
+      if (audioChunkQueueRef.current.length > 0) {
+        processAudioChunkQueue();
+      }
     }
+  };
+
+  const playAiVoice = (base64Audio: string) => {
+    if (!base64Audio) return;
+    audioChunkQueueRef.current.push(base64Audio);
+    processAudioChunkQueue();
   };
 
   // Función para detener/duckear el audio de Nova cuando el usuario habla (Anti-Pop / Copilot style)
   const stopAiAudio = (smooth = true) => {
+    audioChunkQueueRef.current = [];
+    isProcessingAudioQueueRef.current = false;
     const ctx = audioContextRef.current;
     if (smooth && ctx && ctx.state === 'running' && aiVoiceGainNodeRef.current && aiAudioSourcesRef.current.length > 0) {
       const now = ctx.currentTime;
@@ -3077,8 +3320,10 @@ ${sessionLog}
         });
         aiAudioSourcesRef.current = [];
         nextStartTimeRef.current = 0;
+        lastAiAudioPlayedAtRef.current = 0;
         setIsAiSpeaking(false);
         isAiSpeakingRef.current = false;
+        canSendAudioRef.current = true;
         if (aiVoiceGainNodeRef.current && ctx.state !== 'closed') {
           aiVoiceGainNodeRef.current.gain.setValueAtTime(0.88, ctx.currentTime);
         }
@@ -3092,8 +3337,10 @@ ${sessionLog}
       });
       aiAudioSourcesRef.current = [];
       nextStartTimeRef.current = 0;
+      lastAiAudioPlayedAtRef.current = 0;
       setIsAiSpeaking(false);
       isAiSpeakingRef.current = false;
+      canSendAudioRef.current = true;
     }
   };
 
@@ -3311,10 +3558,10 @@ ${sessionLog}
     isStartingCallRef.current = true;
 
     try {
-      // Verificar API key primero
-      const apiKey = process.env.API_KEY;
+      // Verificar API key primero (desde el pool rotativo)
+      const apiKey = getActiveGeminiKey();
       if (!apiKey || apiKey === 'undefined' || apiKey === 'null') {
-        alert('⚠️ Error: No se encontró la API key de Gemini.\n\nPor favor, crea un archivo .env en la raíz del proyecto con:\n\nGEMINI_API_KEY=tu_api_key_aqui\n\nLuego reinicia el servidor con: npm run dev');
+        alert('⚠️ Error: No se encontró ninguna API key de Gemini válida.\n\nPor favor, configura en tu archivo .env:\n\nGEMINI_API_KEY=tu_api_key_aqui\n# O múltiples separadas por comas:\nGEMINI_API_KEYS=key1,key2,key3\n\nLuego reinicia con: npm run dev');
         return;
       }
 
@@ -3367,9 +3614,12 @@ ${sessionLog}
       }
 
       const ai = new GoogleGenAI({ apiKey });
-      // Contexto separado para SALIDA (24kHz) y ENTRADA (16kHz)
+      // Contexto separado para SALIDA (24kHz) y ENTRADA (16kHz nativo para Gemini Live)
       const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
-      const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      if (inputCtx.state === 'suspended') {
+        await inputCtx.resume().catch(() => { });
+      }
       inputAudioContextRef.current = inputCtx; // Guardar referencia para acceso externo
 
       audioContextRef.current = outCtx;
@@ -3462,7 +3712,20 @@ ${sessionLog}
           const historySummary = recentConversationTurns
             .map(m => `${m.sender === 'user' ? state.userName : 'Nova'}: "${m.text.substring(0, 100)}"`)
             .join(' | ');
-          reconnectContextRef.current = `[CONTEXTO DE RECONEXIÓN: La llamada se cortó brevemente. Justo antes hablaban de: ${historySummary}. Mantén el hilo de este tema si ${state.userName} continúa la conversación.]`;
+          
+          const activeMedia = getActiveMediaSession();
+          let mediaContext = '';
+          if (activeMedia) {
+            const epTag = activeMedia.currentSeason && activeMedia.currentEpisode 
+              ? `T${activeMedia.currentSeason}:E${activeMedia.currentEpisode}` 
+              : (activeMedia.currentEpisode ? `cap ${activeMedia.currentEpisode}` : '');
+            const latestSess = activeMedia.sessions?.[0];
+            const sessionTag = latestSess ? ` [Visto el ${latestSess.date}${latestSess.episodes ? ` (${latestSess.episodes})` : ''}: ${latestSess.keyDetails?.[0] || ''}]` : '';
+            mediaContext = ` Estaban viendo la obra: "${activeMedia.title}" (${activeMedia.mediaType}${epTag ? ` ${epTag}` : ''})${sessionTag}.${activeMedia.theories.length > 0 ? ` Última teoría: ${activeMedia.theories[activeMedia.theories.length - 1]}.` : ''}`;
+          }
+          const screenContext = wasScreenSharingRef.current ? ' La pantalla compartida se está reanudando automáticamente.' : '';
+
+          reconnectContextRef.current = `[CONTEXTO DE RECONEXIÓN: La llamada se cortó brevemente. Justo antes hablaban de: ${historySummary}.${mediaContext}${screenContext} Continúa la conversación y la observación del contenido con total fluidez sin olvidar lo que estaban viendo.]`;
         }
       } else if (isSextingMode) {
         proceduralGreeting = pick(sextingOpeners);
@@ -3504,6 +3767,9 @@ ${sessionLog}
               if (audioContextRef.current?.state === 'suspended') {
                 audioContextRef.current.resume().catch(() => { });
               }
+              if (inputAudioContextRef.current?.state === 'suspended') {
+                inputAudioContextRef.current.resume().catch(() => { });
+              }
 
               // ⚡ TRIGGER DE SALUDO NATIVO:
               // Se enviará a través de sendClientContent únicamente tras recibir setupComplete del servidor
@@ -3520,13 +3786,14 @@ ${sessionLog}
                       if (checkScreenSharing() && liveSessionRef.current) {
                         try {
                           const { frame } = captureOptimizedFrame({
-                            quality: 0.50,
-                            changeThreshold: 0.02,
-                            heartbeatIntervalMs: 12000
+                            quality: 0.55,
+                            changeThreshold: 0.015,
+                            heartbeatIntervalMs: 6000
                           });
                           if (frame) {
+                            const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
                             liveSessionRef.current.sendRealtimeInput({
-                              video: { mimeType: 'image/jpeg', data: frame }
+                              media: { mimeType: 'image/jpeg', data: cleanData }
                             });
                           }
                         } catch (e) { console.warn('⚠️ Error enviando frame (restaurado):', e); }
@@ -3537,9 +3804,11 @@ ${sessionLog}
                         }
                         setIsScreenSharing(false);
                       }
-                    }, 1500);
+                    }, 1000);
                     setIsScreenSharing(true);
-                    session.sendRealtimeInput({ text: '[SYSTEM_EVENT: Pantalla compartida restaurada automáticamente tras reconexión. Continúas viendo la pantalla del usuario.]' });
+                    const activeMed = getActiveMediaSession();
+                    const medNotice = activeMed ? ` Continúas viendo "${activeMed.title}".` : '';
+                    session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: `[SYSTEM_EVENT: Pantalla compartida restaurada automáticamente tras reconexión.${medNotice} Los fotogramas y el audio del usuario continúan activos.]` }] }], turnComplete: false });
                     console.log('✅ [ReconnectFix] Screen share restaurado y frames retomados.');
                   }
                 }, 2000);
@@ -3575,7 +3844,7 @@ ${sessionLog}
                 try {
                   // @ts-ignore
                   liveSessionRef.current.sendRealtimeInput({
-                    video: { mimeType: 'image/jpeg', data: cleanData }
+                    media: { mimeType: 'image/jpeg', data: cleanData }
                   });
                 } catch (e) { console.warn('Error enviando frame cámara:', e); }
                 setTimeout(() => setIsVisionSyncing(false), 400);
@@ -3602,10 +3871,11 @@ ${sessionLog}
                 setTimeout(() => {
                   try {
                     if (liveSessionRef.current && isLiveSessionOpen(liveSessionRef.current)) {
-                      // sendRealtimeInput es menos intrusivo que sendClientContent
-                      // y no causa conflicto con el system instruction
-                      // @ts-ignore
-                      liveSessionRef.current.sendRealtimeInput({ text: greetPhrase });
+                      // sendClientContent es el método oficial del SDK para inyectar texto al modelo
+                      liveSessionRef.current.sendClientContent({
+                        turns: [{ role: 'user', parts: [{ text: greetPhrase }] }],
+                        turnComplete: true
+                      });
 
                       // Si hubo reconexión, proveer inmediatamente el contexto reciente sin romper la voz
                       if (reconnectContext) {
@@ -3613,8 +3883,10 @@ ${sessionLog}
                           try {
                             if (liveSessionRef.current && isLiveSessionOpen(liveSessionRef.current)) {
                               console.log('🔄 [LiveSession] Inyectando contexto de reconexión al modelo:', reconnectContext);
-                              // @ts-ignore
-                              liveSessionRef.current.sendRealtimeInput({ text: reconnectContext });
+                              liveSessionRef.current.sendClientContent({
+                                turns: [{ role: 'user', parts: [{ text: reconnectContext }] }],
+                                turnComplete: false
+                              });
                             }
                           } catch (e) {
                             console.warn('⚠️ [ReconnectContext] Error inyectando contexto:', e);
@@ -3627,6 +3899,20 @@ ${sessionLog}
                   }
                 }, 600); // 600ms para que el servidor esté completamente estabilizado
               }
+            }
+
+            // 🛑 Interrupción en servidor: Si el modelo fue interrumpido por el habla del usuario
+            if (msg.serverContent?.interrupted) {
+              console.log('🛑 [LiveSession] Modelo interrumpido por voz del usuario (interrupted)');
+              stopAiAudio(true);
+              currentOutputTranscription.current = '';
+              currentInputTranscription.current = '';
+              setLiveUserTranscript('');
+              userSpeechStartRef.current = 0;
+              userSpeechEndRef.current = performance.now();
+              firstAudioReceivedRef.current = false;
+              isAiSpeakingRef.current = false;
+              setIsAiSpeaking(false);
             }
 
             // DETECTAR BLOQUEO/SCENSURA (Refusal)
@@ -3772,12 +4058,38 @@ ${sessionLog}
                       if (isAskingAboutRecent && recentTurns.length > 0) {
                         localResults = [...recentTurns.slice(-4)];
                       } else {
-                        const stopWords = new Set(['que', 'qué', 'de', 'la', 'el', 'en', 'un', 'una', 'los', 'las', 'por', 'para', 'con', 'sobre', 'sobre']);
-                        const queryWords = queryLower.split(/\s+/).filter((w: string) => w.length > 2 && !stopWords.has(w));
-                        localResults = localFacts.filter(fact => {
+                        const userNameLower = (state.userName || '').toLowerCase();
+                        const stopWords = new Set([
+                          'que', 'qué', 'de', 'la', 'el', 'en', 'un', 'una', 'los', 'las', 'por', 'para', 'con', 'sobre',
+                          'del', 'al', 'mi', 'mis', 'tu', 'tus', 'su', 'sus', 'sabes', 'recuerdas', 'dime', 'cual', 'cuál',
+                          'quien', 'quién', 'como', 'cómo', 'es', 'son', 'usuario', userNameLower
+                        ]);
+                        const queryWords = queryLower
+                          .split(/\s+/)
+                          .map((w: string) => w.replace(/[^\wáéíóúüñ]/gi, ''))
+                          .filter((w: string) => w.length > 2 && !stopWords.has(w));
+
+                        // Puntuación de relevancia para ordenar los resultados
+                        const scoredFacts: { fact: string; score: number }[] = [];
+                        for (const fact of localFacts) {
                           const factLower = fact.toLowerCase();
-                          return factLower.includes(queryLower) || (queryWords.length > 0 && queryWords.some((word: string) => factLower.includes(word)));
-                        });
+                          let score = 0;
+                          if (queryLower.length > 3 && factLower.includes(queryLower)) {
+                            score += 10; // Coincidencia exacta de frase
+                          }
+                          for (const word of queryWords) {
+                            if (factLower.includes(word)) {
+                              score += 2; // Coincidencia de palabra clave
+                            }
+                          }
+                          if (score > 0) {
+                            scoredFacts.push({ fact, score });
+                          }
+                        }
+
+                        // Ordenar de mayor a menor relevancia y tomar top 5
+                        scoredFacts.sort((a, b) => b.score - a.score);
+                        localResults = scoredFacts.slice(0, 5).map(s => s.fact);
                       }
 
                       // 2. Buscar en Supabase solo si se necesitan más datos, con timeout estricto de 450ms
@@ -3793,13 +4105,13 @@ ${sessionLog}
                         }
                       }
 
-                      // 3. Combinar sin duplicados
-                      const combinedResults = Array.from(new Set([...localResults, ...dbResults]));
+                      // 3. Combinar sin duplicados y limitar estrictamente a los 3 más relevantes y concisos
+                      const combinedResults = Array.from(new Set([...localResults, ...dbResults])).slice(0, 3);
 
                       if (combinedResults.length > 0) {
-                        toolResult = `Recuerdos/Recordatorios relevantes encontrados:\n${combinedResults.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\nUsa esta información en tu respuesta de forma amigable.`;
+                        toolResult = `Recuerdos relevantes:\n${combinedResults.map((r, i) => `- ${r}`).join('\n')}\nResponde directo y conciso en 1 o 2 frases.`;
                       } else {
-                        toolResult = `No encontré recuerdos ni recordatorios específicos sobre "${query}" en mi memoria. Dile al usuario que aún no tienes ese dato guardado.`;
+                        toolResult = `No encontré recuerdos sobre "${query}". Dile amablemente que no lo recuerdas.`;
                       }
                       console.log('🔍 Resultados búsqueda semántica combinada:', query, '→', combinedResults.length, 'resultados (Local:', localResults.length, ', DB:', dbResults.length, ')');
                     } catch (error) {
@@ -3906,6 +4218,35 @@ ${sessionLog}
                     pendingFactsRef.current.push({ content, category: safeCategory as any });
                     addMessage({ text: `🧠 Recuerdo guardado en búfer: "${content}"`, sender: 'ai' });
                     toolResult = `Memory saved in session buffer: ${content}`;
+                  } else if (fc.name === 'track_media') {
+                    // 🎬 MEMORIA DE SERIES & CINE
+                    const { title, mediaType, season, episode, episodesRange, date, plotEvent, character, theory, userImpression, status } = fc.args as any;
+                    console.log('🎬 [Nova Tool] track_media ejecutado:', { title, season, episode, episodesRange, date, plotEvent, theory });
+                    const savedEntry = await trackMediaProgress({
+                      title,
+                      mediaType,
+                      season: season ? Number(season) : undefined,
+                      episode: episode ? Number(episode) : undefined,
+                      episodesRange,
+                      date,
+                      plotEvent,
+                      character,
+                      theory,
+                      userImpression,
+                      status
+                    });
+                    const epTag = episodesRange 
+                      ? ` (${episodesRange})`
+                      : (savedEntry.currentSeason && savedEntry.currentEpisode 
+                        ? ` (T${savedEntry.currentSeason}:E${savedEntry.currentEpisode})` 
+                        : (savedEntry.currentEpisode ? ` (Cap. ${savedEntry.currentEpisode})` : ''));
+                    const lastSess = savedEntry.sessions?.[0];
+                    const dateInfo = lastSess ? ` [${lastSess.date}]` : '';
+                    addMessage({
+                      text: `🎬 Anotado en memoria por fecha: "${savedEntry.title}"${epTag}${dateInfo}${plotEvent ? ` — ${plotEvent}` : (theory ? ` (Teoría: ${theory})` : '')}`,
+                      sender: 'ai'
+                    });
+                    toolResult = `Media tracking updated successfully for "${savedEntry.title}"${epTag}${dateInfo}. Plot summary and key details saved into permanent date-indexed memory.`;
                   } else if (fc.name === 'request_web_search') {
                     const { query } = fc.args as any;
                     console.log('🔍 [Nova Tool] Búsqueda web instantánea:', query);
@@ -4105,7 +4446,15 @@ ${sessionLog}
                     toolResult = `Animación o pose '${pose}' ejecutada correctamente en el motor 3D.`;
                   }
 
-                  if (!toolResult) {
+                  const backgroundSilentTools = [
+                    'controlBody', 'controlCamera', 'learnPreference', 'learnFact', 'save_memory',
+                    'saveConversation', 'manageClothing', 'changeOutfit', 'changeIntimatePose',
+                    'changePose', 'performAction', 'simulateFluid', 'controlRobotGym'
+                  ];
+
+                  if (backgroundSilentTools.includes(fc.name)) {
+                    toolResult = `OK (${fc.name} ejecutado correctamente). [SISTEMA: Acción en segundo plano completada. NO repitas tu respuesta anterior ni generes nuevo audio. Mantente en silencio y escucha al usuario.]`;
+                  } else if (!toolResult) {
                     toolResult = `Tool ${fc.name} executed successfully.`;
                   }
 
@@ -4128,6 +4477,12 @@ ${sessionLog}
                         }]
                       });
                       console.log('✅ sendToolResponse enviado — tool:', fc.name, 'id:', callId);
+                      // Resetear buffers para evitar que Gemini o el cliente hereden desfase acumulado
+                      currentInputTranscription.current = '';
+                      setLiveUserTranscript('');
+                      userSpeechStartRef.current = 0;
+                      userSpeechEndRef.current = performance.now();
+                      firstAudioReceivedRef.current = false;
                     } catch (toolErr) {
                       console.error('❌ sendToolResponse falló, usando fallback sendClientContent:', toolErr);
                       // @ts-ignore
@@ -4135,6 +4490,11 @@ ${sessionLog}
                         turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] ${toolResult}` }] }],
                         turnComplete: true
                       });
+                      currentInputTranscription.current = '';
+                      setLiveUserTranscript('');
+                      userSpeechStartRef.current = 0;
+                      userSpeechEndRef.current = performance.now();
+                      firstAudioReceivedRef.current = false;
                     }
                   } else {
                     // Sin id: inyectamos el resultado como texto de usuario (único método seguro)
@@ -4144,6 +4504,11 @@ ${sessionLog}
                       turns: [{ role: 'user', parts: [{ text: `[TOOL_RESULT: ${fc.name}] ${toolResult}` }] }],
                       turnComplete: true
                     });
+                    currentInputTranscription.current = '';
+                    setLiveUserTranscript('');
+                    userSpeechStartRef.current = 0;
+                    userSpeechEndRef.current = performance.now();
+                    firstAudioReceivedRef.current = false;
                   }
                 }
               }
@@ -4235,15 +4600,6 @@ ${sessionLog}
                         startCall: () => startCallRef.current(),
                         endCall: () => requestGracefulHangup(fullText)
                       });
-
-                      // Notificar a Nova que el comando ya fue ejecutado
-                      if (liveSessionRef.current) {
-                        try {
-                          liveSessionRef.current.sendRealtimeInput({
-                            text: `SYSTEM_EVENT: [ACTION_EXECUTED] El comando de voz "${sysCmd.type} ${sysCmd.target || ''}" fue ejecutado inmediatamente por el sistema local. Confírmale breve y naturalmente al usuario que ya se realizó o asiente.`
-                          });
-                        } catch (e) { }
-                      }
                     }
                   }
                 }, 1200);
@@ -4275,7 +4631,9 @@ ${sessionLog}
               console.log('🗣️ Transcripción completa:', currentInputTranscription.current);
 
               // ⏱️ Biometría de Cadencia y Radiografía Emocional en Tiempo Real
-              const speechDuration = userSpeechEndRef.current > 0 ? Math.abs(performance.now() - (lastUserInteractionRef.current || performance.now())) : 2200;
+              const speechDuration = (userSpeechEndRef.current > 0 && userSpeechStartRef.current > 0)
+                ? Math.max(400, Math.round(userSpeechEndRef.current - userSpeechStartRef.current))
+                : 2200;
               const cadence = cadenceAnalyzerRef.current.registerSpeechTurn(currentInputTranscription.current, Math.max(600, speechDuration));
               console.log(`%c⏱️ [Cadencia Vocal] ${cadence.wordsPerMinute} PPM | Estado: ${cadence.emotionalState} (${cadence.summary})`, 'color: #c084fc; font-weight: bold; background: #3b0764; padding: 2px 6px; border-radius: 4px;');
 
@@ -4440,6 +4798,20 @@ ${sessionLog}
               const rawTranscript = msg.serverContent.outputTranscription.text || '';
               const filteredTranscript = rawTranscript.replace(/<ctrl\d+>/gi, '').trim();
               if (filteredTranscript.length > 0) {
+                // 🛑 ANTI-DUPLICADO: Si Nova repite textualmente lo que acaba de decir en los últimos 12s (típico eco al confirmar toolResponse)
+                const now = Date.now();
+                const lastSpoken = lastAiSpokenTextRef.current.trim().toLowerCase();
+                const currentChunk = filteredTranscript.toLowerCase();
+                if (
+                  lastSpoken.length > 5 &&
+                  (now - lastAiSpokenTimeRef.current < 12000) &&
+                  (currentChunk === lastSpoken || (currentChunk.length > 15 && lastSpoken.includes(currentChunk)))
+                ) {
+                  console.warn(`🛑 [Anti-Duplicate] Repetición detectada en voz de Nova ("${filteredTranscript}"). Silenciando audio duplicado.`);
+                  isDuplicateTurnRef.current = true;
+                  return;
+                }
+
                 console.log(`📝 ${getLogTimestamp()} NOVA DICE:`, filteredTranscript);
               }
               lastInteractionRef.current = Date.now(); // RESET AUTONOMY TIMER
@@ -4843,12 +5215,10 @@ ${sessionLog}
 
             // Capturar audio del servidor en formatos del SDK de Gemini Live:
             // 1) En partes de modelTurn: msg.serverContent.modelTurn.parts[].inlineData.data (estándar nativo)
-            // 2) Fallback directo evitando disparar el getter msg.data que genera warnings de consola
             const partAudio = msg.serverContent?.modelTurn?.parts?.find(p => p.inlineData?.data)?.inlineData?.data;
-            const topLevelAudio = !partAudio && (msg as any).data?.data ? (msg as any).data.data : undefined;
-            const audioData = partAudio || topLevelAudio;
+            const audioData = partAudio;
 
-            if (audioData && typeof audioData === 'string' && audioData.length > 0 && !isSearchingRef.current && !isSinging) {
+            if (audioData && typeof audioData === 'string' && audioData.length > 0 && !isSearchingRef.current && !isSinging && !isDuplicateTurnRef.current) {
               // ⏱️ LATENCY PROFILING (Time To First Audio - TTFA)
               if (!firstAudioReceivedRef.current) {
                 firstAudioReceivedRef.current = true;
@@ -4882,12 +5252,18 @@ ${sessionLog}
                 );
               }
 
+              // Reactivar micrófono de forma determinista calculando el fin real del audio de Nova
+              const ctx = audioContextRef.current;
+              const remainingAudioMs = (ctx && nextStartTimeRef.current > ctx.currentTime)
+                ? Math.round((nextStartTimeRef.current - ctx.currentTime) * 1000) + 50
+                : 50;
+
               setTimeout(() => {
-                // Resetear isAiSpeaking para reabrir el micrófono solo si no hay audio reproduciéndose activamente
-                if (aiAudioSourcesRef.current.length === 0) {
-                  isAiSpeakingRef.current = false;
-                  setIsAiSpeaking(false);
-                }
+                isAiSpeakingRef.current = false;
+                setIsAiSpeaking(false);
+                canSendAudioRef.current = true;
+                aiAudioSourcesRef.current = [];
+                nextStartTimeRef.current = 0;
 
                 const noAudioReceived = !firstAudioReceivedRef.current;
                 const noUserSpeech = userSpeechEndRef.current === 0;
@@ -4906,28 +5282,12 @@ ${sessionLog}
                   canSendAudioRef.current = true;
                 }
 
-                // 🔊 RESCATE AUTOMÁTICO DE VOZ (Fallback si el modelo respondió texto sin audio)
-                if (noAudioReceived && currentOutputTranscription.current.trim() && !isSearchingRef.current) {
-                  const pendingSpeechText = cleanAllAiTags(currentOutputTranscription.current.trim());
-                  if (pendingSpeechText.length > 2 && !pendingSpeechText.includes('[CANTA]')) {
-                    console.log('⚡ [VoiceRescue] Sintetizando respuesta de texto que vino sin audio:', pendingSpeechText);
-                    generateSpeech(pendingSpeechText, state.avatar.voiceName || 'Zephyr', state.avatar.voiceTone || '')
-                      .then((rescueAudio) => {
-                        if (rescueAudio && isInCallRef.current) {
-                          isAiSpeakingRef.current = true;
-                          playAiVoice(rescueAudio);
-                        }
-                      })
-                      .catch((e) => console.warn('⚠️ Error en VoiceRescue:', e));
-                  }
-                }
-
                 // Resetear estado de audio para el siguiente turno
                 firstAudioReceivedRef.current = false;
                 userSpeechStartRef.current = 0;
                 userSpeechEndRef.current = 0;
                 latencyStatsRef.current = { ttfa: 0, cloudTime: 0 };
-              }, 400);
+              }, Math.max(50, remainingAudioMs));
 
               // 🔌 CIERRE ELEGANTE: Si Nova se estaba despidiendo, cortar la llamada solo cuando terminó de hablar
               if (pendingDisconnectRef.current) {
@@ -4941,7 +5301,7 @@ ${sessionLog}
               if (currentInputTranscription.current.trim() && !isSearchingRef.current) addMessage({ text: currentInputTranscription.current, sender: 'user' });
 
               // ANTI-REPETITION CHECK para mensajes de Nova (solo en Bold mode)
-              if (currentOutputTranscription.current.trim() && !isSearchingRef.current) {
+              if (currentOutputTranscription.current.trim() && !isSearchingRef.current && !isDuplicateTurnRef.current) {
                 const outputText = cleanAllAiTags(currentOutputTranscription.current.trim());
 
                 if (isBold && detectRepetition(outputText)) {
@@ -4963,8 +5323,12 @@ ${sessionLog}
                   }
                 } else {
                   addMessage({ text: outputText, sender: 'ai' });
+                  lastAiSpokenTextRef.current = outputText;
+                  lastAiSpokenTimeRef.current = Date.now();
                 }
               }
+              // Resetear bandera de turno duplicado
+              isDuplicateTurnRef.current = false;
 
               if (!isSearchingRef.current) {
                 // ============ APRENDIZAJE POR CONSOLIDACIÓN ============
@@ -5082,6 +5446,15 @@ ${sessionLog}
               // Backoff base: 1.5s * 2^(intento-1), cap en 20s
               let backoffMs = Math.min(1500 * Math.pow(2, reconnectAttemptRef.current - 1), 20000);
 
+              // Error 1011 (servicio no disponible / sesión zombie) o reintentos repetidos:
+              // Rotar a la siguiente clave API de Gemini si hay claves auxiliares configuradas
+              if (closeCode === 1011 || closeReason.toLowerCase().includes('unavailable') || reconnectAttemptRef.current >= 2) {
+                const keys = getGeminiApiKeys();
+                if (keys.length > 1) {
+                  rotateGeminiKey(`reconexión por socket ${closeCode || 'error'}`);
+                }
+              }
+
               // Error 1011 (servicio no disponible): mínimo 3s de espera
               if (closeCode === 1011 || closeReason.toLowerCase().includes('unavailable')) {
                 backoffMs = Math.max(backoffMs, 3000);
@@ -5153,68 +5526,6 @@ ${sessionLog}
                   }
                 },
                 {
-                  name: "controlBody",
-                  description: "Controla tu cuerpo 3D, postura, articulaciones, gestos procedurales, poses de manos y desplazamiento en el escenario. Úsalo para mover brazos/piernas/cabeza/torso, hacer gestos (saludar, asentir, bailar, abrazarte, etc.), cambiar poses de manos, caminar o inventar poses.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      actionType: {
-                        type: Type.STRING,
-                        enum: ["facial_expression", "move_limb", "play_gesture", "hand_pose", "walk_to", "custom_pose", "reset"],
-                        description: "Tipo de control: 'facial_expression' (ojos, boca, lengua), 'move_limb' (mover articulación/piernas), 'play_gesture' (gesto temporal), 'hand_pose' (pose dedos/mano), 'walk_to' (desplazarse en el espacio 3D), 'custom_pose' (pose precisa por ángulos), 'reset' (volver a postura neutral)."
-                      },
-                      facialExpression: {
-                        type: Type.STRING,
-                        enum: ["wink_left", "wink_right", "close_eyes", "tongue_out", "smile", "pout", "kiss", "open_mouth", "ahegao"],
-                        description: "Gesto facial / ojos / boca / lengua (para 'facial_expression')."
-                      },
-                      limb: {
-                        type: Type.STRING,
-                        enum: ["LEFT_ARM", "RIGHT_ARM", "BOTH_ARMS", "LEFT_FOREARM", "RIGHT_FOREARM", "BOTH_FOREARMS", "HEAD", "TORSO", "HIPS", "LEFT_LEG", "RIGHT_LEG", "BOTH_LEGS"],
-                        description: "Parte del cuerpo a mover (para 'move_limb')."
-                      },
-                      target: {
-                        type: Type.STRING,
-                        enum: ["REST", "WAVE", "CHEST", "FACE", "CELEBRATE", "BEND", "EXTEND", "TILT_LEFT", "TILT_RIGHT", "UP", "DOWN", "NEUTRAL", "LEAN_FORWARD", "LEAN_BACK", "TWIST_LEFT", "TWIST_RIGHT", "SWAY_LEFT", "SWAY_RIGHT", "FORWARD", "BACKWARD", "SIDE", "STAND", "WIDE", "CROSS", "KICK"],
-                        description: "Preset objetivo de la articulación (para 'move_limb')."
-                      },
-                      gesture: {
-                        type: Type.STRING,
-                        enum: ["wave", "nod", "shake_head", "shrug", "dance", "excited", "sad", "thinking", "surprised", "angry", "happy", "clap", "point", "bow", "stretch", "confused", "flirt", "laugh", "shy", "sing", "crouch", "touch_head", "touch_chest", "hold_foot", "hands_on_hips", "hug_self", "celebrate", "pose_sexy", "peace", "rhythm_bounce", "blow_kiss", "listen_attentive", "curious_lean", "stretch_relax", "playful_tease", "balance"],
-                        description: "Gesto, pose o acción procedural temporal a realizar (para 'play_gesture')."
-                      },
-                      hand: {
-                        type: Type.STRING,
-                        enum: ["LEFT", "RIGHT", "BOTH"],
-                        description: "Mano a controlar (para 'hand_pose')."
-                      },
-                      handPose: {
-                        type: Type.STRING,
-                        enum: ["OPEN", "FIST", "POINT", "PEACE", "THUMBS_UP", "PINCH", "RELAX", "GUN"],
-                        description: "Pose de dedos de la mano (para 'hand_pose')."
-                      },
-                      walkDirection: {
-                        type: Type.STRING,
-                        enum: ["forward", "backward", "left", "right", "center"],
-                        description: "Dirección de caminata en 3D (para 'walk_to')."
-                      },
-                      customPoseName: {
-                        type: Type.STRING,
-                        description: "Nombre de la pose para 'custom_pose'."
-                      },
-                      customPoseAngles: {
-                        type: Type.STRING,
-                        description: "Ángulos articulares en grados (ej: 'torsoX=15,headY=-20,leftArmZ=45') para 'custom_pose'."
-                      },
-                      reason: {
-                        type: Type.STRING,
-                        description: "Razón o emoción por la que te mueves."
-                      }
-                    },
-                    required: ["actionType"]
-                  }
-                },
-                {
                   name: "controlRobotGym",
                   description: "Controla las físicas o políticas de movimiento de tu cuerpo en el simulador Robot Gym. Úsalo cuando el usuario te pida cambiar tu modo de movimiento físico o aplicar empujones/fuerzas físicas sobre ti.",
                   parameters: {
@@ -5283,17 +5594,6 @@ ${sessionLog}
                       }
                     },
                     required: ["action", "garmentType"]
-                  }
-                },
-                {
-                  name: "searchMemory",
-                  description: "Use this tool to search deep/long-term memory for specific information from the past (e.g. 'what did I say about my dog?', 'where did I go last summer?').",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      query: { type: Type.STRING, description: "The search keywords." }
-                    },
-                    required: ["query"]
                   }
                 },
                 {
@@ -5399,13 +5699,34 @@ ${sessionLog}
                 },
                 {
                   name: "search_memory",
-                  description: "Busca en tu memoria profunda a largo plazo usando inteligencia semántica. Úsalo SIEMPRE que el usuario pregunte '¿Recuerdas...?', cuando te pida hacer algo que te enseñó en el pasado, o cuando el tema de conversación coincida con algo que quizás ya sabes. La búsqueda es semántica: si buscas 'mascotas' puede encontrar 'perros'.",
+                  description: "Busca en tu memoria profunda a largo plazo usando inteligencia semántica. Úsalo ÚNICAMENTE cuando el usuario te pregunte de forma explícita y directa si recuerdas algo sobre su pasado o te pida buscar en memoria (ej: '¿recuerdas qué te dije de...?', '¿te acuerdas de mi perro?'). NUNCA lo uses en charla casual, comentarios cotidianos ni respuestas directas.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       query: { type: Type.STRING, description: "La pregunta o concepto clave a buscar (ej: 'Pole Targets codos', 'mascotas del usuario', 'trabajo del usuario')." }
                     },
                     required: ["query"]
+                  }
+                },
+                // 🎬 WATCH PARTY & SERIES TRACKER (MEMORIA POR FECHA Y TRAMA):
+                {
+                  name: "track_media",
+                  description: "Registra y recuerda lo que están viendo juntos en pantalla (serie, película, anime, video de YouTube), indexado por fecha para no perder jamás el hilo de la trama ni detalles importantes. Guarda resúmenes acumulados, hitos, personajes y teorías.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING, description: "Título de la serie, película o anime (ej: 'Hunter x Hunter', 'Stranger Things', 'Attack on Titan')." },
+                      mediaType: { type: Type.STRING, enum: ["series", "movie", "anime", "youtube", "general"], description: "Tipo de obra audiovisual." },
+                      season: { type: Type.NUMBER, description: "Número de temporada (si aplica)." },
+                      episode: { type: Type.NUMBER, description: "Número de episodio / capítulo exacto (si es uno solo)." },
+                      episodesRange: { type: Type.STRING, description: "Rango de capítulos vistos en la sesión (ej: 'Capítulos 1 al 3', 'Episodios 1-3')." },
+                      date: { type: Type.STRING, description: "Fecha de la sesión (opcional, por defecto se usa la fecha actual de hoy)." },
+                      plotEvent: { type: Type.STRING, description: "Resumen de lo ocurrido en la trama o acontecimiento clave (ej: 'Gon pesca al Señor del Lago, se despide de Mito y aborda el barco donde conoce a Leorio y Kurapika')." },
+                      character: { type: Type.STRING, description: "Personaje nuevo o relevante que apareció o del que hablaron." },
+                      theory: { type: Type.STRING, description: "Teoría, sospecha o especulación que tú o Deyios comentaron." },
+                      userImpression: { type: Type.STRING, description: "Reacción u opinión de Deyios sobre la escena o la serie." }
+                    },
+                    required: ["title"]
                   }
                 },
                 // 🖐️ AUTONOMÍA VISUAL: Solicitar activación de cámara/pantalla al usuario
@@ -5566,17 +5887,11 @@ ${sessionLog}
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {}, // Habilita la transcripción del audio de Nova para el sistema de memoria
-          // Configuración generativa (Flattened por deprecación de generation_config)
+          // Configuración generativa para Gemini Live nativo
           // @ts-ignore
-          temperature: isBold ? 1.2 : 0.9,
+          temperature: isBold ? 0.85 : 0.7,
           // @ts-ignore
           topP: 0.95,
-          // @ts-ignore
-          maxOutputTokens: 2048,
-          // @ts-ignore
-          // 🚀 LATENCIA: Deshabilitar modo thinking de Gemini 2.5 que agrega ~1-2s de overhead
-          // El warning "non-data parts text,thought" confirmaba que thinking estaba activo
-          thinkingConfig: { thinkingBudget: 0 },
 
           /*
           generationConfig: {
@@ -5598,7 +5913,7 @@ ${sessionLog}
                 state.userName,
                 state.knownPeople,
                 state.avatar.personality,
-                { ...novaMemory, habits: [] },
+                getMemoryProfileForInstruction(),
                 state.allowWebSearch,
                 isScreenSharing,
                 selfAwarenessBlock,
@@ -5607,12 +5922,13 @@ ${sessionLog}
                 state.avatar.personalityMode,
                 state.avatar.functionalMode,
                 state.avatar.personalityTraits,
-                state.avatar.regionalSlang
+                state.avatar.regionalSlang,
+                buildMediaMemoryPromptBlock()
               ) +
-                (lastGreetMsgRef.current ? `\n\nCONTEXTO INMEDIATO PARA TU PRIMERÍSIMA RESPUESTA (OBLIGATORIO):\n[SITUACIÓN DE CONEXIÓN: ${lastGreetMsgRef.current}]\nINSTRUCCIÓN VITAL: Tu primera acción de inmediato al iniciar la llamada es saludar brevemente y responder/retomar con total naturalidad y soltura según tu personalidad activa.` : '') +
-                `\n\nCONTROL DEL SISTEMA:
+                `\n\nCONTROL DEL SISTEMA Y GESTOS:
 - Puedes interactuar con la computadora del usuario ejecutando tus herramientas (openUrl, openApp, etc.) en segundo plano.
-- Habla con naturalidad y simpatía en tu voz, sin redactar código ni etiquetas de texto en tu conversación.` +
+- GESTOS Y MOVIMIENTO: Para moverte o gesticular mientras hablas o escuchas, incluye etiquetas procedurales directamente en tu texto como [DO:wave], [DO:listen_attentive], [DO:happy], [DO:nod], [MOVE:HIPS:SWAY_LEFT], etc. Se ejecutan instantáneamente en el motor 3D sin pausar tu voz.
+- NUNCA repitas tu mensaje anterior ni vuelvas a decir la misma respuesta. Habla con naturalidad y simpatía en tu voz, sin redactar código ni etiquetas crudas en tu conversación.` +
 
                 `\n\nINSTRUCCIONES CRÍTICAS DE IDIOMA:
 - RESPONDE ÚNICAMENTE EN ESPAÑOL. 
@@ -5621,11 +5937,12 @@ ${sessionLog}
 - NO preguntes sobre problemas de micrófono a menos que el usuario no haya hablado en más de 30 segundos.
 ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${state.avatar.voiceAccent ? `\n- ACENTO: Habla con acento ${state.avatar.voiceAccent}` : ''}` +
 
-                `\n\nREGLA CRÍTICA DE MEMORIA (OBLIGATORIA):
-- SIEMPRE que el usuario te pregunte algo sobre su vida, sus preferencias, su entorno, su nombre, sus mascotas, su trabajo, o te pregunte "¿recuerdas...?", "¿cómo se llama...?", "¿qué sabes de...?" → DEBES llamar PRIMERO a la herramienta 'searchMemory' ANTES de responder.
-- SIEMPRE que el usuario te enseñe algo nuevo, te cuente algo sobre él, o mencione un dato biográfico → llama a 'learnFact'. Si menciona un gusto/interés/hábito → llama a 'learnPreference'.
-- NUNCA inventes recuerdos. Si searchMemory no devuelve resultados, dilo honestamente.
-- Ejemplo: Usuario: "¿Recuerdas cómo se llama mi perro?" → Tú: [llamas searchMemory(query: "nombre perro mascota")] → luego respondes con lo encontrado.`
+                `\n\nREGLA CRÍTICA DE MEMORIA Y FLUIDEZ DE LLAMADA:
+- En conversación casual, charla diaria o comentarios ordinarios: RESPONDE DE INMEDIATO CON TU VOZ SIN LLAMAR A NINGUNA HERRAMIENTA. La fluidez en tiempo real y cero latencia es tu máxima prioridad.
+- ÚNICAMENTE llama a 'search_memory' si el usuario te formula una pregunta EXPLÍCITA y DIRECTA sobre su pasado que requiera buscar recuerdos (ejemplos: "¿recuerdas cómo se llama mi perro?", "¿te acuerdas de lo que te dije de mi trabajo?").
+- Si el usuario NO te pide explícitamente buscar en memoria, JAMÁS llames a search_memory. Conversa de inmediato con fluidez y naturalidad.
+- NUNCA inventes recuerdos si search_memory no devuelve resultados.
+- Si el usuario te enseña algo nuevo o un dato biográfico personal, puedes registrarlo con learnFact o learnPreference.`
             }]
           }
         }
@@ -5665,17 +5982,36 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         return;
       }
 
-      // Buffer de acumulación PCM para evitar flood de mensajes WebSocket (agrupa ~128ms)
-      let pcmAccumulator: Int16Array[] = [];
-      let accumulatedSampleCount = 0;
-      let lastAudioSendTime = Date.now();
-      const CHUNK_SAMPLE_THRESHOLD = 2048; // ~128ms a 16kHz (óptimo para Gemini Live)
+      let lastAudioSendTime = performance.now();
+      let lastHumanSpeechTime = 0;
 
       processor.port.onmessage = (e) => {
         if (!liveSessionRef.current) return;
         if (!canSendAudioRef.current) return; // 🛑 Bloqueo por Text Injection
 
-        const rawInput: Float32Array = e.data?.data || (e.data instanceof Float32Array ? e.data : null);
+        // 🛡️ Mantener vivo el contexto de audio si el navegador lo suspendió
+        if (inputCtx.state === 'suspended') {
+          inputCtx.resume().catch(() => {});
+        }
+
+        // 🛡️ WATCHDOG DE AUDIO IA ROBUSTO:
+        // Si el tiempo de reproducción programado ya venció, o no quedan chunks en cola ni fuentes activas,
+        // Nova NO está hablando: restaurar de inmediato el estado para garantizar micrófono 100% abierto.
+        const outCtx = audioContextRef.current;
+        const outCtxTime = outCtx?.currentTime || 0;
+        const isQueueEmpty = audioChunkQueueRef.current.length === 0;
+        const isPlaybackTimeOver = nextStartTimeRef.current > 0 && outCtxTime >= (nextStartTimeRef.current - 0.02);
+        const hasNoActiveSources = aiAudioSourcesRef.current.length === 0;
+
+        if ((isPlaybackTimeOver || (isQueueEmpty && hasNoActiveSources)) && isAiSpeakingRef.current) {
+          isAiSpeakingRef.current = false;
+          setIsAiSpeaking(false);
+          canSendAudioRef.current = true;
+          aiAudioSourcesRef.current = [];
+          nextStartTimeRef.current = 0;
+        }
+
+        const rawInput: Float32Array = e.data?.pcm || e.data?.data || (e.data instanceof Float32Array ? e.data : null);
         if (!rawInput || rawInput.length === 0) return;
 
         // Calcular volumen RMS visual
@@ -5685,20 +6021,20 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         const volumePercent = Math.min(100, Math.round(rms * 1000));
         setMicVolume(volumePercent);
 
-        // Detectar si el frame actual contiene voz humana real
+        // Detectar si el frame actual contiene voz humana real a 16kHz nativo
         const speechInfo = isHumanSpeechFrame(rawInput, 16000);
+        const isSpeechFrame = speechInfo.isSpeech || (volumePercent > 12 && speechInfo.energy > 0.022);
+        const nowMs = performance.now();
+        if (isSpeechFrame) {
+          lastHumanSpeechTime = nowMs;
+        }
 
         // 👂 FEEDBACK REACTIVO INMEDIATO: Actualizar badge "Escuchando" desde VAD local
-        // sin esperar la transcripción en la nube (que puede llegar tarde o nunca)
-        // Usamos un ref de guardia para NO llamar setState en cada frame de audio (evita miles de re-renders/timers por segundo)
-        // 🔒 Umbral afinado: solo activar si se detecta voz humana con frecuencia fundamental o volumen claro (> 24%)
-        if (!isAiSpeakingRef.current && (speechInfo.isSpeech || (volumePercent > 24 && speechInfo.energy > 0.05))) {
+        if (!isAiSpeakingRef.current && isSpeechFrame) {
           if (!isUserSpeakingActiveRef.current) {
-            // Solo actualizar el estado React la primera vez que detectamos voz
             setIsUserSpeaking(true);
             isUserSpeakingActiveRef.current = true;
           }
-          // Siempre renovar el timeout para que expire rápidamente cuando haya silencio (1000ms)
           if (userSpeakingTimeoutRef.current) clearTimeout(userSpeakingTimeoutRef.current);
           userSpeakingTimeoutRef.current = setTimeout(() => {
             setIsUserSpeaking(false);
@@ -5706,12 +6042,10 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           }, 1000);
         }
 
-        // 🚨 BARGE-IN INTELIGENTE (interrumpir si el usuario habla deliberadamente mientras Nova habla)
-        // NOTA: Solo se permite barge-in si el audio del sistema NO está activo o si se detecta voz con energía humana clara
+        // 🚨 BARGE-IN INTELIGENTE: Si Nova habla y el usuario interrumpe con voz deliberada
         if (isAiSpeakingRef.current) {
-          if (speechInfo.isSpeech && speechInfo.energy > 0.04) {
+          if (isSpeechFrame) {
             speechConsecutiveFramesRef.current += 1;
-            // Badge: mostrar "Escuchando" incluso durante barge-in para feedback visual
             if (!isUserSpeakingActiveRef.current) {
               setIsUserSpeaking(true);
               isUserSpeakingActiveRef.current = true;
@@ -5720,12 +6054,11 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             userSpeakingTimeoutRef.current = setTimeout(() => {
               setIsUserSpeaking(false);
               isUserSpeakingActiveRef.current = false;
-            }, 1800);
+            }, 1500);
 
-            if (speechConsecutiveFramesRef.current >= 3) {
+            if (speechConsecutiveFramesRef.current >= 2) {
               console.log('🛑 [Voice Barge-In] Usuario interrumpió con voz deliberada (Pitch:', speechInfo.pitch.toFixed(1), 'Hz)');
               stopAiAudio(true); // Detiene de inmediato el audio y restaura isAiSpeakingRef = false
-
               speechConsecutiveFramesRef.current = 0;
             }
           } else {
@@ -5735,45 +6068,34 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           speechConsecutiveFramesRef.current = 0;
         }
 
-        // CONTROL DE RETORNO / SOFTWARE ACOUSTIC GATE (Anti-Echo / Retorno)
-        let input: Float32Array;
-        if (isAiSpeakingRef.current && !speechInfo.isSpeech) {
-          input = new Float32Array(rawInput.length); // Silencio digital mientras Nova habla si no hay voz de usuario
-        } else {
-          input = new Float32Array(rawInput.length);
-          const gainFactor = isAiSpeakingRef.current ? 1.0 : 1.5;
-          for (let k = 0; k < rawInput.length; k++) {
-            input[k] = rawInput[k] * gainFactor;
-          }
-        }
-
-        // RESAMPLING MANUAL a 16kHz
-        let pcmData = input;
-        if (inputCtx.sampleRate !== 16000) {
-          const ratio = inputCtx.sampleRate / 16000;
-          const newLength = Math.floor(input.length / ratio);
-          const result = new Float32Array(newLength);
-
-          for (let i = 0; i < newLength; i++) {
-            const offset = i * ratio;
-            const idx = Math.floor(offset);
-            const decimal = offset - idx;
-            const a = input[idx] || 0;
-            const b = input[idx + 1] || a;
-            result[i] = a + (b - a) * decimal;
-          }
-          pcmData = result;
-        }
-
-        // Convertir a Int16
-        const i16 = new Int16Array(pcmData.length);
-        for (let i = 0; i < pcmData.length; i++) {
-          let s = Math.max(-1, Math.min(1, pcmData[i]));
+        // Convertir a Int16 a 16kHz nativo
+        const i16 = new Int16Array(rawInput.length);
+        for (let i = 0; i < rawInput.length; i++) {
+          let s = Math.max(-1, Math.min(1, rawInput[i]));
           i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
 
+        // 🎙️ SMART VOICE GATE CON SILENCIO DIGITAL CONTINUO:
+        // Cuando no hay voz humana activa ni hangover, en lugar de cortar los paquetes (lo cual
+        // congela el reloj VAD de Google y provoca demoras de hasta 18s por timeout de socket),
+        // convertimos el frame a ceros puros (silencio digital estricto).
+        // 1) El reloj de 16kHz de Google avanza en sincronía absoluta segundo a segundo.
+        // 2) El VAD de Google detecta el fin de turno del usuario en <800ms de forma instantánea.
+        // 3) Se elimina 100% el ruido ambiente/estática (cero alucinaciones de idiomas extraños).
+        // 4) Cuando Nova habla y el usuario no interrumpe, enviar ceros evita cualquier eco de altavoces.
+        const SPEECH_HANGOVER_MS = 600; // 600ms de margen para preservar finales de frases y pausas naturales
+        const isWithinSpeechHangover = (nowMs - lastHumanSpeechTime) < SPEECH_HANGOVER_MS;
+
+        const isNovaActuallySpeakingNow = isAiSpeakingRef.current &&
+          audioContextRef.current &&
+          (audioContextRef.current.currentTime < nextStartTimeRef.current);
+
+        if ((isNovaActuallySpeakingNow && !isSpeechFrame) || (!isSpeechFrame && !isWithinSpeechHangover)) {
+          i16.fill(0);
+        }
+
         try {
-          if (!isAiSpeakingRef.current && volumePercent > 5) {
+          if (!isAiSpeakingRef.current && isSpeechFrame) {
             lastUserInteractionRef.current = Date.now();
             userSpeechEndRef.current = performance.now();
             firstAudioReceivedRef.current = false;
@@ -5791,12 +6113,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                 const visiblePerson = state.knownPeople.find(p => p.lastSeen && (Date.now() - p.lastSeen < 10000) && !p.isUnknown);
                 if (visiblePerson) {
                   if (!visiblePerson.voiceSignature || Math.abs(signature.avgPitch - visiblePerson.voiceSignature.avgPitch) < 20) {
-                    const updatedPeople = state.knownPeople.map(p =>
-                      p.id === visiblePerson.id
-                        ? { ...p, voiceSignature: signature }
-                        : p
-                    );
-                    updateKnownPeople(updatedPeople);
+                    visiblePerson.voiceSignature = signature;
                   }
                 } else {
                   let bestMatch: { person: PersonEntry, score: number } | null = null;
@@ -5813,12 +6130,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
                   if (bestMatch) {
                     const { person, score } = bestMatch;
-                    const updatedPeople = state.knownPeople.map(p =>
-                      p.id === person.id
-                        ? { ...p, lastSeen: Date.now(), lastRecognitionConfidence: score }
-                        : p
-                    );
-                    updateKnownPeople(updatedPeople);
+                    person.lastSeen = Date.now();
+                    person.lastRecognitionConfidence = score;
 
                     const now = Date.now();
                     const lastAnnounce = personAnnouncementRef.current[person.id] || 0;
@@ -5833,76 +6146,56 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
             }
           }
 
-          // 🎙️ TRANSMISIÓN INTELIGENTE (Audio agrupado a 16kHz en chunks óptimos de ~128ms para Gemini Live)
-          if (!liveSessionRef.current || !isInCallRef.current) {
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
-            return;
-          }
+          // 🎙️ TRANSMISIÓN DIRECTA A GEMINI LIVE:
+          // Cada paquete de audio-processor.js contiene exactamente 2048 muestras a 16kHz (~128ms),
+          // que es el tamaño de bloque óptimo para Gemini Live sin necesidad de búfers secundarios.
+          if (!liveSessionRef.current || !isInCallRef.current) return;
+          if (isMicMutedRef.current) return;
+          if (isSearchingRef.current) return; // 🛑 NO saturar a Gemini con audio mientras procesa una búsqueda en memoria
 
-          // 🔇 MUTE MANUAL: Si el usuario silenció el micrófono, no enviamos audio
-          if (isMicMutedRef.current) {
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
-            return;
-          }
-
-          // 🛡️ DUCKING / ANTI-AUTO-INTERRUPCIÓN:
-          // Si Nova está hablando activamente (isAiSpeaking), silenciamos únicamente si NO hay voz humana (anti-eco),
-          // pero si el usuario habla (speechInfo.isSpeech), dejamos pasar el audio para permitir interrupción natural.
-          if (isAiSpeakingRef.current && !speechInfo.isSpeech) {
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
-            return;
-          }
-
-          // === BLINDAJE CRÍTICO CONTRA SOCKETS EN CIERRE ===
           // @ts-ignore
           const session = liveSessionRef.current;
-          if (!session || !isLiveSessionOpen(session)) {
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
+          if (!session || !isLiveSessionOpen(session)) return;
+
+          // 🛡️ ANTI-DESFASE POR BACKPRESSURE (Evitar acumulación de cola TCP en navegador):
+          // Si el WebSocket tiene más de 24KB pendientes de envío en bufferedAmount,
+          // descartamos este frame para que la conversación NUNCA se desincronice ni acumule retraso en cola.
+          const ws = session?.conn?.ws
+            || session?.ws
+            || session?._ws
+            || session?.socket
+            || session?.transport?.ws
+            || session?.transport?._ws
+            || session?.transport?.socket;
+          if (ws && typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > 24576) {
             return;
           }
 
-          pcmAccumulator.push(i16);
-          accumulatedSampleCount += i16.length;
-
-          const nowAudio = performance.now();
-          // Agrupar en paquetes de ~128ms (2048 muestras a 16kHz) o forzar si pasaron >= 140ms
-          // Esto reduce los mensajes WebSocket de 125/segundo a ~7.5/segundo, eliminando
-          // la sobrecarga de buffer que causaba desconexiones 1011 cada 30-50 segundos.
-          if (accumulatedSampleCount >= CHUNK_SAMPLE_THRESHOLD || (nowAudio - lastAudioSendTime >= 140 && accumulatedSampleCount > 0)) {
-            lastAudioSendTime = nowAudio;
-            lastChunkSentRef.current = nowAudio;
-
-            const merged = new Int16Array(accumulatedSampleCount);
-            let offset = 0;
-            for (let j = 0; j < pcmAccumulator.length; j++) {
-              merged.set(pcmAccumulator[j], offset);
-              offset += pcmAccumulator[j].length;
-            }
-            pcmAccumulator = [];
-            accumulatedSampleCount = 0;
-
-            try {
-              // @ts-ignore
-              if (typeof session?.sendRealtimeInput === 'function') {
-                session.sendRealtimeInput({
-                  audio: {
-                    data: encodeBase64(new Uint8Array(merged.buffer)),
-                    mimeType: 'audio/pcm;rate=16000'
-                  }
-                });
-              }
-            } catch (err: any) {
-              pcmAccumulator = [];
-              accumulatedSampleCount = 0;
+          // 🛡️ ANTI-LAG DE HILO PRINCIPAL (Descartar paquetes atrasados por carga de CPU/WebGL):
+          // Si el audio tardó más de 250ms en recibirse desde el AudioWorklet, es audio viejo:
+          // descartarlo para mantener sincronía en tiempo real estricto.
+          if (e.data?.timestamp && inputCtx) {
+            const frameAgeSeconds = inputCtx.currentTime - e.data.timestamp;
+            if (frameAgeSeconds > 0.25) {
               return;
             }
           }
+
+          const nowAudio = performance.now();
+          lastAudioSendTime = nowAudio;
+          lastChunkSentRef.current = nowAudio;
+
+          // @ts-ignore
+          if (typeof session?.sendRealtimeInput === 'function') {
+            const base64Audio = encodeBase64(new Uint8Array(i16.buffer));
+            session.sendRealtimeInput({
+              media: {
+                data: base64Audio,
+                mimeType: 'audio/pcm;rate=16000'
+              }
+            });
+          }
         } catch (err: any) {
-          // Error en procesamiento de frame — no bloquear canSendAudioRef para permitir recuperación
           return;
         }
       };
@@ -5927,6 +6220,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
   const endCall = () => {
     isPendingHangupRef.current = false;
+    setShowARTools(false);
     if (hangupSafetyTimerRef.current) {
       clearTimeout(hangupSafetyTimerRef.current);
       hangupSafetyTimerRef.current = null;
@@ -6011,8 +6305,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
     audioMixerRef.current = null;
     systemGainNodeRef.current = null;
 
-    // CONSOLIDAR MEMORIA AL FINALIZAR LLAMADA
-    if (sessionLogRef.current.trim()) {
+    // CONSOLIDAR MEMORIA AL FINALIZAR LLAMADA (Solo si la sesión finalizó deliberadamente, no en reconexión transitoria)
+    if (sessionLogRef.current.trim() && !isReconnectingRef.current) {
       consolidateMemory(sessionLogRef.current);
       sessionLogRef.current = ''; // Limpiar buffer para la próxima sesión
     }
@@ -6107,7 +6401,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           state.userName,
           state.knownPeople,
           state.avatar.personality,
-          state.userProfile,
+          getMemoryProfileForInstruction(),
           false,
           isScreenSharing,
           selfAwarenessBlock,
@@ -6116,7 +6410,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           state.avatar.personalityMode,
           state.avatar.functionalMode,
           state.avatar.personalityTraits,
-          state.avatar.regionalSlang
+          state.avatar.regionalSlang,
+          buildMediaMemoryPromptBlock()
         ),
         tools: [
           {
@@ -6519,6 +6814,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               isAiSpeaking={isAiSpeaking}
               isHotMode={isBold}
               audioAnalyser={aiSpeechAnalyserRef.current}
+              showInteractionTools={false}
             />
           </AvatarErrorBoundary>
         </div>
@@ -6940,6 +7236,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                   hairColor={state.avatar.hairColor}
                   audioAnalyser={aiSpeechAnalyserRef.current}
                   personalityMode={state.avatar.personalityMode || (isBold ? 'nympho' : 'companion')}
+                  showInteractionTools={showARTools}
+                  onCloseInteractionTools={() => setShowARTools(false)}
                 />
               </AvatarErrorBoundary>
             )}
@@ -7068,6 +7366,22 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               </button>
             )}
 
+            {/* BOTÓN HERRAMIENTAS AR / INTERACCIÓN (POR DEFECTO OCULTAS) */}
+            {isInCall && (
+              <button
+                onClick={() => setShowARTools(prev => !prev)}
+                className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all duration-300 hover:scale-110 active:scale-95 ${showARTools
+                  ? 'bg-pink-600/40 border-pink-400 text-pink-300 shadow-[0_0_15px_rgba(236,72,153,0.6)]'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                  }`}
+                title={showARTools ? 'Ocultar Herramientas AR (Mano y Objetos)' : 'Mostrar Herramientas AR (Mano y Objetos)'}
+              >
+                <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">
+                  {showARTools ? 'front_hand' : 'pan_tool'}
+                </span>
+              </button>
+            )}
+
             {/* Botón Reconexión de Emergencia */}
             {isInCall && (
               <button
@@ -7092,16 +7406,16 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               <span className="text-base sm:text-lg">🎵</span>
             </button>
 
-            {/* SCREEN SHARE BUTTON (TRANSMISIÓN CONTINUA FLUIDA) */}
+            {/* SCREEN SHARE BUTTON (TRANSMISIÓN CONTINUA FLUIDA CON SELECTOR ESTILO MEET) */}
             <button
               onClick={async () => {
                 if (isScreenSharing) {
                   if (systemSourceRef.current) {
-                    systemSourceRef.current.disconnect();
+                    try { systemSourceRef.current.disconnect(); } catch (e) { }
                     systemSourceRef.current = null;
                   }
                   if (systemGainNodeRef.current) {
-                    systemGainNodeRef.current.disconnect();
+                    try { systemGainNodeRef.current.disconnect(); } catch (e) { }
                     systemGainNodeRef.current = null;
                   }
                   stopScreenCapture();
@@ -7115,113 +7429,18 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
                     liveSessionRef.current.sendRealtimeInput({ text: "[SYSTEM_EVENT: Pantalla desconectada. Ahora solo ves al usuario por la cámara.]" });
                   }
                 } else {
-                  const isElectron = typeof window !== 'undefined' && (window as any).isElectron === true;
-                  let sourceId: string | undefined;
-
-                  if (isElectron && (window as any).electronAPI) {
-                    try {
-                      const sources = await (window as any).electronAPI.getScreenSources();
-                      if (sources.length > 0) {
-                        const screenSource = sources.find((s: any) => s.name.includes('Screen') || s.name.includes('Pantalla')) || sources[0];
-                        sourceId = screenSource.id;
-                      }
-                    } catch (e) {
-                      console.warn('Error obteniendo fuentes:', e);
-                    }
-                  }
-
-                  const shouldCaptureAudio = window.confirm(
-                    "¿Quieres compartir también el audio del PC (Música/Videos)?\n\n" +
-                    "✅ ACEPTAR: Sí, incluir audio.\n" +
-                    "❌ CANCELAR: No, solo imagen."
-                  );
-
-                  const result = await startScreenCapture({
-                    width: 1280,
-                    height: 720,
-                    captureAudio: shouldCaptureAudio,
-                    sourceId
-                  });
-
-                  if (result.success) {
-                    setIsScreenSharing(true);
-
-                    if (shouldCaptureAudio && result.hasAudio && inputAudioContextRef.current && audioMixerRef.current) {
-                      const sysStream = getSystemAudioStream();
-                      if (sysStream) {
-                        try {
-                          const sysSource = inputAudioContextRef.current.createMediaStreamSource(sysStream);
-                          systemSourceRef.current = sysSource;
-
-                          const sysGain = inputAudioContextRef.current.createGain();
-                          sysGain.gain.value = 0.3;
-                          systemGainNodeRef.current = sysGain;
-
-                          const lowPass = inputAudioContextRef.current.createBiquadFilter();
-                          lowPass.type = 'lowpass';
-                          lowPass.frequency.value = 4000;
-                          lowPass.Q.value = 0.7;
-
-                          sysSource.connect(lowPass);
-                          lowPass.connect(sysGain);
-                          sysGain.connect(audioMixerRef.current);
-                        } catch (err) {
-                          console.error('Error conectando audio sistema:', err);
-                          systemGainNodeRef.current = null;
-                        }
-                      } else {
-                        systemGainNodeRef.current = null;
-                      }
-                    } else {
-                      systemGainNodeRef.current = null;
-                      if (systemSourceRef.current) {
-                        try { systemSourceRef.current.disconnect(); } catch (e) { }
-                        systemSourceRef.current = null;
-                      }
-                    }
-
-                    if (screenCaptureIntervalRef.current) clearInterval(screenCaptureIntervalRef.current);
-
-                    // Transmisión táctica optimizada: 1.5s balancea fluidez visual sin saturar tokens ni WebSocket
-                    screenCaptureIntervalRef.current = setInterval(() => {
-                      if (checkScreenSharing() && isLiveSessionOpen(liveSessionRef.current)) {
-                        try {
-                          const { frame, changed } = captureOptimizedFrame({
-                            quality: 0.50,
-                            changeThreshold: 0.02,
-                            heartbeatIntervalMs: 12000
-                          });
-                          if (frame) {
-                            const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
-                            setIsVisionSyncing(true);
-                            // @ts-ignore
-                            liveSessionRef.current.sendRealtimeInput({
-                              video: { mimeType: 'image/jpeg', data: cleanData }
-                            });
-                            setTimeout(() => setIsVisionSyncing(false), 300);
-                            if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
-                          }
-                        } catch (e) {
-                          console.warn('⚠️ Error enviando frame de pantalla:', e);
-                        }
-                      }
-                    }, 1500);
-
-                    if (liveSessionRef.current) {
-                      const isGamerMode = state.avatar.functionalMode === 'gaming' || state.avatar.functionalMode === 'gamer';
-                      const screenSharePrompt = isGamerMode
-                        ? `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA de su videojuego. Eres su coach táctica y Player 2. Analiza activamente su interfaz (vida, mapa, cooldowns, enemigos a la vista, recursos e inventario) y da callouts rápidos, precisos y consejos técnicos funcionales.]`
-                        : `[SYSTEM_EVENT: El usuario ha comenzado a TRANSMITIR PANTALLA de forma continua. Ahora estás viendo y acompañándolo en lo que hace en su monitor (viendo series, películas, YouTube o navegando). Actúa como su compañera cercana compartiendo el momento: comenta oportunamente giros, escenas o detalles sin interrumpir bruscamente diálogos importantes.]`;
-                      // @ts-ignore
-                      liveSessionRef.current.sendRealtimeInput({ text: screenSharePrompt });
-                    }
-                  }
+                  setIsScreenPickerOpen(true);
                 }
               }}
-              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all hover:scale-110 active:scale-95 ${isScreenSharing ? 'bg-green-600/30 border-green-500 text-green-400 shadow-[0_0_20px_rgba(34,197,94,0.4)]' : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'}`}
-              title={isScreenSharing ? 'Dejar de compartir pantalla' : 'Transmitir pantalla (fluida)'}
+              className={`p-2 sm:p-2.5 md:p-3 rounded-full border transition-all duration-300 hover:scale-110 active:scale-95 ${isScreenSharing
+                ? 'bg-cyan-600/40 border-cyan-400 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.6)] animate-pulse'
+                : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                }`}
+              title={isScreenSharing ? 'Dejar de compartir pantalla' : 'Compartir pantalla con Nova (Ventana, Pantalla y Audio)'}
             >
-              <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">{isScreenSharing ? 'stop_screen_share' : 'screen_share'}</span>
+              <span className="material-symbols-outlined text-lg sm:text-xl md:text-2xl">
+                {isScreenSharing ? 'stop_screen_share' : 'screen_share'}
+              </span>
             </button>
 
             {/* CAMERA AUTONOMOUS ANALYSIS (CADA 15s) */}
@@ -7443,6 +7662,28 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         decision={pokerAssistant.decision}
         isActive={pokerAssistant.isActive}
         onToggle={() => pokerAssistant.setIsActive(!pokerAssistant.isActive)}
+      />
+
+      {/* 🖥️ Selector modal estilo Google Meet para Compartir Pantalla */}
+      <ScreenSharePickerModal
+        isOpen={isScreenPickerOpen}
+        onClose={() => setIsScreenPickerOpen(false)}
+        onSelectSource={(sourceId, captureAudio, sourceName) => {
+          handleStartScreenShareWithSource(sourceId, captureAudio ?? true, sourceName);
+        }}
+        isElectron={typeof window !== 'undefined' && (window as any).isElectron === true}
+        getSources={async () => {
+          const electronAPI = (window as any).electronAPI;
+          if (electronAPI?.getScreenSources) {
+            try {
+              return await electronAPI.getScreenSources();
+            } catch (err) {
+              console.warn('Error obteniendo fuentes en Electron:', err);
+              return [];
+            }
+          }
+          return [];
+        }}
       />
 
       <style>{`

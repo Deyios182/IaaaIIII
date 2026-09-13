@@ -108,6 +108,8 @@ const STRUCTURAL_EXCLUDES = [
     '髪飾り', '髪留め', '髪ピン', 'ヘアピン', 'ヘアクリップ', 'ヘアアクセ', 'かんざし', '簪', '発条',
     'イヤリング', 'ピアス', '耳飾', '耳飾り', 'カチューシャ', 'ティアラ', 'クラウン', '冠', 'ベール', '羽飾',
     '发夹', '发卡', '发簪', '发饰', '头饰', '耳饰',
+    // Armas, filos, pistolas, props y accesorios que nunca deben tener jiggle:
+    'weapon', 'knife', 'blade', 'sword', 'gun', 'dagger', 'shield', 'bow', 'arrow', 'sheath', 'holster', 'secondary', 'prop', 'item', 'asset',
     // Protección absoluta para nombres estructurales en japonés y chino:
     '足', 'ひざ', '膝', '足首', 'つま先', '腿', '下半身', '上半身', 'センター', 'グルーブ', '全ての親', '腕', '手首', 'ひじ', '肘', '肩'
 ];
@@ -117,26 +119,28 @@ export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Par
     const n = boneName.toLowerCase();
     const raw = boneName;
 
-    // Pechos (Firme y elástico: turgente, rebote vivo sin hundimiento ni flacidez)
+    // Pechos: viaje visible, sag leve, 1–2 rebotes y se apagan
     const isBreast = n.includes('breast') || n.includes('boob') || n.includes('oppai') ||
         n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho');
-    if (isBreast) return { 
-        stiffness: 0.55, 
-        damping: 0.90, 
-        gravity: 0.0005, 
-        intensity: 0.75, 
-        maxAngle: Math.PI / 25 // ~7.2 grados máximo: rebote elástico firme que NUNCA traspasa el sujetador ni la ropa
+    if (isBreast) return {
+        stiffness: 0.28,
+        damping: 0.64,
+        gravity: 0.16,
+        intensity: 0.95,
+        maxAngle: Math.PI / 12
     };
 
-    // Trasero / Glúteos (Firme y redondeado: elástico y ágil, sin descolgarse ni hundirse en las piernas)
-    const isButt = n.includes('ass') || n.includes('butt') || n.includes('glute') ||
-        n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero');
-    if (isButt) return { 
-        stiffness: 0.35, 
-        damping: 0.78, 
-        gravity: 0.002, 
-        intensity: 1.05, 
-        maxAngle: Math.PI / 9 // ~20 grados máximo: evita deformaciones extremas o que cuelgue hacia abajo
+    // Glúteos: más firmes, menos sag, menos viaje. Nunca copiar el preset del pecho.
+    const isButt = (n.includes('butt') || n.includes('glute') || n.includes('buttock') || n.includes('buttcheek') ||
+        n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero') ||
+        (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) && !n.includes('passive') && !n.includes('assault'))) &&
+        !n.includes('pelvis') && !n.includes('hip') && !n.includes('thigh') && !n.includes('leg');
+    if (isButt) return {
+        stiffness: 0.42,
+        damping: 0.72,
+        gravity: 0.06,
+        intensity: 0.70,
+        maxAngle: Math.PI / 16
     };
 
     if (isActualEarBone(n)) return { stiffness: 0.35, damping: 0.65, gravity: 0, maxAngle: Math.PI / 4 };
@@ -219,25 +223,36 @@ export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Par
 
 function isActualEarBone(lowerName: string): boolean {
     return /(?:^|[^a-z])ear(?:$|[^a-z]|l|r|_|\.)/i.test(lowerName) ||
-           lowerName.includes('catear') || lowerName.includes('foxear') || lowerName.includes('bunnyeart') ||
-           lowerName.startsWith('ear') || lowerName.endsWith('ear');
+        lowerName.includes('catear') || lowerName.includes('foxear') || lowerName.includes('bunnyeart') ||
+        lowerName.startsWith('ear') || lowerName.endsWith('ear');
 }
 
 // Detectar si un hueso es de tipo jiggle
 export function isJiggleBone(boneName: string): boolean {
     const lower = boneName.toLowerCase();
 
+    const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(lower) || lower === 'ass') &&
+        !lower.includes('passive') && !lower.includes('assault') && !lower.includes('glass') &&
+        !lower.includes('grass') && !lower.includes('bass') && !lower.includes('class') &&
+        !lower.includes('compass') && !lower.includes('mass') && !lower.includes('asset') &&
+        !lower.includes('assist');
+
     // 1. Detectar si coincide con algún patrón de rebote (pelo, pechos, glúteos, orejas)
     const matchesPattern = JIGGLE_PATTERNS.some(pattern => {
+        if (pattern === 'ass') return isSafeAss;
         const isKanji = /[^\x00-\x7F]/.test(pattern);
         return isKanji ? boneName.includes(pattern) : lower.includes(pattern);
     }) || isActualEarBone(lower);
 
     if (!matchesPattern) return false;
 
-    // 2. Proteger huesos de pechos contra falsos positivos de 'chest' o 'torso'
+    // 2. Proteger huesos de pechos y glúteos contra falsos positivos estructurales
     const isTrueBreast = lower.includes('breast') || lower.includes('boob') || lower.includes('oppai') ||
-                         lower.includes('bust') || lower.includes('mune') || boneName.includes('胸');
+        lower.includes('bust') || lower.includes('mune') || boneName.includes('胸');
+
+    const isTrueButt = isSafeAss || lower.includes('butt') || lower.includes('glute') ||
+        lower.includes('shiri') || boneName.includes('尻') || boneName.includes('臀') ||
+        ((lower.includes('pelvis') || lower.includes('hip')) && (lower.includes('.l') || lower.includes('.r') || lower.includes('_l') || lower.includes('_r') || boneName.includes('左') || boneName.includes('右')));
 
     // 3. Excluir extremidades mayores, huesos estructurales y toda prenda/falda
     for (const pattern of STRUCTURAL_EXCLUDES) {
@@ -245,6 +260,9 @@ export function isJiggleBone(boneName: string): boolean {
         const hasMatch = isKanji ? boneName.includes(pattern) : lower.includes(pattern);
         if (hasMatch) {
             if (isTrueBreast && (pattern === 'chest' || pattern === 'torso' || pattern === '上半身')) {
+                continue;
+            }
+            if (isTrueButt && (pattern === 'pelvis' || pattern === 'hips')) {
                 continue;
             }
             return false;
@@ -266,7 +284,14 @@ export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | '
     if (n.includes('breast') || n.includes('boob') || n.includes('oppai') || n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho')) {
         return 'breast';
     }
-    if (n.includes('ass') || n.includes('butt') || n.includes('glute') || n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero')) {
+    const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) || n === 'ass') &&
+        !n.includes('passive') && !n.includes('assault') && !n.includes('glass') &&
+        !n.includes('grass') && !n.includes('bass') && !n.includes('class') &&
+        !n.includes('compass') && !n.includes('mass') && !n.includes('asset') &&
+        !n.includes('assist');
+    const isUnilateralPelvis = (n.includes('pelvis') || n.includes('hip')) &&
+        (n.includes('.l') || n.includes('.r') || n.includes('_l') || n.includes('_r') || raw.includes('左') || raw.includes('右'));
+    if (isSafeAss || n.includes('butt') || n.includes('glute') || n.includes('shiri') || raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || n.includes('trasero') || isUnilateralPelvis) {
         return 'butt';
     }
     if (n.includes('hair') || n.includes('tail') || n.includes('ponytail') || n.includes('bangs') || n.includes('strand') || n.includes('kaminoke') || raw.includes('髪') || raw.includes('发') || raw.includes('辮')) {
@@ -284,7 +309,7 @@ function computeTipOffset(bone: THREE.Object3D, type: 'breast' | 'butt' | 'hair'
         const childBone = bone.children.find((c: any) => c.isBone || c.type === 'Object3D') as THREE.Object3D | undefined;
         if (childBone && childBone.position.length() > 0.02) {
             tipOffset.copy(childBone.position);
-            particleRadius = type === 'breast' ? 0.04 : (type === 'butt' ? 0.08 : 0.035);
+            particleRadius = (type === 'breast' || type === 'butt') ? 0.065 : 0.035;
             return {
                 tipOffset,
                 baseLocalDir: tipOffset.clone().normalize(),
@@ -300,11 +325,11 @@ function computeTipOffset(bone: THREE.Object3D, type: 'breast' | 'butt' | 'hair'
 
     let worldForwardDir = new THREE.Vector3(0, 0, 0.09); // Pechos: hacia adelante
     if (type === 'breast') {
-        particleRadius = 0.04;
-        worldForwardDir.set(0, 0.01, 0.08);
+        particleRadius = 0.065;
+        worldForwardDir.set(0, 0.01, 0.085);
     } else if (type === 'butt') {
-        particleRadius = 0.08;
-        worldForwardDir.set(0, -0.02, -0.10);
+        particleRadius = 0.065; // Idéntico a los pechos para la misma sensación de masa y colisión
+        worldForwardDir.set(0, -0.01, -0.085); // Hacia atrás simétrico con los pechos
     } else if (type === 'hair') {
         particleRadius = 0.035;
         worldForwardDir.set(0, -0.16, -0.02);
@@ -510,7 +535,7 @@ export class JigglePhysicsSystem {
             });
         }
 
-        // 4. Brazos Superiores (Bíceps/Hombro: impide que el pelo atraviese los brazos)
+        // 4. Brazos Superiores (Bíceps/Hombro: colisión con pechos, glúteos y pelo)
         if (refs.leftUpperArm) {
             this.colliders.push({
                 type: 'capsule',
@@ -518,9 +543,9 @@ export class JigglePhysicsSystem {
                 boneB: refs.leftForeArm || refs.leftUpperArm,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: refs.leftForeArm ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(0.22, 0, 0),
-                radius: 0.080,
+                radius: 0.085,
                 name: 'upperArmL',
-                targetTypes: ['hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
         if (refs.rightUpperArm) {
@@ -530,13 +555,13 @@ export class JigglePhysicsSystem {
                 boneB: refs.rightForeArm || refs.rightUpperArm,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: refs.rightForeArm ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(-0.22, 0, 0),
-                radius: 0.080,
+                radius: 0.085,
                 name: 'upperArmR',
-                targetTypes: ['hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
 
-        // 5. Antebrazos (cápsula continua de codo a muñeca)
+        // 5. Antebrazos (cápsula continua de codo a muñeca: colisión con pechos, glúteos y pelo)
         if (refs.leftForeArm) {
             this.colliders.push({
                 type: 'capsule',
@@ -544,9 +569,9 @@ export class JigglePhysicsSystem {
                 boneB: refs.leftHand || refs.leftForeArm,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: refs.leftHand ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(0.2, 0, 0),
-                radius: 0.070,
+                radius: 0.075,
                 name: 'forearmL',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
         if (refs.rightForeArm) {
@@ -556,9 +581,9 @@ export class JigglePhysicsSystem {
                 boneB: refs.rightHand || refs.rightForeArm,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: refs.rightHand ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(-0.2, 0, 0),
-                radius: 0.070,
+                radius: 0.075,
                 name: 'forearmR',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
 
@@ -569,9 +594,9 @@ export class JigglePhysicsSystem {
                 const child = handBone.children.find((c: any) => {
                     const ln = c.name.toLowerCase();
                     return ln.includes('middle') || ln.includes('mid') || c.name.includes('中指') ||
-                           ln.includes('index') || c.name.includes('人指');
+                        ln.includes('index') || c.name.includes('人指');
                 }) || handBone.children.find((c: any) => (c.isBone || c.type === 'Object3D') && c.position.length() > 0.015);
-                
+
                 if (child && child.position.length() > 0.015) {
                     offset.copy(child.position);
                 }
@@ -582,16 +607,16 @@ export class JigglePhysicsSystem {
             };
         };
 
-        // 6. Manos Dinámicas (Esferas de palma + Cápsulas de dedos)
+        // 6. Manos Dinámicas (Esferas de palma + Cápsulas de dedos: colisión completa con pechos, trasero y pelo)
         if (refs.leftHand) {
             const { palmOffset, fingerOffset } = getHandVectors(refs.leftHand, false);
             this.colliders.push({
                 type: 'sphere',
                 bone: refs.leftHand,
                 offset: palmOffset,
-                radius: 0.070,
+                radius: 0.075,
                 name: 'handL_palm',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
             this.colliders.push({
                 type: 'capsule',
@@ -599,9 +624,9 @@ export class JigglePhysicsSystem {
                 boneB: refs.leftHand,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: fingerOffset,
-                radius: 0.060,
+                radius: 0.065,
                 name: 'handL_fingers',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
         if (refs.rightHand) {
@@ -610,9 +635,9 @@ export class JigglePhysicsSystem {
                 type: 'sphere',
                 bone: refs.rightHand,
                 offset: palmOffset,
-                radius: 0.070,
+                radius: 0.075,
                 name: 'handR_palm',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
             this.colliders.push({
                 type: 'capsule',
@@ -620,9 +645,9 @@ export class JigglePhysicsSystem {
                 boneB: refs.rightHand,
                 offset: new THREE.Vector3(0, 0, 0),
                 offsetB: fingerOffset,
-                radius: 0.060,
+                radius: 0.065,
                 name: 'handR_fingers',
-                targetTypes: ['butt', 'hair']
+                targetTypes: ['breast', 'butt', 'hair']
             });
         }
 
@@ -715,6 +740,36 @@ export class JigglePhysicsSystem {
         this.bones = [];
 
         model.traverse((child: any) => {
+            // Excluir cualquier nodo perteneciente a armas o accesorios secundarios
+            let isWeaponOrAcc = false;
+            let cp: THREE.Object3D | null = child;
+            while (cp) {
+                const pn = (cp.name || '').toLowerCase();
+                if (
+                    pn.includes('weapon') ||
+                    pn.includes('knife') ||
+                    pn.includes('blade') ||
+                    pn.includes('sword') ||
+                    pn.includes('gun') ||
+                    pn.includes('dagger') ||
+                    pn.includes('shield') ||
+                    pn.includes('bow') ||
+                    pn.includes('arrow') ||
+                    pn.includes('sheath') ||
+                    pn.includes('holster') ||
+                    pn.includes('accessory') ||
+                    pn.includes('acc_') ||
+                    pn.includes('prop') ||
+                    pn.includes('item') ||
+                    cp.name === 'MMD_Secondary_Weapon'
+                ) {
+                    isWeaponOrAcc = true;
+                    break;
+                }
+                cp = cp.parent;
+            }
+            if (isWeaponOrAcc) return;
+
             const isValidNode = child.isBone || child.type === 'Object3D' || child.type === 'Group' || child.isGroup;
             if (isValidNode && !child.isMesh && isJiggleBone(child.name)) {
                 const bone = child as THREE.Object3D;
@@ -784,11 +839,11 @@ export class JigglePhysicsSystem {
             }
             return;
         }
-        
+
         const boneSettings = { ...this.settings, ...getPhysicsSettings(bone.name, bone), ...settingsOverrides };
         const type = detectBoneType(bone.name);
         const { tipOffset, baseLocalDir, particleRadius } = computeTipOffset(bone, type);
-        
+
         let anchor = bone.parent;
         while (anchor && (anchor.userData?.isJiggleBone || isJiggleBone(anchor.name))) {
             anchor = anchor.parent;
@@ -810,11 +865,35 @@ export class JigglePhysicsSystem {
         console.log(`🌊 Jiggle Physics: Añadido hueso ${bone.name} (${type})`);
     }
 
-    // Aplicar fuerza externa (ej. interacción del ratón) a huesos específicos
+    // Aplicar fuerza externa (ej. interacción del ratón) a huesos específicos con soporte semántico multilingüe
     applyImpulse(boneKeyword: string, force: THREE.Vector3): void {
-        const lowerKeyword = boneKeyword.toLowerCase();
+        const lower = boneKeyword.toLowerCase();
+        const isLeft = lower.includes('left') || lower.includes('.l') || lower.includes('_l') || lower.includes('左');
+        const isRight = lower.includes('right') || lower.includes('.r') || lower.includes('_r') || lower.includes('右');
+        const isBreast = lower.includes('breast') || lower.includes('boob') || lower.includes('pecho') || lower.includes('bust') || lower.includes('胸');
+        const isButt = lower.includes('butt') || lower.includes('ass') || lower.includes('glute') || lower.includes('trasero') || lower.includes('shiri') || lower.includes('尻');
+
         for (const jb of this.bones) {
-            if (jb.bone.name.toLowerCase().includes(lowerKeyword) || jb.bone.name.includes(boneKeyword)) {
+            const bName = jb.bone.name.toLowerCase();
+            let matches = bName.includes(lower) || jb.bone.name.includes(boneKeyword);
+
+            if (!matches && (isBreast || isButt)) {
+                if (isBreast && jb.type === 'breast') {
+                    const bIsLeft = bName.includes('left') || bName.includes('.l') || bName.includes('_l') || jb.bone.name.includes('左') || bName.endsWith('l');
+                    const bIsRight = bName.includes('right') || bName.includes('.r') || bName.includes('_r') || jb.bone.name.includes('右') || bName.endsWith('r');
+                    if (isLeft && bIsLeft) matches = true;
+                    else if (isRight && bIsRight) matches = true;
+                    else if (!isLeft && !isRight) matches = true;
+                } else if (isButt && jb.type === 'butt') {
+                    const bIsLeft = bName.includes('left') || bName.includes('.l') || bName.includes('_l') || jb.bone.name.includes('左') || bName.endsWith('l');
+                    const bIsRight = bName.includes('right') || bName.includes('.r') || bName.includes('_r') || jb.bone.name.includes('右') || bName.endsWith('r');
+                    if (isLeft && bIsLeft) matches = true;
+                    else if (isRight && bIsRight) matches = true;
+                    else if (!isLeft && !isRight) matches = true;
+                }
+            }
+
+            if (matches) {
                 jb.velocity.add(force);
             }
         }
@@ -824,10 +903,10 @@ export class JigglePhysicsSystem {
     update(delta: number, rootObject?: THREE.Object3D, time?: number): void {
         if (this.bones.length === 0 || delta <= 0) return;
 
-        // 0. Actualizar velocidades lineales de colliders de manos y antebrazos en espacio mundial para transferir impulso de roce
+        // 0. Actualizar velocidades lineales de colliders de manos, antebrazos y brazos en espacio mundial para transferir impulso de roce
         for (let cIdx = 0; cIdx < this.colliders.length; cIdx++) {
             const col = this.colliders[cIdx];
-            if (col.name.startsWith('hand') || col.name.startsWith('forearm')) {
+            if (col.name.startsWith('hand') || col.name.startsWith('forearm') || col.name.startsWith('upperArm')) {
                 col.bone.updateWorldMatrix(true, false);
                 col.bone.getWorldPosition(_tempColPos);
                 if (!col.lastWorldPos) {
@@ -862,7 +941,7 @@ export class JigglePhysicsSystem {
 
         for (const jb of this.bones) {
             const { stiffness, damping, gravity, intensity } = jb.settings || globalSettings;
-            
+
             // Permitir rotación base animada dinámica
             let targetRot = jb.originalRotation;
             if (jb.bone.userData.ikBaseRotation) {
@@ -993,7 +1072,7 @@ export class JigglePhysicsSystem {
             jb.bone.rotation.z += jb.velocity.z * delta;
 
             // Límites angulares para evitar deformaciones no deseadas
-            const limitAngle = jb.settings?.maxAngle || (Math.PI / 2.2); 
+            const limitAngle = jb.settings?.maxAngle || (Math.PI / 2.2);
             jb.bone.rotation.x = THREE.MathUtils.clamp(
                 jb.bone.rotation.x,
                 targetRot.x - limitAngle,
@@ -1043,7 +1122,8 @@ export class JigglePhysicsSystem {
                     if (!col.targetTypes.includes('all') && !col.targetTypes.includes(jb.type as any)) continue;
 
                     const effectiveRadius = col.radius * worldScale;
-                    const minDist = effectiveRadius + jb.particleRadius;
+                    const effectiveParticleRadius = jb.particleRadius * worldScale;
+                    const minDist = effectiveRadius + effectiveParticleRadius;
                     const minDistSq = minDist * minDist;
 
                     if (col.type === 'sphere') {
@@ -1172,8 +1252,9 @@ export class JigglePhysicsSystem {
                             localTargetQuat = _tempNewWorldQuat;
                         }
 
-                        // Slerp suave y controlado para pelo (0.75)
-                        jb.bone.quaternion.slerp(localTargetQuat, 0.75);
+                        // Slerp suave y adaptado: más ágil y firme para pechos/glúteos (0.88) para no ser atravesados por manos
+                        const slerpFactor = (jb.type === 'breast' || jb.type === 'butt') ? 0.88 : 0.75;
+                        jb.bone.quaternion.slerp(localTargetQuat, slerpFactor);
 
                         // Sincronizar rotation desde quaternion para que Three.js no descarte la colisión en el frame
                         jb.bone.rotation.setFromQuaternion(jb.bone.quaternion);
@@ -1196,30 +1277,42 @@ export class JigglePhysicsSystem {
                         );
                         jb.bone.quaternion.setFromEuler(jb.bone.rotation);
 
-                            // Amortiguar velocidad en la dirección de la colisión y reducir velocidad residual para evitar vibración ("tiritar")
-                            const velDot = jb.velocity.dot(_tempColliderNormal);
-                            if (velDot < 0) {
-                                jb.velocity.sub(_tempColliderNormal.multiplyScalar(velDot * 1.4));
-                            }
+                        // Amortiguar velocidad en la dirección de la colisión
+                        const velDot = jb.velocity.dot(_tempColliderNormal);
+                        if (velDot < 0) {
+                            jb.velocity.sub(_tempColliderNormal.multiplyScalar(velDot * 1.3));
+                        }
+                        if (jb.type === 'hair') {
                             jb.velocity.multiplyScalar(0.85);
+                        }
 
-                            // ── EFECTO DE ROCE DINÁMICO DE MANOS / BRAZOS ──
-                            // Si la mano o antebrazo venía moviéndose, transferir impulso físico al hueso para que reaccione y rebote
-                            if (maxContactVelocity && maxContactSpeedSq > 0.002) {
-                                _tempBrushImpulse.copy(maxContactVelocity).multiplyScalar(0.040);
-                                _tempBrushImpulse.addScaledVector(_tempColliderNormal, 0.030);
-                                _tempBrushImpulse.clampLength(0, 0.85);
-
-                                _tempLocalBrushImpulse.copy(_tempBrushImpulse).applyQuaternion(_tempBoneWorldQuat.clone().invert());
-                                jb.velocity.x += _tempLocalBrushImpulse.x * 32;
-                                jb.velocity.y += _tempLocalBrushImpulse.y * 32;
-                                jb.velocity.z += _tempLocalBrushImpulse.z * 32;
+                        // ── EFECTO DE CONTACTO Y REBOTE DINÁMICO DE MANOS / BRAZOS ──
+                        // Al ser tocados o rozados por manos/brazos, transferir impulso físico para que tiemblen y reboten elásticamente
+                        if (jb.type === 'breast' || jb.type === 'butt') {
+                            _tempBrushImpulse.copy(_tempColliderNormal).multiplyScalar(0.08);
+                            if (maxContactVelocity && maxContactSpeedSq > 0.001) {
+                                _tempBrushImpulse.addScaledVector(maxContactVelocity, 0.05);
                             }
+                            _tempBrushImpulse.clampLength(0, 1.8);
+                            _tempLocalBrushImpulse.copy(_tempBrushImpulse).applyQuaternion(_tempBoneWorldQuat.clone().invert());
+                            jb.velocity.x += _tempLocalBrushImpulse.x * 40;
+                            jb.velocity.y += _tempLocalBrushImpulse.y * 40;
+                            jb.velocity.z += _tempLocalBrushImpulse.z * 40;
+                        } else if (maxContactVelocity && maxContactSpeedSq > 0.002) {
+                            _tempBrushImpulse.copy(maxContactVelocity).multiplyScalar(0.040);
+                            _tempBrushImpulse.addScaledVector(_tempColliderNormal, 0.030);
+                            _tempBrushImpulse.clampLength(0, 0.85);
+
+                            _tempLocalBrushImpulse.copy(_tempBrushImpulse).applyQuaternion(_tempBoneWorldQuat.clone().invert());
+                            jb.velocity.x += _tempLocalBrushImpulse.x * 32;
+                            jb.velocity.y += _tempLocalBrushImpulse.y * 32;
+                            jb.velocity.z += _tempLocalBrushImpulse.z * 32;
                         }
                     }
                 }
             }
         }
+    }
 
     // Obtener cantidad de huesos detectados
     getBoneCount(): number {

@@ -7,6 +7,17 @@ import { LegCalibrationData, DEFAULT_LEG_CALIBRATION } from './legIkSolver';
 export type { LegCalibrationData };
 export { DEFAULT_LEG_CALIBRATION };
 
+export interface ExtraDancerMotion {
+  id: string;             // Ej: 'dancer_2', 'dancer_3', etc.
+  name: string;           // Ej: 'Bailarín 2 (Izquierda)'
+  role: string;           // Ej: 'Izquierda', 'Derecha', etc.
+  vmdFileName?: string;   // Nombre del archivo .vmd asignado
+  vmdUrl?: string;        // Blob URL o referencia
+  vmdSourceAnim?: string; // Nombre del baile de la biblioteca si fue tomado de uno existente
+  defaultOffsetX: number; // Offset horizontal en metros (ej: -1.8, 1.8)
+  defaultOffsetZ: number; // Offset de profundidad (ej: 0, -0.3)
+}
+
 export interface StoredAnimation {
   name: string;
   url: string;            // Blob URL (se regenera en cada sesión)
@@ -31,6 +42,19 @@ export interface StoredAnimation {
   displayName?: string;   // Nombre amigable en español/inglés (ej: "Baile Gokuraku") para facilitar identificación de nombres en chino
   category?: string;      // Categoría: 'dance' | 'greeting' | 'reaction' | 'charm' | 'song' | 'body' | 'other'
   assignedGesture?: string; // ID del gesto procedural al que sustituye (ej: 'wave', 'dance', 'bow')
+  loop?: boolean;         // Reproducción en bucle continuo
+  cameraMode?: 'vmd' | 'dynamic' | 'free' | 'full' | 'face'; // Modo de cámara preferido
+  boneOffsets?: BoneOffsets; // Ajustes manuales de rotación por grupo de huesos (grados)
+  extraMotions?: ExtraDancerMotion[]; // Bailarines extra / motions secundarios para coreografías grupales (2-5 personajes)
+}
+
+/** Ajustes manuales de rotación para corrección fina del retargeting */
+export interface BoneOffsets {
+  spineTiltX?: number;  // Inclinación adelante(+)/atrás(-) del torso en grados
+  spineTiltZ?: number;  // Inclinación lateral izquierda(+)/derecha(-) del torso
+  armDownL?: number;    // Rotación del brazo izquierdo hacia abajo (+) en grados
+  armDownR?: number;    // Rotación del brazo derecho hacia abajo (+) en grados
+  hipTiltX?: number;    // Inclinación de la cadera adelante(+)/atrás(-) en grados
 }
 
 
@@ -194,6 +218,10 @@ export const animationStore = {
               displayName: meta.displayName,
               category: meta.category,
               assignedGesture: meta.assignedGesture,
+              loop: !!meta.loop,
+              cameraMode: meta.cameraMode,
+              boneOffsets: meta.boneOffsets,
+              extraMotions: meta.extraMotions,
             });
 
             
@@ -259,11 +287,21 @@ export const animationStore = {
         posePreset: a.posePreset, audioFileName: a.audioFileName,
         cameraFileName: a.cameraFileName, hasCamera: a.hasCamera, useCamera: a.useCamera,
         legCalibration: a.legCalibration,
-        displayName: a.displayName, category: a.category, assignedGesture: a.assignedGesture
+        displayName: a.displayName, category: a.category, assignedGesture: a.assignedGesture,
+        loop: a.loop, cameraMode: a.cameraMode, boneOffsets: a.boneOffsets
       }));
 
       localStorage.setItem('nova_animations_meta', JSON.stringify(meta));
     } catch (e) { }
+  },
+
+  /** Alternar bucle continuo para una animación */
+  toggleLoop(animName: string, enabled?: boolean): boolean {
+    const anim = loadedAnimations.find(a => a.name === animName);
+    if (!anim) return false;
+    const newVal = enabled !== undefined ? enabled : !anim.loop;
+    this.updateMeta(animName, { loop: newVal });
+    return newVal;
   },
 
   /** Actualizar la calibración IK de piernas para una animación VMD */
@@ -428,6 +466,193 @@ export const animationStore = {
     if (!tag) return undefined;
     const clean = tag.toLowerCase().trim().replace(/[\s-_]+/g, '');
     return loadedAnimations.find(a => a.customTag?.toLowerCase().replace(/[\s-_]+/g, '') === clean);
+  },
+
+  async getFileBuffer(name: string): Promise<ArrayBuffer | null> {
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(name);
+      return new Promise((resolve) => {
+        req.onsuccess = async () => {
+          const file = req.result as File | undefined;
+          if (file) {
+            const buf = await file.arrayBuffer();
+            resolve(buf);
+          } else {
+            // Intentar con la URL blob si existe en memoria
+            const anim = loadedAnimations.find(a => a.name === name);
+            if (anim?.url) {
+              try {
+                const resp = await fetch(anim.url);
+                const buf = await resp.arrayBuffer();
+                resolve(buf);
+                return;
+              } catch (_) {}
+            }
+            resolve(null);
+          }
+        };
+      });
+    } catch (err) {
+      console.error('Error obteniendo buffer de IndexedDB:', err);
+      return null;
+    }
+  },
+
+  async getCameraBuffer(name: string): Promise<ArrayBuffer | null> {
+    try {
+      const db = await getDB();
+      const tx = db.transaction(CAMERA_STORE_NAME, 'readonly');
+      const store = tx.objectStore(CAMERA_STORE_NAME);
+      const req = store.get(`camera_${name}`);
+      return new Promise((resolve) => {
+        req.onsuccess = async () => {
+          const file = req.result as File | undefined;
+          if (file) {
+            const buf = await file.arrayBuffer();
+            resolve(buf);
+          } else {
+            const anim = loadedAnimations.find(a => a.name === name);
+            if (anim?.cameraUrl) {
+              try {
+                const resp = await fetch(anim.cameraUrl);
+                const buf = await resp.arrayBuffer();
+                resolve(buf);
+                return;
+              } catch (_) {}
+            }
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      });
+    } catch (err) {
+      console.error('Error obteniendo buffer de cámara de IndexedDB:', err);
+      return null;
+    }
+  },
+
+  /** Asignar un motion VMD a un bailarín secundario desde un archivo subido */
+  async setExtraMotionFile(animName: string, dancerId: string, name: string, role: string, file: File, offsetX: number, offsetZ: number = 0): Promise<void> {
+    const anim = loadedAnimations.find(a => a.name === animName);
+    if (!anim) return;
+
+    const vmdUrl = URL.createObjectURL(file);
+    const existingMotions = anim.extraMotions ? [...anim.extraMotions] : [];
+    const idx = existingMotions.findIndex(m => m.id === dancerId);
+    const newEntry: ExtraDancerMotion = {
+      id: dancerId,
+      name,
+      role,
+      vmdFileName: file.name,
+      vmdUrl,
+      defaultOffsetX: offsetX,
+      defaultOffsetZ: offsetZ
+    };
+
+    if (idx >= 0) existingMotions[idx] = newEntry;
+    else existingMotions.push(newEntry);
+
+    this.updateMeta(animName, { extraMotions: existingMotions });
+
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(file, `extramotion_${animName}_${dancerId}`);
+      console.log(`💃 Motion extra guardado en IndexedDB para "${animName}" (${dancerId})`);
+    } catch (err) {
+      console.error('Error guardando motion extra en IndexedDB:', err);
+    }
+  },
+
+  /** Asignar un motion VMD a un bailarín secundario reutilizando un baile de la biblioteca */
+  async setExtraMotionFromExisting(animName: string, dancerId: string, name: string, role: string, sourceAnimName: string, offsetX: number, offsetZ: number = 0): Promise<void> {
+    const anim = loadedAnimations.find(a => a.name === animName);
+    const sourceAnim = loadedAnimations.find(a => a.name === sourceAnimName);
+    if (!anim || !sourceAnim) return;
+
+    const existingMotions = anim.extraMotions ? [...anim.extraMotions] : [];
+    const idx = existingMotions.findIndex(m => m.id === dancerId);
+    const newEntry: ExtraDancerMotion = {
+      id: dancerId,
+      name,
+      role,
+      vmdFileName: sourceAnim.displayName || sourceAnim.name,
+      vmdSourceAnim: sourceAnim.name,
+      vmdUrl: sourceAnim.url,
+      defaultOffsetX: offsetX,
+      defaultOffsetZ: offsetZ
+    };
+
+    if (idx >= 0) existingMotions[idx] = newEntry;
+    else existingMotions.push(newEntry);
+
+    this.updateMeta(animName, { extraMotions: existingMotions });
+  },
+
+  /** Quitar bailarín secundario / motion extra de una animación */
+  async removeExtraMotion(animName: string, dancerId: string): Promise<void> {
+    const anim = loadedAnimations.find(a => a.name === animName);
+    if (!anim || !anim.extraMotions) return;
+
+    const target = anim.extraMotions.find(m => m.id === dancerId);
+    if (target?.vmdUrl && target.vmdUrl.startsWith('blob:') && !target.vmdSourceAnim) {
+      URL.revokeObjectURL(target.vmdUrl);
+    }
+
+    const updated = anim.extraMotions.filter(m => m.id !== dancerId);
+    this.updateMeta(animName, { extraMotions: updated.length > 0 ? updated : undefined });
+
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(`extramotion_${animName}_${dancerId}`);
+    } catch (err) {
+      console.error('Error eliminando motion extra de IndexedDB:', err);
+    }
+  },
+
+  /** Obtener el ArrayBuffer del motion de un bailarín secundario */
+  async getExtraMotionBuffer(animName: string, dancerId: string): Promise<ArrayBuffer | null> {
+    const anim = loadedAnimations.find(a => a.name === animName);
+    const extra = anim?.extraMotions?.find(m => m.id === dancerId);
+    if (!extra) return null;
+
+    // Si viene de un baile existente de la biblioteca, cargar su buffer
+    if (extra.vmdSourceAnim) {
+      return this.getFileBuffer(extra.vmdSourceAnim);
+    }
+
+    // Si se subió directamente para este puesto
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(`extramotion_${animName}_${dancerId}`);
+      return new Promise((resolve) => {
+        req.onsuccess = async () => {
+          const file = req.result as File | undefined;
+          if (file) {
+            resolve(await file.arrayBuffer());
+          } else if (extra.vmdUrl) {
+            try {
+              const resp = await fetch(extra.vmdUrl);
+              resolve(await resp.arrayBuffer());
+            } catch {
+              resolve(null);
+            }
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      });
+    } catch (err) {
+      console.error('Error obteniendo buffer de motion extra:', err);
+      return null;
+    }
   },
 
   subscribe(fn: Listener): () => void {

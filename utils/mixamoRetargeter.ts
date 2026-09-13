@@ -4,6 +4,7 @@
  */
 
 import * as THREE from 'three';
+import type { BoneOffsets } from './animationStore';
 
 // Definición semántica de cada hueso Mixamo y qué keywords buscar
 const MIXAMO_BONE_DEFINITIONS: {
@@ -12,72 +13,72 @@ const MIXAMO_BONE_DEFINITIONS: {
   side?: 'L' | 'R' | null;  // Lado (null = centro)
   priority: number;          // Mayor = más importante
 }[] = [
-  // === TORSO ===
-  { mixamoName: 'mixamorigHips',    keywords: ['hip', 'pelvis', 'root', '下半身', '腰'], side: null, priority: 10 },
-  { mixamoName: 'mixamorigSpine',   keywords: ['spine', '上半身'], side: null, priority: 9 },
-  { mixamoName: 'mixamorigSpine1',  keywords: ['spine', 'chest', '上半身2'], side: null, priority: 9 },
-  { mixamoName: 'mixamorigSpine2',  keywords: ['spine', 'chest', 'upperchest', '胸'], side: null, priority: 9 },
-  { mixamoName: 'mixamorigNeck',    keywords: ['neck', '首'], side: null, priority: 8 },
-  { mixamoName: 'mixamorigHead',    keywords: ['head', '頭'], side: null, priority: 8 },
+    // === TORSO ===
+    { mixamoName: 'mixamorigHips', keywords: ['hip', 'pelvis', 'root', '下半身', '腰'], side: null, priority: 10 },
+    { mixamoName: 'mixamorigSpine', keywords: ['spine', '上半身'], side: null, priority: 9 },
+    { mixamoName: 'mixamorigSpine1', keywords: ['spine', 'chest', '上半身2'], side: null, priority: 9 },
+    { mixamoName: 'mixamorigSpine2', keywords: ['spine', 'chest', 'upperchest', '胸'], side: null, priority: 9 },
+    { mixamoName: 'mixamorigNeck', keywords: ['neck', '首'], side: null, priority: 8 },
+    { mixamoName: 'mixamorigHead', keywords: ['head', '頭'], side: null, priority: 8 },
 
-  // === BRAZO IZQUIERDO ===
-  { mixamoName: 'mixamorigLeftShoulder', keywords: ['shoulder', 'clavicle', 'leftshoulder'], side: 'L', priority: 7 },
-  { mixamoName: 'mixamorigLeftArm',      keywords: ['upper_arm', 'upperarm', 'arm', 'uparm', 'leftarm', '左腕', '腕'], side: 'L', priority: 8 },
-  { mixamoName: 'mixamorigLeftForeArm',  keywords: ['forearm', 'fore_arm', 'lowerarm', 'lower_arm', 'leftforearm', '左ひじ', 'ひじ', '左肘', '肘'], side: 'L', priority: 8 },
-  { mixamoName: 'mixamorigLeftHand',     keywords: ['hand', 'wrist', 'lefthand', '左手首', '手首'], side: 'L', priority: 7 },
+    // === BRAZO IZQUIERDO ===
+    { mixamoName: 'mixamorigLeftShoulder', keywords: ['shoulder', 'clavicle', 'leftshoulder'], side: 'L', priority: 7 },
+    { mixamoName: 'mixamorigLeftArm', keywords: ['upper_arm', 'upperarm', 'arm', 'uparm', 'leftarm', '左腕', '腕'], side: 'L', priority: 8 },
+    { mixamoName: 'mixamorigLeftForeArm', keywords: ['forearm', 'fore_arm', 'lowerarm', 'lower_arm', 'leftforearm', '左ひじ', 'ひじ', '左肘', '肘'], side: 'L', priority: 8 },
+    { mixamoName: 'mixamorigLeftHand', keywords: ['hand', 'wrist', 'lefthand', '左手首', '手首'], side: 'L', priority: 7 },
 
-  // === BRAZO DERECHO ===
-  { mixamoName: 'mixamorigRightShoulder', keywords: ['shoulder', 'clavicle', 'rightshoulder'], side: 'R', priority: 7 },
-  { mixamoName: 'mixamorigRightArm',      keywords: ['upper_arm', 'upperarm', 'arm', 'uparm', 'rightarm', '右腕', '腕'], side: 'R', priority: 8 },
-  { mixamoName: 'mixamorigRightForeArm',  keywords: ['forearm', 'fore_arm', 'lowerarm', 'lower_arm', 'rightforearm', '右ひじ', 'ひじ', '右肘', '肘'], side: 'R', priority: 8 },
-  { mixamoName: 'mixamorigRightHand',     keywords: ['hand', 'wrist', 'righthand', '右手首', '手首'], side: 'R', priority: 7 },
+    // === BRAZO DERECHO ===
+    { mixamoName: 'mixamorigRightShoulder', keywords: ['shoulder', 'clavicle', 'rightshoulder'], side: 'R', priority: 7 },
+    { mixamoName: 'mixamorigRightArm', keywords: ['upper_arm', 'upperarm', 'arm', 'uparm', 'rightarm', '右腕', '腕'], side: 'R', priority: 8 },
+    { mixamoName: 'mixamorigRightForeArm', keywords: ['forearm', 'fore_arm', 'lowerarm', 'lower_arm', 'rightforearm', '右ひじ', 'ひじ', '右肘', '肘'], side: 'R', priority: 8 },
+    { mixamoName: 'mixamorigRightHand', keywords: ['hand', 'wrist', 'righthand', '右手首', '手首'], side: 'R', priority: 7 },
 
-  // === PIERNA IZQUIERDA ===
-  { mixamoName: 'mixamorigLeftUpLeg',   keywords: ['thigh', 'upleg', 'upper_leg', 'upperleg', '左足', '足'], side: 'L', priority: 8 },
-  { mixamoName: 'mixamorigLeftLeg',     keywords: ['shin', 'leg', 'calf', 'lowerleg', 'lower_leg', '左ひざ', 'ひざ', '左膝', '膝'], side: 'L', priority: 8 },
-  { mixamoName: 'mixamorigLeftFoot',    keywords: ['foot', 'ankle', '左足首', '足首'], side: 'L', priority: 7 },
-  { mixamoName: 'mixamorigLeftToeBase', keywords: ['toe', '左つま先', 'つま先', '左足先EX', '足先'], side: 'L', priority: 5 },
+    // === PIERNA IZQUIERDA ===
+    { mixamoName: 'mixamorigLeftUpLeg', keywords: ['thigh', 'upleg', 'upper_leg', 'upperleg', '左足', '足'], side: 'L', priority: 8 },
+    { mixamoName: 'mixamorigLeftLeg', keywords: ['shin', 'leg', 'calf', 'lowerleg', 'lower_leg', '左ひざ', 'ひざ', '左膝', '膝'], side: 'L', priority: 8 },
+    { mixamoName: 'mixamorigLeftFoot', keywords: ['foot', 'ankle', '左足首', '足首'], side: 'L', priority: 7 },
+    { mixamoName: 'mixamorigLeftToeBase', keywords: ['toe', '左つま先', 'つま先', '左足先EX', '足先'], side: 'L', priority: 5 },
 
-  // === PIERNA DERECHA ===
-  { mixamoName: 'mixamorigRightUpLeg',   keywords: ['thigh', 'upleg', 'upper_leg', 'upperleg', '右足', '足'], side: 'R', priority: 8 },
-  { mixamoName: 'mixamorigRightLeg',     keywords: ['shin', 'leg', 'calf', 'lowerleg', 'lower_leg', '右ひざ', 'ひざ', '右膝', '膝'], side: 'R', priority: 8 },
-  { mixamoName: 'mixamorigRightFoot',    keywords: ['foot', 'ankle', '右足首', '足首'], side: 'R', priority: 7 },
-  { mixamoName: 'mixamorigRightToeBase', keywords: ['toe', '右つま先', 'つま先', '右足先EX', '足先'], side: 'R', priority: 5 },
+    // === PIERNA DERECHA ===
+    { mixamoName: 'mixamorigRightUpLeg', keywords: ['thigh', 'upleg', 'upper_leg', 'upperleg', '右足', '足'], side: 'R', priority: 8 },
+    { mixamoName: 'mixamorigRightLeg', keywords: ['shin', 'leg', 'calf', 'lowerleg', 'lower_leg', '右ひざ', 'ひざ', '右膝', '膝'], side: 'R', priority: 8 },
+    { mixamoName: 'mixamorigRightFoot', keywords: ['foot', 'ankle', '右足首', '足首'], side: 'R', priority: 7 },
+    { mixamoName: 'mixamorigRightToeBase', keywords: ['toe', '右つま先', 'つま先', '右足先EX', '足先'], side: 'R', priority: 5 },
 
-  // === DEDOS IZQUIERDOS ===
-  { mixamoName: 'mixamorigLeftHandThumb1',  keywords: ['thumb', 'thumb01', 'thumb.01', '親指０', '亲指０', '親指0', '亲指0'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandThumb2',  keywords: ['thumb', 'thumb02', 'thumb.02', '親指１', '亲指１', '親指1', '亲指1'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandThumb3',  keywords: ['thumb', 'thumb03', 'thumb.03', '親指２', '亲指２', '親指2', '亲指2'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandIndex1',  keywords: ['index', 'f_index01', '人指１', '人指1'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandIndex2',  keywords: ['index', 'f_index02', '人指２', '人指2'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandIndex3',  keywords: ['index', 'f_index03', '人指３', '人指3'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandMiddle1', keywords: ['middle', 'f_middle01', '中指１', '中指1'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandMiddle2', keywords: ['middle', 'f_middle02', '中指２', '中指2'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandMiddle3', keywords: ['middle', 'f_middle03', '中指３', '中指3'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandRing1',   keywords: ['ring', 'f_ring01', '薬指１', '药指１', '薬指1', '药指1'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandRing2',   keywords: ['ring', 'f_ring02', '薬指２', '药指２', '薬指2', '药指2'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandRing3',   keywords: ['ring', 'f_ring03', '薬指３', '药指３', '药指3', '药指3'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandPinky1',  keywords: ['pinky', 'f_pinky01', '小指１', '小指1'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandPinky2',  keywords: ['pinky', 'f_pinky02', '小指２', '小指2'], side: 'L', priority: 3 },
-  { mixamoName: 'mixamorigLeftHandPinky3',  keywords: ['pinky', 'f_pinky03', '小指３', '小指3'], side: 'L', priority: 3 },
+    // === DEDOS IZQUIERDOS ===
+    { mixamoName: 'mixamorigLeftHandThumb1', keywords: ['thumb', 'thumb01', 'thumb.01', '親指０', '亲指０', '親指0', '亲指0'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandThumb2', keywords: ['thumb', 'thumb02', 'thumb.02', '親指１', '亲指１', '親指1', '亲指1'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandThumb3', keywords: ['thumb', 'thumb03', 'thumb.03', '親指２', '亲指２', '親指2', '亲指2'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandIndex1', keywords: ['index', 'f_index01', '人指１', '人指1'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandIndex2', keywords: ['index', 'f_index02', '人指２', '人指2'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandIndex3', keywords: ['index', 'f_index03', '人指３', '人指3'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandMiddle1', keywords: ['middle', 'f_middle01', '中指１', '中指1'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandMiddle2', keywords: ['middle', 'f_middle02', '中指２', '中指2'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandMiddle3', keywords: ['middle', 'f_middle03', '中指３', '中指3'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandRing1', keywords: ['ring', 'f_ring01', '薬指１', '药指１', '薬指1', '药指1'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandRing2', keywords: ['ring', 'f_ring02', '薬指２', '药指２', '薬指2', '药指2'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandRing3', keywords: ['ring', 'f_ring03', '薬指３', '药指３', '药指3', '药指3'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandPinky1', keywords: ['pinky', 'f_pinky01', '小指１', '小指1'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandPinky2', keywords: ['pinky', 'f_pinky02', '小指２', '小指2'], side: 'L', priority: 3 },
+    { mixamoName: 'mixamorigLeftHandPinky3', keywords: ['pinky', 'f_pinky03', '小指３', '小指3'], side: 'L', priority: 3 },
 
-  // === DEDOS DERECHOS ===
-  { mixamoName: 'mixamorigRightHandThumb1',  keywords: ['thumb', 'thumb01', 'thumb.01', '親指０', '亲指０', '親指0', '亲指0'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandThumb2',  keywords: ['thumb', 'thumb02', 'thumb.02', '親指１', '亲指１', '親指1', '亲指1'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandThumb3',  keywords: ['thumb', 'thumb03', 'thumb.03', '親指２', '亲指２', '親指2', '亲指2'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandIndex1',  keywords: ['index', 'f_index01', '人指１', '人指1'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandIndex2',  keywords: ['index', 'f_index02', '人指２', '人指2'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandIndex3',  keywords: ['index', 'f_index03', '人指３', '人指3'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandMiddle1', keywords: ['middle', 'f_middle01', '中指１', '中指1'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandMiddle2', keywords: ['middle', 'f_middle02', '中指２', '中指2'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandMiddle3', keywords: ['middle', 'f_middle03', '中指３', '中指3'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandRing1',   keywords: ['ring', 'f_ring01', '薬指１', '药指１', '薬指1', '药指1'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandRing2',   keywords: ['ring', 'f_ring02', '薬指２', '药指２', '薬指2', '药指2'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandRing3',   keywords: ['ring', 'f_ring03', '薬指３', '药指３', '药指3', '药指3'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandPinky1',  keywords: ['pinky', 'f_pinky01', '小指１', '小指1'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandPinky2',  keywords: ['pinky', 'f_pinky02', '小指２', '小指2'], side: 'R', priority: 3 },
-  { mixamoName: 'mixamorigRightHandPinky3',  keywords: ['pinky', 'f_pinky03', '小指３', '小指3'], side: 'R', priority: 3 },
-];
+    // === DEDOS DERECHOS ===
+    { mixamoName: 'mixamorigRightHandThumb1', keywords: ['thumb', 'thumb01', 'thumb.01', '親指０', '亲指０', '親指0', '亲指0'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandThumb2', keywords: ['thumb', 'thumb02', 'thumb.02', '親指１', '亲指１', '親指1', '亲指1'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandThumb3', keywords: ['thumb', 'thumb03', 'thumb.03', '親指２', '亲指２', '親指2', '亲指2'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandIndex1', keywords: ['index', 'f_index01', '人指１', '人指1'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandIndex2', keywords: ['index', 'f_index02', '人指２', '人指2'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandIndex3', keywords: ['index', 'f_index03', '人指３', '人指3'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandMiddle1', keywords: ['middle', 'f_middle01', '中指１', '中指1'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandMiddle2', keywords: ['middle', 'f_middle02', '中指２', '中指2'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandMiddle3', keywords: ['middle', 'f_middle03', '中指３', '中指3'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandRing1', keywords: ['ring', 'f_ring01', '薬指１', '药指１', '薬指1', '药指1'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandRing2', keywords: ['ring', 'f_ring02', '薬指２', '药指２', '薬指2', '药指2'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandRing3', keywords: ['ring', 'f_ring03', '薬指３', '药指３', '药指3', '药指3'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandPinky1', keywords: ['pinky', 'f_pinky01', '小指１', '小指1'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandPinky2', keywords: ['pinky', 'f_pinky02', '小指２', '小指2'], side: 'R', priority: 3 },
+    { mixamoName: 'mixamorigRightHandPinky3', keywords: ['pinky', 'f_pinky03', '小指３', '小指3'], side: 'R', priority: 3 },
+  ];
 
 /**
  * Resultado del mapping para UI de calibración
@@ -122,17 +123,17 @@ function matchesSide(boneName: string, side: 'L' | 'R' | null): boolean {
   if (side === 'L') {
     if (n.includes('右') || lower.includes('right') || lower.endsWith('.r') || lower.endsWith('_r')) return false;
     return lower.includes('.l') || lower.includes('_l_') || lower.includes('_l.') ||
-           lower.endsWith('l') || lower.endsWith('.l') || lower.endsWith('_l') ||
-           lower.includes('left') || n.includes('.L') || n.includes('_L_') ||
-           n.includes('_L.') || n.endsWith('L') || n.endsWith('_L') ||
-           n.includes('左');
+      lower.endsWith('l') || lower.endsWith('.l') || lower.endsWith('_l') ||
+      lower.includes('left') || n.includes('.L') || n.includes('_L_') ||
+      n.includes('_L.') || n.endsWith('L') || n.endsWith('_L') ||
+      n.includes('左');
   } else {
     if (n.includes('左') || lower.includes('left') || lower.endsWith('.l') || lower.endsWith('_l')) return false;
     return lower.includes('.r') || lower.includes('_r_') || lower.includes('_r.') ||
-           lower.endsWith('r') || lower.endsWith('.r') || lower.endsWith('_r') ||
-           lower.includes('right') || n.includes('.R') || n.includes('_R_') ||
-           n.includes('_R.') || n.endsWith('R') || n.endsWith('_R') ||
-           n.includes('右');
+      lower.endsWith('r') || lower.endsWith('.r') || lower.endsWith('_r') ||
+      lower.includes('right') || n.includes('.R') || n.includes('_R_') ||
+      n.includes('_R.') || n.endsWith('R') || n.endsWith('_R') ||
+      n.includes('右');
   }
 }
 
@@ -148,28 +149,28 @@ function scoreBoneMatch(
   // === EXCLUSIONES ESTRICTAS ===
   // Estos huesos NUNCA deben usarse para animación (son de control/mecanismo en Rigify)
   if (lower.startsWith('org-') || lower.startsWith('mch-') || lower.startsWith('vis_') ||
-      lower.startsWith('vis-') || lower.includes('tweak') || lower.includes('_parent') ||
-      lower.includes('ik_pole') || lower.includes('ik_target') || lower.includes('_ik_') ||
-      lower.includes('_fk_socket') || lower.includes('_pivot') || lower.includes('offset') ||
-      lower === 'root' || lower === 'root-pivot' || lower === 'torso') {
+    lower.startsWith('vis-') || lower.includes('tweak') || lower.includes('_parent') ||
+    lower.includes('ik_pole') || lower.includes('ik_target') || lower.includes('_ik_') ||
+    lower.includes('_fk_socket') || lower.includes('_pivot') || lower.includes('offset') ||
+    lower === 'root' || lower === 'root-pivot' || lower === 'torso') {
     return 0;
   }
 
   // Excluir huesos auxiliares/IK/mecanismo de modelos MMD/PMX
   // NOTA: Los hombros MMD (左肩, 右肩) se excluyen para evitar que el offset de 128° del clavicle de Mixamo disloque los brazos
   if (boneName.includes('IK') || boneName.includes('ＩＫ') || boneName.includes('捩') ||
-      boneName.includes('補助') || boneName.includes('ダミー') || boneName.includes('キャンセル') ||
-      boneName.includes('パーツ') || boneName.includes('肩') || (boneName.endsWith('P') && boneName.length > 2) ||
-      (boneName.endsWith('C') && boneName.length > 2)) {
+    boneName.includes('補助') || boneName.includes('ダミー') || boneName.includes('キャンセル') ||
+    boneName.includes('パーツ') || boneName.includes('肩') || (boneName.endsWith('P') && boneName.length > 2) ||
+    (boneName.endsWith('C') && boneName.length > 2)) {
     return 0;
   }
 
   // Excluir huesos twist o auxiliares (.001, .002, twist) salvo para dedos
   const isFinger = definition.mixamoName.includes('HandThumb') ||
-                   definition.mixamoName.includes('HandIndex') ||
-                   definition.mixamoName.includes('HandMiddle') ||
-                   definition.mixamoName.includes('HandRing') ||
-                   definition.mixamoName.includes('HandPinky');
+    definition.mixamoName.includes('HandIndex') ||
+    definition.mixamoName.includes('HandMiddle') ||
+    definition.mixamoName.includes('HandRing') ||
+    definition.mixamoName.includes('HandPinky');
 
   if (!isFinger && (lower.includes('.0') || lower.includes('_0') || lower.includes('twist') || lower.includes('pole'))) {
     return 0;
@@ -256,7 +257,7 @@ function scoreBoneMatch(
 
   // Bonus MASIVO para huesos DEF- (son los de deformación en Rigify)
   if (lower.startsWith('def-')) score += 50;
-  
+
   // Bonus para huesos estándar VRM (J_Bip_)
   if (lower.startsWith('j_bip_')) score += 50;
 
@@ -285,12 +286,12 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
 
   if (isPmx) {
     hipBone = Array.from(modelBoneNames).find(n => n === '下半身') ||
-              Array.from(modelBoneNames).find(n => n === '腰') ||
-              Array.from(modelBoneNames).find(n => n === 'センター');
+      Array.from(modelBoneNames).find(n => n === '腰') ||
+      Array.from(modelBoneNames).find(n => n === 'センター');
   } else if (hasDefBones) {
     // En Rigify, SOLO usar huesos de deformación DEF-. NUNCA los huesos de control 'hips', 'torso' o 'root'.
     hipBone = Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-pelvis') ||
-              Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-spine');
+      Array.from(modelBoneNames).find(n => n.toLowerCase() === 'def-spine');
   } else {
     // Para VRM / Mixamo / Estándar:
     const hipCandidates = [
@@ -304,8 +305,8 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
       hipBone = Array.from(modelBoneNames).find(n => {
         const lower = n.toLowerCase();
         return (lower.includes('pelvis') || lower.includes('hip')) &&
-               !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
-               lower !== 'root' && lower !== 'armature' && lower !== 'torso';
+          !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
+          lower !== 'root' && lower !== 'armature' && lower !== 'torso';
       });
     }
   }
@@ -398,9 +399,9 @@ export function buildBoneMapping(modelBoneNames: Set<string>): {
     modelBoneNames.forEach(name => {
       const lower = name.toLowerCase();
       if ((lower.includes('spine') || lower.includes('chest')) &&
-          !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
-          !lower.includes('spine.004') && !lower.includes('spine.005') && !lower.includes('spine.006') &&
-          name !== hipBone) {
+        !lower.includes('ik') && !lower.includes('mch') && !lower.includes('org') &&
+        !lower.includes('spine.004') && !lower.includes('spine.005') && !lower.includes('spine.006') &&
+        name !== hipBone) {
         spineBonesInModel.push(name);
       }
     });
@@ -532,7 +533,11 @@ export function retargetMixamoClip(
   sourceRestPoses?: Map<string, THREE.Quaternion>,
   targetRestPoses?: Map<string, THREE.Quaternion>,
   targetWorldRestPoses?: Map<string, THREE.Quaternion>,
-  posePreset: string = 'none'
+  posePreset: string = 'none',
+  targetRestPositions?: Map<string, THREE.Vector3>,
+  isTargetPmx: boolean = false,
+  groundOffsetY: number = 0,
+  boneOffsets?: BoneOffsets
 ): THREE.AnimationClip {
   const { mapping, results } = buildBoneMapping(targetBoneNames);
 
@@ -564,21 +569,9 @@ export function retargetMixamoClip(
 
   // Detectar tipo de esqueleto
   const isRigify = Array.from(targetBoneNames).some(n => n.toLowerCase().startsWith('def-'));
+  const isPmx = isTargetPmx || Array.from(targetBoneNames).some(n => n.includes('足') || n.includes('身') || n.includes('首') || n.includes('腕') || n.includes('肩') || n.includes('腰') || n.includes('センター') || n.includes('全ての親'));
 
   // Pre-calcular correcciones de espacio local para Rigify.
-  // Los FBX de Mixamo tienen bones con quaterniones IDENTIDAD en rest pose (T-pose).
-  // Los huesos Rigify (DEF-) pueden tener rotaciones no triviales en su bind pose.
-  // Fórmula: outQuat = tgtRest * inv(srcRest) * srcAnim
-  // Como srcRest ≈ identity para Mixamo FBX, se simplifica a: outQuat = tgtRest * srcAnim
-  // Pero necesitamos sacar primero la componente de reposo del hueso target:
-  // outQuat = inv(tgtRest) * (tgtRest * srcAnim) -- no, esto borra la corrección
-  //
-  // La fórmula CORRECTA de retargeting "local space":
-  // outQuat = tgtRest * deltaQ * inv(tgtRest)   donde deltaQ = inv(srcRest) * srcAnim
-  // Esto mantiene la pose de reposo intacta y solo aplica el movimiento relativo.
-  //
-  // Dado srcRest ≈ identity: deltaQ ≈ srcAnim
-  // outQuat = tgtRest * srcAnim * inv(tgtRest)
   const rigifyCorrections = new Map<string, { tgtRest: THREE.Quaternion; tgtRestInv: THREE.Quaternion }>();
   if (isRigify && targetRestPoses) {
     targetRestPoses.forEach((tgtRest, boneName) => {
@@ -587,12 +580,33 @@ export function retargetMixamoClip(
     });
   }
 
-  // Log Rigify silenciado - usar window.__lastBoneMapping para debug
-
   // === VRM arm correction (A-Pose 45°) ===
   const offsetRad = posePreset === 'vrm' ? 45 * (Math.PI / 180) : 0;
-  const armFixLeft  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1),  offsetRad);
+  const armFixLeft = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), offsetRad);
   const armFixRight = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -offsetRad);
+
+  // === Pre-calcular offsets manuales (boneOffsets en grados) ===
+  const D2R = Math.PI / 180;
+  // Torso/espalda: rotación en X (pitch) y Z (roll lateral)
+  const spineOffsetQ = (boneOffsets?.spineTiltX || boneOffsets?.spineTiltZ)
+    ? new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      (boneOffsets.spineTiltX ?? 0) * D2R,
+      0,
+      (boneOffsets.spineTiltZ ?? 0) * D2R,
+      'XYZ'
+    ))
+    : null;
+  // Cadera: rotación en X independiente
+  const hipOffsetQ = boneOffsets?.hipTiltX
+    ? new THREE.Quaternion().setFromEuler(new THREE.Euler((boneOffsets.hipTiltX) * D2R, 0, 0, 'XYZ'))
+    : null;
+  // Brazos: rotación en Z (hacia abajo en espacio local) - izquierdo y derecho independientes
+  const armOffsetL = boneOffsets?.armDownL
+    ? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), (boneOffsets.armDownL) * D2R)
+    : null;
+  const armOffsetR = boneOffsets?.armDownR
+    ? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (boneOffsets.armDownR) * D2R)
+    : null;
 
   retargeted.tracks = clip.tracks
     .map(track => {
@@ -607,7 +621,55 @@ export function retargetMixamoClip(
 
       const lowerTarget = targetName.toLowerCase();
       if (lowerTarget === 'root' || lowerTarget === 'armature' || lowerTarget === 'torso') {
-        return null; 
+        return null;
+      }
+
+      // === TRASLACIÓN / POSITION TRACKS (HIPS ROOT MOTION & GROUND OFFSET) ===
+      if (property === '.position') {
+        const isHipsBone = boneName.toLowerCase().includes('hips') ||
+          targetName === hipsTargetName ||
+          targetName === '下半身' || targetName === 'センター' || targetName === '腰' ||
+          lowerTarget.includes('hip') || lowerTarget.includes('pelvis');
+
+        if (isHipsBone) {
+          keptPosition++;
+          const posTrack = track.clone();
+          posTrack.name = targetName + property;
+          const posValues = posTrack.values;
+
+          // Extraer posición inicial de reposo del hueso target
+          const restPos = targetRestPositions?.get(targetName) || new THREE.Vector3(0, 0, 0);
+
+          // Primer keyframe de origen
+          const initSrcX = posValues[0] || 0;
+          const initSrcY = posValues[1] || 0;
+          const initSrcZ = posValues[2] || 0;
+
+          // Ajustar cada keyframe de cadera:
+          // En Mixamo FBX, la altura estándar de cadera de pie es ~95-105 cm sobre el piso (Y=0).
+          // Si una animación es de suelo/sentada, posValues[i+1] baja a ~15-30 cm.
+          // Si el primer fotograma ya empieza sentado (initSrcY ~ 25), antes al restar initSrcY
+          // el deltaY era 0 y el modelo quedaba suspendido a la altura de cadera DE PIE (restPos.y).
+          // Ahora escalamos la altura vertical respecto a la altura de cadera de pie (~100 en Mixamo):
+          const refMixamoHipsY = (initSrcY > 70) ? initSrcY : 100.0;
+
+          for (let i = 0; i < posValues.length; i += 3) {
+            const deltaX = (posValues[i] - initSrcX) * rootScaleFactor;
+            const deltaZ = (posValues[i + 2] - initSrcZ) * rootScaleFactor;
+
+            // Relación de altura Mixamo (1.0 = de pie, 0.25 = en el suelo/sentado)
+            const yRatio = posValues[i + 1] / refMixamoHipsY;
+
+            posValues[i] = restPos.x + deltaX * 0.5;
+            posValues[i + 1] = restPos.y * yRatio + groundOffsetY;
+            posValues[i + 2] = restPos.z + deltaZ * 0.5;
+          }
+
+          return posTrack;
+        }
+
+        // Otros position tracks descartados para no desmembrar hombros o accesorios
+        return null;
       }
 
       // === ROTACIONES ===
@@ -618,32 +680,31 @@ export function retargetMixamoClip(
         const values = newTrack.values;
 
         if (isRigify) {
-          // DIAGNÓSTICO: Aplicar corrección universal X,Z negate para TODOS los huesos Rigify.
-          // Esto invierte el eje de pitch (inclinación adelante/atrás) y el eje de roll lateral.
-          // Si el modelo queda peor, necesitamos hacer diferente para distintos grupos de huesos.
           correctedRotations++;
           for (let i = 0; i < values.length; i += 4) {
-            // Negar X y Z: convierte la rotación al espacio de Rigify
-            values[i]   = -values[i];    // x
-            // values[i+1] unchanged     // y
-            values[i+2] = -values[i+2];  // z
-            // values[i+3] unchanged     // w
+            values[i] = -values[i];    // x
+            values[i + 2] = -values[i + 2];  // z
           }
         } else if (!isRigify) {
-          // Detectar si el modelo es PMX (esqueleto MMD con kanji)
-          const isPmx = Array.from(targetBoneNames).some(n => n.includes('足') || n.includes('身') || n.includes('首') || n.includes('腕') || n.includes('肩'));
+          const isUpLeg = boneName.includes('LeftUpLeg') || boneName.includes('RightUpLeg') ||
+            targetName === '左足' || targetName === '右足';
+          const isKnee = (!isUpLeg && (boneName.includes('LeftLeg') || boneName.includes('RightLeg'))) ||
+            targetName.includes('ひざ') || targetName.includes('膝');
 
-          const isUpLeg = boneName.includes('LeftUpLeg') || boneName.includes('RightUpLeg');
-          const isKneeOrFoot = boneName.includes('LeftLeg') || boneName.includes('RightLeg') ||
-            boneName.includes('LeftFoot') || boneName.includes('RightFoot') ||
-            boneName.includes('LeftToeBase') || boneName.includes('RightToeBase');
+          // Corrección de espacio local para TODOS los huesos PMX:
+          // Cualquier hueso del modelo puede tener una pose de reposo diferente a Mixamo (T-Pose).
+          // La corrección tgtRest⁻¹ * animQ compensa esa diferencia automáticamente.
+          // Excluir piernas (ya tienen su propia corrección rotZ de 180°) y pies/dedos (no necesitan).
+          const isFoot = boneName.includes('Foot') || boneName.includes('ToeBase') ||
+            targetName.includes('足首') || targetName.includes('つま先');
+          const isBodyBone = !isUpLeg && !isKnee && !isFoot;
 
-          if (isPmx && (isUpLeg || isKneeOrFoot)) {
+          if (isPmx && (isUpLeg || isKnee)) {
             // FIX DE PIERNAS MIXAMO EN PMX:
-            // En Mixamo FBX, los huesos de las piernas vienen orientados con 180° en el eje Z (cuaternión ~ [0, 0, 1, 0]).
-            // En PMX, los muslos descansan con identidad (0,0,0,1) apuntando hacia abajo (-Y).
-            // Aplicar la rotación sin corregir orienta los muslos hacia arriba (+Y).
-            // Multiplicar por rotZ invierte el muslo apuntando al suelo y el conjugado mantiene la flexión natural de la rodilla.
+            // En Mixamo FBX, los huesos de muslo y rodilla descansan orientados con un eje Z invertido.
+            // Invertir en Z alinea el muslo hacia abajo manteniendo la flexión de rodilla.
+            // Los pies (LeftFoot, LeftToeBase / 左足首, 左つま先) NO llevan rotZ porque en reposo
+            // ya apuntan hacia el frente (+Z); si se rotaran 180° Z se voltearían hacia atrás o con la suela al revés.
             const rotZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
             correctedRotations++;
             for (let i = 0; i < values.length; i += 4) {
@@ -658,6 +719,25 @@ export function retargetMixamoClip(
               values[i + 1] = outQ.y;
               values[i + 2] = outQ.z;
               values[i + 3] = outQ.w;
+            }
+          } else if (isPmx && isBodyBone && targetRestPoses) {
+            const isSpineBone = boneName.includes('Spine') || boneName.includes('Hips') ||
+                                targetName === '上半身' || targetName === '上半身2' ||
+                                targetName === '下半身' || targetName === '腰' || targetName === 'センター';
+            if (isSpineBone) {
+              const tgtRest = targetRestPoses.get(targetName);
+              if (tgtRest && (tgtRest.x !== 0 || tgtRest.y !== 0 || tgtRest.z !== 0)) {
+                const srcRest = sourceRestPoses?.get(boneName) ?? new THREE.Quaternion();
+                correctedRotations++;
+                const tgtRestInv = tgtRest.clone().invert();
+                const baseCorr = tgtRestInv.clone().multiply(srcRest);
+                for (let i = 0; i < values.length; i += 4) {
+                  const animQ = new THREE.Quaternion(values[i], values[i + 1], values[i + 2], values[i + 3]);
+                  const outQ = baseCorr.clone().multiply(animQ);
+                  values[i] = outQ.x; values[i + 1] = outQ.y;
+                  values[i + 2] = outQ.z; values[i + 3] = outQ.w;
+                }
+              }
             }
           } else if (posePreset === 'vrm') {
             // Para VRM (Nova Anime): corrección A-Pose de 45° en brazos
@@ -678,15 +758,43 @@ export function retargetMixamoClip(
           }
         }
 
+        // === Aplicar offsets manuales (boneOffsets) SIEMPRE AL FINAL ===
+        // Detectar a qué grupo pertenece este hueso para aplicar el offset correcto
+        if (spineOffsetQ || hipOffsetQ || armOffsetL || armOffsetR) {
+          const isSpineBone = boneName.includes('Spine') ||
+            targetName === '上半身' || targetName === '上半身2';
+          // NOTA: 首 (cuello) y 頭 (cabeza) NO llevan el offset de espalda.
+          // Tienen su propia orientación local que no debe ser arrastrada por la inclinación del torso.
+          const isHipBone = boneName.includes('Hips') ||
+            targetName === '下半身' || targetName === '腰' || targetName === 'センター';
+          const isLeftArmBone = boneName.includes('LeftArm') || boneName.includes('LeftForeArm') ||
+            targetName === '左腕' || targetName === '左ひじ' || targetName === '左肘';
+          const isRightArmBone = boneName.includes('RightArm') || boneName.includes('RightForeArm') ||
+            targetName === '右腕' || targetName === '右ひじ' || targetName === '右肘';
+
+          const offsetQ = isHipBone ? hipOffsetQ
+            : isSpineBone ? spineOffsetQ
+              : isLeftArmBone ? armOffsetL
+                : isRightArmBone ? armOffsetR
+                  : null;
+
+          if (offsetQ) {
+            for (let i = 0; i < values.length; i += 4) {
+              const q = new THREE.Quaternion(values[i], values[i + 1], values[i + 2], values[i + 3]);
+              // Pre-multiplicar el offset: éste se aplica en el espacio local del hueso padre
+              q.premultiply(offsetQ);
+              values[i] = q.x; values[i + 1] = q.y; values[i + 2] = q.z; values[i + 3] = q.w;
+            }
+          }
+        }
+
         return newTrack;
       }
 
-      // Descartar position tracks para mantener orientación vertical y accesorios (collar, ojos, botas) perfectamente anclados
       return null;
     })
     .filter((track): track is THREE.KeyframeTrack => track !== null);
 
-  // Retarget summary silenciado (demasiado verbose por cada animación)
   return retargeted;
 }
 

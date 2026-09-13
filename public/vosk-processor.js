@@ -1,7 +1,7 @@
 class VoskAudioProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
-        this.buffer = new Float32Array(4096);
+        this.buffer = new Float32Array(1024);
         this.pointer = 0;
     }
 
@@ -11,7 +11,7 @@ class VoskAudioProcessor extends AudioWorkletProcessor {
             const channelData = input[0];
             for (let i = 0; i < channelData.length; i++) {
                 this.buffer[this.pointer++] = channelData[i];
-                if (this.pointer >= 4096) {
+                if (this.pointer >= 1024) {
                     this.port.postMessage(this.buffer.slice());
                     this.pointer = 0;
                 }

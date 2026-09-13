@@ -6,6 +6,7 @@
 const DB_NAME = 'NovaModelDB';
 const STORE_NAME = 'activeModel';
 const CURRENT_KEY = 'current_user_model';
+const LIBRARY_PREFIX = 'model_lib_';
 
 export interface SavedModelInfo {
   fileName: string;
@@ -34,7 +35,7 @@ function notify(info: SavedModelInfo | null) {
 
 function getDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(DB_NAME, 2);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = (e) => {
@@ -48,7 +49,7 @@ function getDB(): Promise<IDBDatabase> {
 
 export const modelStore = {
   /**
-   * Guarda un archivo de modelo en IndexedDB y devuelve una Blob URL utilizable.
+   * Guarda un archivo de modelo en IndexedDB (activo + biblioteca) y devuelve una Blob URL utilizable.
    */
   async saveModel(file: File): Promise<string> {
     const ext = file.name.split('.').pop()?.toLowerCase() || 'pmx';
@@ -65,9 +66,11 @@ export const modelStore = {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       await new Promise<void>((resolve, reject) => {
-        const req = store.put(record, CURRENT_KEY);
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(req.error);
+        const req1 = store.put(record, CURRENT_KEY);
+        const req2 = store.put(record, `${LIBRARY_PREFIX}${file.name}`);
+        req1.onerror = () => reject(req1.error);
+        req2.onerror = () => reject(req2.error);
+        tx.oncomplete = () => resolve();
       });
 
       // Liberar URL anterior si era un blob
@@ -137,6 +140,115 @@ export const modelStore = {
     } catch (err) {
       console.error('❌ Error cargando modelo desde IndexedDB:', err);
       return null;
+    }
+  },
+
+  /**
+   * Carga un modelo específico de la biblioteca por su nombre y lo establece como activo.
+   */
+  async loadModelByName(fileName: string): Promise<{ url: string; info: SavedModelInfo } | null> {
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+
+      const record = await new Promise<StoredModelRecord | undefined>((resolve, reject) => {
+        const req = store.get(`${LIBRARY_PREFIX}${fileName}`);
+        req.onsuccess = () => resolve(req.result as StoredModelRecord | undefined);
+        req.onerror = () => reject(req.error);
+      });
+
+      if (!record || !record.data) {
+        return null;
+      }
+
+      // Establecer como modelo activo actual
+      store.put(record, CURRENT_KEY);
+
+      if (activeBlobUrl && activeBlobUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(activeBlobUrl.split('#')[0]);
+      }
+
+      const rawBlobUrl = URL.createObjectURL(record.data);
+      activeBlobUrl = `${rawBlobUrl}#${encodeURIComponent(record.fileName)}`;
+
+      const info: SavedModelInfo = {
+        fileName: record.fileName,
+        fileSize: record.fileSize,
+        fileType: record.fileType,
+        savedAt: record.savedAt
+      };
+
+      notify(info);
+      return { url: activeBlobUrl, info };
+    } catch (err) {
+      console.error('❌ Error cargando modelo de la biblioteca:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Obtiene la lista de todos los modelos guardados en la biblioteca.
+   */
+  async getAllSavedModels(): Promise<SavedModelInfo[]> {
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+
+      const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+        const req = store.getAllKeys();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      const libKeys = keys.filter(k => typeof k === 'string' && (k as string).startsWith(LIBRARY_PREFIX));
+      const models: SavedModelInfo[] = [];
+
+      for (const k of libKeys) {
+        const record = await new Promise<StoredModelRecord | undefined>((resolve) => {
+          const req = store.get(k);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(undefined);
+        });
+        if (record) {
+          models.push({
+            fileName: record.fileName,
+            fileSize: record.fileSize,
+            fileType: record.fileType,
+            savedAt: record.savedAt
+          });
+        }
+      }
+
+      return models.sort((a, b) => b.savedAt - a.savedAt);
+    } catch (err) {
+      console.error('❌ Error listando modelos guardados:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Elimina un modelo de la biblioteca.
+   */
+  async deleteSavedModel(fileName: string): Promise<void> {
+    try {
+      const db = await getDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+
+      await new Promise<void>((resolve, reject) => {
+        const req = store.delete(`${LIBRARY_PREFIX}${fileName}`);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+
+      const current = await this.getModelInfo();
+      if (current && current.fileName === fileName) {
+        await this.clearModel();
+      }
+    } catch (err) {
+      console.error('❌ Error eliminando modelo guardado:', err);
     }
   },
 

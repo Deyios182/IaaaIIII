@@ -5,9 +5,11 @@ import { NavLink, useLocation } from 'react-router-dom';
 interface SidebarProps {
   isPro: boolean;
   isBold?: boolean;
+  isHidden?: boolean;
+  onToggle?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
+const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold, isHidden = false, onToggle }) => {
   const [isOpenMobile, setIsOpenMobile] = useState(false);
   const location = useLocation();
 
@@ -25,12 +27,18 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
 
   const brandColor = isBold ? 'bg-pink-600 shadow-pink-500/20' : 'bg-primary shadow-primary/20';
 
-  // Escuchar evento global para abrir/cerrar sidebar en móvil
+  // Escuchar evento global para abrir/cerrar sidebar en móvil o desktop
   useEffect(() => {
-    const handleToggle = () => setIsOpenMobile(prev => !prev);
+    const handleToggle = () => {
+      if (window.innerWidth < 768) {
+        setIsOpenMobile(prev => !prev);
+      } else if (onToggle) {
+        onToggle();
+      }
+    };
     window.addEventListener('nova-toggle-sidebar', handleToggle);
     return () => window.removeEventListener('nova-toggle-sidebar', handleToggle);
-  }, []);
+  }, [onToggle]);
 
   // Cerrar el drawer móvil al cambiar de ruta
   useEffect(() => {
@@ -50,12 +58,21 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
           </div>
         </div>
 
-        {/* Botón cerrar solo visible en móvil */}
+        {/* Botón cerrar/ocultar */}
         <button
-          onClick={() => setIsOpenMobile(false)}
-          className="md:hidden p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"
+          onClick={() => {
+            if (window.innerWidth < 768) {
+              setIsOpenMobile(false);
+            } else if (onToggle) {
+              onToggle();
+            }
+          }}
+          className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+          title="Ocultar menú lateral"
         >
-          <span className="material-symbols-outlined text-lg">close</span>
+          <span className="material-symbols-outlined text-lg block">
+            menu_open
+          </span>
         </button>
       </div>
 
@@ -95,9 +112,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isPro, isBold }) => {
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex flex-col w-56 lg:w-64 bg-[#111118] border-r border-surface-border py-5 lg:py-6 items-start shrink-0 z-10 select-none">
-        {sidebarContent}
-      </aside>
+      {!isHidden && (
+        <aside className="hidden md:flex flex-col w-56 lg:w-64 bg-[#111118] border-r border-surface-border py-5 lg:py-6 items-start shrink-0 z-10 select-none animate-in slide-in-from-left duration-200">
+          {sidebarContent}
+        </aside>
+      )}
 
       {/* Mobile Drawer (Visible sólo cuando isOpenMobile es true en pantallas < md) */}
       {isOpenMobile && (
