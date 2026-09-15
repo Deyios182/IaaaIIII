@@ -918,7 +918,9 @@ export const checkApiKeySelection = async (): Promise<boolean> => {
 
 export const generateSpeech = async (text: string, voiceName: string = 'Zephyr', voiceTone: string = '') => {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+    const apiKey = getActiveGeminiKey() || (process.env.API_KEY as string);
+    if (!apiKey) throw new Error('API Key no disponible para TTS');
+    const ai = new GoogleGenAI({ apiKey });
     // Construir la instrucción de estilo basada en el tono configurado
     const styleInstruction = voiceTone ? `Dilo con este tono: ${voiceTone}. El texto es: ` : '';
 
@@ -946,7 +948,8 @@ export const generateSpeech = async (text: string, voiceName: string = 'Zephyr',
 export const generateAvatarImage = async (prompt: string, isBold: boolean = false): Promise<string | null> => {
   try {
     await checkApiKeySelection();
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+    const apiKey = getActiveGeminiKey() || (process.env.API_KEY as string);
+    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash-preview-image-generation',
       contents: { parts: [{ text: (isBold ? "Unfiltered POV, raw intimacy, cinematic lighting, explicit vibe, real woman: " : "Realistic portrait: ") + prompt }] },

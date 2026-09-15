@@ -159,6 +159,50 @@ export const THEME_COLORS = [
   { id: '#ef4444', name: 'Rojo Rubí', class: 'bg-red-500' }
 ];
 
+export interface VoiceOption {
+  id: string;
+  label: string;
+  gender: 'Femenina' | 'Masculina';
+  style: string;
+  desc: string;
+}
+
+export const ALL_GEMINI_VOICES: VoiceOption[] = [
+  // Femeninas reales (13)
+  { id: 'Aoede', label: 'Aoede', gender: 'Femenina', style: 'Breezy', desc: 'Fresca, ligera, conversacional y muy natural.' },
+  { id: 'Kore', label: 'Kore', gender: 'Femenina', style: 'Firm', desc: 'Firme, segura, juvenil y enérgica (Default Gemini).' },
+  { id: 'Zephyr', label: 'Zephyr', gender: 'Femenina', style: 'Bright', desc: 'Brillante, clara, calmada y profesional.' },
+  { id: 'Leda', label: 'Leda', gender: 'Femenina', style: 'Youthful', desc: 'Juvenil, dulce, expresiva y cálida.' },
+  { id: 'Autonoe', label: 'Autonoe', gender: 'Femenina', style: 'Bright', desc: 'Entusiasta, vivaz y luminosa.' },
+  { id: 'Callirrhoe', label: 'Callirrhoe', gender: 'Femenina', style: 'Easy-going', desc: 'Despreocupada, relajada y amigable.' },
+  { id: 'Despina', label: 'Despina', gender: 'Femenina', style: 'Smooth', desc: 'Tersa, suave, aterciopelada y envolvente.' },
+  { id: 'Erinome', label: 'Erinome', gender: 'Femenina', style: 'Clear', desc: 'Clara, nítida, precisa y elocuente.' },
+  { id: 'Laomedeia', label: 'Laomedeia', gender: 'Femenina', style: 'Upbeat', desc: 'Optimista, alegre, chispeante y vivaz.' },
+  { id: 'Vindemiatrix', label: 'Vindemiatrix', gender: 'Femenina', style: 'Gentle', desc: 'Gentil, dulce, delicada y reconfortante.' },
+  { id: 'Sulafat', label: 'Sulafat', gender: 'Femenina', style: 'Warm', desc: 'Cálida, afectuosa, reconfortante y acogedora.' },
+  { id: 'Achernar', label: 'Achernar', gender: 'Femenina', style: 'Soft', desc: 'Suave, sutil, sosegada y de tono dulce.' },
+  { id: 'Gacrux', label: 'Gacrux', gender: 'Femenina', style: 'Mature', desc: 'Madura, serena, pausada y reflexiva.' },
+
+  // Masculinas reales (17)
+  { id: 'Puck', label: 'Puck', gender: 'Masculina', style: 'Upbeat', desc: 'Informal, amigable, alegre, juvenil y cercana.' },
+  { id: 'Charon', label: 'Charon', gender: 'Masculina', style: 'Informative', desc: 'Profunda, autoritaria, madura e informativa.' },
+  { id: 'Fenrir', label: 'Fenrir', gender: 'Masculina', style: 'Excitable', desc: 'Intensa, apasionada, misteriosa y enérgica.' },
+  { id: 'Orus', label: 'Orus', gender: 'Masculina', style: 'Firm', desc: 'Firme, decidida, asertiva y contundente.' },
+  { id: 'Achird', label: 'Achird', gender: 'Masculina', style: 'Friendly', desc: 'Cálida, cotidiana, accesible y amigable.' },
+  { id: 'Algenib', label: 'Algenib', gender: 'Masculina', style: 'Gravelly', desc: 'Ronca, rasposa, varonil y con textura.' },
+  { id: 'Alnilam', label: 'Alnilam', gender: 'Masculina', style: 'Firm', desc: 'Firme, disciplinada, solemne y estructurada.' },
+  { id: 'Enceladus', label: 'Enceladus', gender: 'Masculina', style: 'Breathy', desc: 'Respirada, susurrante, misteriosa y baja.' },
+  { id: 'Iapetus', label: 'Iapetus', gender: 'Masculina', style: 'Clear', desc: 'Formal, clara, neutra y articulada.' },
+  { id: 'Rasalgethi', label: 'Rasalgethi', gender: 'Masculina', style: 'Informative', desc: 'Didáctica, analítica, técnica y explicativa.' },
+  { id: 'Sadaltager', label: 'Sadaltager', gender: 'Masculina', style: 'Knowledgeable', desc: 'Erudita, reflexiva, culta y experimentada.' },
+  { id: 'Umbriel', label: 'Umbriel', gender: 'Masculina', style: 'Easy-going', desc: 'Relajada, casual, "chill" y tranquila.' },
+  { id: 'Zubenelgenubi', label: 'Zubenelgenubi', gender: 'Masculina', style: 'Casual', desc: 'Espontánea, desenfadada, moderna y casual.' },
+  { id: 'Pulcherrima', label: 'Pulcherrima', gender: 'Masculina', style: 'Forward', desc: 'Directa, frontal, firme y con carácter.' },
+  { id: 'Algieba', label: 'Algieba', gender: 'Masculina', style: 'Smooth', desc: 'Sedosa, fluida, grave y envolvente.' },
+  { id: 'Schedar', label: 'Schedar', gender: 'Masculina', style: 'Even', desc: 'Equilibrada, neutral, sobria y pausada.' },
+  { id: 'Sadachbia', label: 'Sadachbia', gender: 'Masculina', style: 'Lively', desc: 'Varonil, ágil, dinámica y despierta.' }
+];
+
 interface VoiceSettingsProps {
   avatar: AvatarSettings;
   updateAvatar: (settings: Partial<AvatarSettings>) => void;
@@ -168,7 +212,10 @@ interface VoiceSettingsProps {
 
 const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, selectedBrain, setSelectedBrain }) => {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [activeCategoryTab, setActiveCategoryTab] = useState<number | 'all'>('all');
+  const [voiceGenderFilter, setVoiceGenderFilter] = useState<'all' | 'Femenina' | 'Masculina'>('all');
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
 
   const activeFunctional = avatar.functionalMode || 'companion';
   const activeTraits = avatar.personalityTraits || (avatar.isBoldMode ? ['provocative'] : ['sweet']);
@@ -191,21 +238,15 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
     updateAvatar({ personalityTraits: nextTraits });
   };
 
-  const voices = [
-    { id: 'Zephyr', label: 'Zephyr', gender: 'Femenina', desc: 'Clara, calmada y profesional.' },
-    { id: 'Kore', label: 'Kore', gender: 'Femenina', desc: 'Juvenil, energética y alegre.' },
-    { id: 'Puck', label: 'Puck', gender: 'Masculina', desc: 'Informal, amigable y cercana.' },
-    { id: 'Charon', label: 'Charon', gender: 'Masculina', desc: 'Profunda, autoritaria y madura.' },
-    { id: 'Fenrir', label: 'Fenrir', gender: 'Masculina', desc: 'Misteriosa y calmada.' }
-  ];
-
-  const testAudio = async () => {
+  const testAudio = async (voiceToTest?: string) => {
     if (isPlaying) return;
+    const targetVoice = voiceToTest || avatar.voiceName || 'Zephyr';
     setIsPlaying(true);
+    setPlayingVoiceId(targetVoice);
     try {
       const { generateSpeech, decodeBase64, decodeAudioData, OUTPUT_SAMPLE_RATE } = await import('../geminiService');
       const fullTone = `${avatar.voiceTone || ''}. ${avatar.voiceAccent ? 'Habla con acento ' + avatar.voiceAccent : ''}`;
-      const audioBase64 = await generateSpeech("Hola, así es como vibra mi voz con esta combinación única de personalidad.", avatar.voiceName, fullTone);
+      const audioBase64 = await generateSpeech("Hola, así es como vibra mi voz con esta combinación única de personalidad.", targetVoice, fullTone);
 
       if (audioBase64) {
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
@@ -220,15 +261,18 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
 
         source.onended = () => {
           setIsPlaying(false);
+          setPlayingVoiceId(null);
           ctx.close();
         };
       } else {
         setIsPlaying(false);
+        setPlayingVoiceId(null);
       }
     } catch (e) {
       console.error(e);
       setIsPlaying(false);
-      alert("Error al probar audio.");
+      setPlayingVoiceId(null);
+      alert("Error al probar audio con la voz " + targetVoice);
     }
   };
 
@@ -248,7 +292,7 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
           </div>
 
           <button
-            onClick={testAudio}
+            onClick={() => testAudio()}
             disabled={isPlaying}
             className="px-4 py-2.5 rounded-xl border border-purple-500/40 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg disabled:opacity-50 cursor-pointer"
           >
@@ -492,59 +536,207 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
           </div>
         </div>
 
-        {/* 5. SECCIÓN: VOZ, AGUDEZA & INSTRUCCIONES ADICIONALES */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Modelo de Voz Base */}
-          <div className="rounded-2xl border border-white/10 bg-surface-dark p-5 space-y-4">
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest text-slate-300 flex items-center gap-2">
-              <span className="material-symbols-outlined text-sm">record_voice_over</span> Voz Base Gemini
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {voices.map(v => (
-                <button
-                  key={v.id}
-                  onClick={() => updateAvatar({ voiceName: v.id })}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${avatar.voiceName === v.id
-                      ? 'border-purple-400 bg-purple-600/30 text-white shadow-md'
-                      : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                    }`}
-                >
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-bold">{v.label}</span>
-                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${v.gender === 'Femenina' ? 'bg-pink-500/20 text-pink-300' : 'bg-blue-500/20 text-blue-300'
-                      }`}>
-                      {v.gender}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 leading-snug">{v.desc}</p>
-                </button>
-              ))}
+        {/* 5. SECCIÓN: CATÁLOGO DE VOCES & PITCH */}
+        <div className="space-y-5 rounded-2xl border border-white/10 bg-surface-dark p-5 sm:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest text-purple-400 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-sm">record_voice_over</span> 5. Catálogo de Actores y Voces Gemini ({ALL_GEMINI_VOICES.length} Voces)
+                </h2>
+                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-purple-900/60 border border-purple-500/30 text-purple-300">
+                  Multimodal HD
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Selecciona la voz base para las llamadas y síntesis. Haz clic en "Probar" en cualquier tarjeta para escucharla de inmediato.
+              </p>
+            </div>
+
+            {/* Voz activa actual */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 border border-purple-500/30 text-xs self-start sm:self-auto">
+              <span className="text-slate-400 text-[11px]">Voz activa:</span>
+              <strong className="text-purple-300 font-black">{avatar.voiceName || 'Zephyr'}</strong>
+              <span className="text-[10px] text-slate-400">
+                ({ALL_GEMINI_VOICES.find(v => v.id === (avatar.voiceName || 'Zephyr'))?.gender || 'Femenina'})
+              </span>
             </div>
           </div>
 
-          {/* Pitch & Modulación */}
-          <div className="rounded-2xl border border-white/10 bg-surface-dark p-5 space-y-4">
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest text-slate-300 flex items-center gap-2">
-              <span className="material-symbols-outlined text-sm">graphic_eq</span> Agudeza (Pitch)
-            </h2>
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center gap-4 bg-black/40 p-4 rounded-xl border border-white/10">
-                <span className="text-xl" title="Grave">👹</span>
+          {/* Filtros de género y barra de búsqueda */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10 self-start">
+              <button
+                type="button"
+                onClick={() => setVoiceGenderFilter('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  voiceGenderFilter === 'all'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Todas ({ALL_GEMINI_VOICES.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceGenderFilter('Femenina')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
+                  voiceGenderFilter === 'Femenina'
+                    ? 'bg-pink-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>♀</span> Femeninas ({ALL_GEMINI_VOICES.filter(v => v.gender === 'Femenina').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceGenderFilter('Masculina')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
+                  voiceGenderFilter === 'Masculina'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>♂</span> Masculinas ({ALL_GEMINI_VOICES.filter(v => v.gender === 'Masculina').length})
+              </button>
+            </div>
+
+            <div className="relative flex-1 sm:max-w-xs">
+              <input
+                type="text"
+                placeholder="Buscar por voz o estilo (ej: Breezy, Firme)..."
+                value={voiceSearchQuery}
+                onChange={(e) => setVoiceSearchQuery(e.target.value)}
+                className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-400 transition-all"
+              />
+              {voiceSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setVoiceSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Grid de 30 Voces con Scrollbar */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-[440px] overflow-y-auto custom-scrollbar pr-1">
+            {ALL_GEMINI_VOICES
+              .filter(v => {
+                const matchesGender = voiceGenderFilter === 'all' || v.gender === voiceGenderFilter;
+                const query = voiceSearchQuery.toLowerCase().trim();
+                const matchesQuery = !query || 
+                  v.label.toLowerCase().includes(query) || 
+                  v.desc.toLowerCase().includes(query) || 
+                  v.style.toLowerCase().includes(query);
+                return matchesGender && matchesQuery;
+              })
+              .map(v => {
+                const isSelected = avatar.voiceName === v.id;
+                const isCurrentlyPlaying = isPlaying && playingVoiceId === v.id;
+
+                return (
+                  <div
+                    key={v.id}
+                    onClick={() => updateAvatar({ voiceName: v.id })}
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2.5 group relative ${
+                      isSelected
+                        ? 'border-purple-400 bg-purple-600/25 text-white shadow-[0_0_15px_rgba(168,85,247,0.3)] ring-1 ring-purple-400/60'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-white">{v.label}</span>
+                        {isSelected && (
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" title="Voz activa" />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[8px] font-mono px-1 py-0.5 rounded bg-black/40 text-slate-400">
+                          {v.style}
+                        </span>
+                        <span
+                          className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${
+                            v.gender === 'Femenina'
+                              ? 'bg-pink-500/20 text-pink-300'
+                              : 'bg-blue-500/20 text-blue-300'
+                          }`}
+                        >
+                          {v.gender === 'Femenina' ? '♀' : '♂'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400 leading-snug line-clamp-2">
+                      {v.desc}
+                    </p>
+
+                    <div className="flex items-center justify-between pt-1 border-t border-white/5 mt-auto">
+                      <span className={`text-[9px] font-black uppercase ${isSelected ? 'text-purple-300' : 'text-slate-500'}`}>
+                        {isSelected ? '✓ Seleccionada' : 'Seleccionar'}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateAvatar({ voiceName: v.id });
+                          testAudio(v.id);
+                        }}
+                        disabled={isPlaying && !isCurrentlyPlaying}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 ${
+                          isCurrentlyPlaying
+                            ? 'bg-purple-500 text-white animate-pulse'
+                            : 'bg-white/10 hover:bg-purple-600 hover:text-white text-slate-300'
+                        }`}
+                        title={`Probar audio con la voz ${v.label}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">
+                          {isCurrentlyPlaying ? 'graphic_eq' : 'play_arrow'}
+                        </span>
+                        <span>{isCurrentlyPlaying ? 'Sonando...' : 'Probar'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* Slider de Agudeza / Pitch */}
+          <div className="p-4 rounded-xl border border-white/10 bg-black/40 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+            <div className="sm:max-w-xs">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <span className="material-symbols-outlined text-sm">graphic_eq</span> Agudeza (Pitch Modular)
+              </span>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Ajusta la velocidad y frecuencia de la voz (Grave / Madura a Aguda / Anime).
+              </p>
+            </div>
+
+            <div className="flex-1 max-w-md space-y-1">
+              <div className="flex items-center gap-3">
+                <span className="text-base" title="Grave">👹</span>
                 <input
                   type="range"
                   min="0.5"
                   max="2.0"
-                  step="0.1"
+                  step="0.05"
                   value={avatar.voicePitch || 1.0}
                   onChange={(e) => updateAvatar({ voicePitch: parseFloat(e.target.value) })}
                   className="flex-1 accent-purple-400 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer"
                 />
-                <span className="text-xl" title="Aguda">🐿️</span>
+                <span className="text-base" title="Aguda">🐿️</span>
+                <span className="text-purple-300 font-bold font-mono text-xs w-12 text-right">
+                  {(avatar.voicePitch || 1.0).toFixed(2)}x
+                </span>
               </div>
-              <div className="flex justify-between w-full text-[10px] text-slate-400 px-1">
-                <span>Grave (0.5x)</span>
-                <span className="text-purple-300 font-bold font-mono">{(avatar.voicePitch || 1.0).toFixed(1)}x</span>
-                <span>Agudo (2.0x)</span>
+              <div className="flex justify-between w-full text-[9px] text-slate-500 px-1">
+                <span>0.5x (Profundo)</span>
+                <span>1.0x (Normal)</span>
+                <span>2.0x (Agudo / Kawaii)</span>
               </div>
             </div>
           </div>

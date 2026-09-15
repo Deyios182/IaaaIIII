@@ -134,13 +134,13 @@ export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16
     const rms = Math.sqrt(sumSq / buffer.length);
     
     // Silence floor
-    if (rms < 0.015) {
+    if (rms < 0.010) {
         return { isSpeech: false, pitch: -1, energy: rms };
     }
 
     const zcr = calculateZeroCrossingRate(buffer);
-    // Transient clicks/hisses/sharp noise have very high ZCR (> 0.42)
-    if (zcr > 0.42) {
+    // Transient clicks/hisses/sharp noise have very high ZCR (> 0.45)
+    if (zcr > 0.45) {
         return { isSpeech: false, pitch: -1, energy: rms };
     }
 
@@ -149,7 +149,7 @@ export function isHumanSpeechFrame(buffer: Float32Array, sampleRate: number = 16
     const isVocalPitch = pitch >= 75 && pitch <= 360;
 
     return {
-        isSpeech: isVocalPitch && rms >= 0.02,
+        isSpeech: isVocalPitch && rms >= 0.012,
         pitch,
         energy: rms
     };

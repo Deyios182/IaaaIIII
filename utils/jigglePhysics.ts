@@ -65,12 +65,12 @@ export interface BodyColliderRefs {
 
 // Configuración por defecto
 export const DEFAULT_JIGGLE_SETTINGS: JiggleSettings = {
-    stiffness: 0.3,
-    damping: 0.7,
-    gravity: 0.02,
-    intensity: 1.0,
-    maxAngle: Math.PI / 4 // 45 grados por defecto
-};
+    stiffness: 0.22,
+    damping: 0.58,
+    intensity: 1.70,
+    gravity: 0.08,
+    maxAngle: Math.PI / 6.0
+}
 
 // Patrones de nombres de huesos que deben tener jiggle (Pelo, Pechos y Trasero ÚNICAMENTE)
 // EXCLUIR absolutamente toda prenda (faldas, vestidos, ropa interior, corsés, mangas, etc.) para evitar desmembramiento

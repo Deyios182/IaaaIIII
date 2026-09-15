@@ -20,6 +20,7 @@ interface StoredModelRecord extends SavedModelInfo {
 }
 
 let activeBlobUrl: string | null = null;
+let activeFileName: string | null = null; // Trackea qué modelo está cargado para evitar crear nuevas Blob URLs innecesariamente
 type ModelChangeListener = (info: SavedModelInfo | null) => void;
 const listeners: Set<ModelChangeListener> = new Set();
 
@@ -121,12 +122,25 @@ export const modelStore = {
         return null;
       }
 
+      // Si el mismo modelo ya está cargado, reutilizar la Blob URL existente
+      // para evitar que el key del componente React cambie y fuerce un remontado innecesario
+      if (activeBlobUrl && activeFileName === record.fileName) {
+        const info: SavedModelInfo = {
+          fileName: record.fileName,
+          fileSize: record.fileSize,
+          fileType: record.fileType,
+          savedAt: record.savedAt
+        };
+        return { url: activeBlobUrl, info };
+      }
+
       if (activeBlobUrl && activeBlobUrl.startsWith('blob:')) {
         URL.revokeObjectURL(activeBlobUrl.split('#')[0]);
       }
 
       const rawBlobUrl = URL.createObjectURL(record.data);
       activeBlobUrl = `${rawBlobUrl}#${encodeURIComponent(record.fileName)}`;
+      activeFileName = record.fileName;
 
       const info: SavedModelInfo = {
         fileName: record.fileName,
@@ -162,6 +176,18 @@ export const modelStore = {
         return null;
       }
 
+      // Si el mismo modelo ya está cargado, reutilizar la Blob URL existente
+      if (activeBlobUrl && activeFileName === record.fileName) {
+        const info: SavedModelInfo = {
+          fileName: record.fileName,
+          fileSize: record.fileSize,
+          fileType: record.fileType,
+          savedAt: record.savedAt
+        };
+        store.put(record, CURRENT_KEY);
+        return { url: activeBlobUrl, info };
+      }
+
       // Establecer como modelo activo actual
       store.put(record, CURRENT_KEY);
 
@@ -171,6 +197,7 @@ export const modelStore = {
 
       const rawBlobUrl = URL.createObjectURL(record.data);
       activeBlobUrl = `${rawBlobUrl}#${encodeURIComponent(record.fileName)}`;
+      activeFileName = record.fileName;
 
       const info: SavedModelInfo = {
         fileName: record.fileName,
@@ -295,6 +322,7 @@ export const modelStore = {
       if (activeBlobUrl && activeBlobUrl.startsWith('blob:')) {
         URL.revokeObjectURL(activeBlobUrl.split('#')[0]);
         activeBlobUrl = null;
+        activeFileName = null;
       }
 
       notify(null);

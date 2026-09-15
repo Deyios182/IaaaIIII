@@ -23,7 +23,7 @@ import { getPropManager } from '../utils/propManager';
 import { isMixamoAnimation, isGenericFKAnimation, retargetMixamoClip, getModelBoneNames } from '../utils/mixamoRetargeter';
 import { loadVmdAnimationClip, loadVmdCameraClip, MmdLegIkController } from '../utils/vmdLoader';
 import { isClothingOrNudityMorph, isFacialMorph } from '../utils/vmdRetargeter';
-import { loadPMXModel, type PMXModelResult } from '../utils/pmxLoader';
+import { loadPMXModel, invalidatePMXModelCache, type PMXModelResult } from '../utils/pmxLoader';
 import { SimplexNoise } from '../utils/perlin';
 import { AvatarInteractionLayer, type InteractionLayerRef } from './AvatarInteractionLayer';
 import { InteractionToolbar, type InteractionTool } from './InteractionToolbar';
@@ -233,6 +233,7 @@ function AvatarModelInner({
     const pristineRestPosesRef = useRef<Map<string, THREE.Quaternion>>(new Map());
     const pristineRestPositionsRef = useRef<Map<string, THREE.Vector3>>(new Map());
     const pristineWorldRestPosesRef = useRef<Map<string, THREE.Quaternion>>(new Map());
+    const vmdClipCacheRef = useRef<Map<string, THREE.AnimationClip>>(new Map());
 
     // Caches pre-computados para eliminar completamente los .traverse dentro de useFrame
     const cachedSkinnedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
@@ -244,6 +245,7 @@ function AvatarModelInner({
             pristineRestPosesRef.current.clear();
             pristineRestPositionsRef.current.clear();
             pristineWorldRestPosesRef.current.clear();
+            vmdClipCacheRef.current.clear();
 
             cachedSkinnedMeshesRef.current = [];
             cachedClothingMorphsRef.current = [];
@@ -719,20 +721,12 @@ function AvatarModelInner({
             cleanAction = 'Idle';
         }
 
-        // Si es Idle o reset, asegurar reseteo de la espina
+        // Si es Idle o reset, asegurar reseteo suave a Idle
         if (cleanAction.toLowerCase().includes('idle')) {
-            if (spineRef.current) {
-                spineRef.current.traverse((child: any) => {
-                    if (child.isBone && (child.name.toLowerCase().includes('spine') || child.name.toLowerCase().includes('chest'))) {
-                        if (child.userData.baseQuat) {
-                            child.quaternion.copy(child.userData.baseQuat);
-                        } else {
-                            child.rotation.set(0, 0, 0);
-                        }
-                    }
-                });
+            externalAnimPlayingRef.current = false;
+            if (animationManagerRef.current?.hasAnimation('Idle')) {
+                animationManagerRef.current.play('Idle', { priority: 10, loop: true, blendDuration: 0.5 });
             }
-            animationManagerRef.current?.play('Idle', { priority: 10, loop: true, blendDuration: 0.5 });
             proceduralAnimatorRef.current?.stop();
             return;
         }
@@ -2829,25 +2823,30 @@ function AvatarModelInner({
                     // Target rest-poses silenciadas (log eliminado)
 
                     if (type === 'vmd') {
-                        console.log(`🌸 Cargando y retargeteando movimiento VMD: ${name}`);
-                        const response = await fetch(url);
-                        const buffer = await response.arrayBuffer();
+                        if (vmdClipCacheRef.current.has(name)) {
+                            animations = [vmdClipCacheRef.current.get(name)!.clone()];
+                        } else {
+                            console.log(`🌸 Cargando y retargeteando movimiento VMD: ${name}`);
+                            const response = await fetch(url);
+                            const buffer = await response.arrayBuffer();
 
-                        // Recopilar mallas con morph target dictionary para enlazar tracks faciales (ojos, cejas, boca)
-                        const targetMorphMeshes: Array<{ name: string; dictionary: Record<string, number> }> = [];
-                        modelRef.current?.traverse((child: any) => {
-                            if (child.isMesh && child.morphTargetDictionary) {
-                                if (!child.name) child.name = isPMX ? 'MMD_Mesh' : ('Mesh_' + targetMorphMeshes.length);
-                                targetMorphMeshes.push({
-                                    name: child.name,
-                                    dictionary: child.morphTargetDictionary
-                                });
+                            // Recopilar mallas con morph target dictionary para enlazar tracks faciales (ojos, cejas, boca)
+                            const targetMorphMeshes: Array<{ name: string; dictionary: Record<string, number> }> = [];
+                            modelRef.current?.traverse((child: any) => {
+                                if (child.isMesh && child.morphTargetDictionary) {
+                                    if (!child.name) child.name = isPMX ? 'MMD_Mesh' : ('Mesh_' + targetMorphMeshes.length);
+                                    targetMorphMeshes.push({
+                                        name: child.name,
+                                        dictionary: child.morphTargetDictionary
+                                    });
+                                }
+                            });
+
+                            const vmdClip = await loadVmdAnimationClip(buffer, name, boneNames, targetRestPoses, targetRestPositions, isPMX, targetMorphMeshes);
+                            if (vmdClip) {
+                                vmdClipCacheRef.current.set(name, vmdClip);
+                                animations = [vmdClip.clone()];
                             }
-                        });
-
-                        const vmdClip = await loadVmdAnimationClip(buffer, name, boneNames, targetRestPoses, targetRestPositions, isPMX, targetMorphMeshes);
-                        if (vmdClip) {
-                            animations = [vmdClip];
                         }
                     }
 
@@ -3572,11 +3571,11 @@ function AvatarModelInner({
         };
 
         // --- CALCULAR PESO DE CAPA PROCEDURAL ---
-        // Si hay una animación activa (clip o procedural), reducir influencia del idle arm code
-        // En PMX no hay clips embebidos de Blender, por lo que idle siempre está activo en reposo
-        const isIdlePlaying = isPMX ? true : (animationManagerRef.current?.isPlaying('Idle') ?? true);
+        // En reposo (sin animación externa, sin gesto procedural activo, y sin acción explícita no-idle)
+        const isActionActive = !!action && action !== 'none' && action.toLowerCase() !== 'idle';
         const isProceduralPlaying = proceduralAnimatorRef.current?.isPlaying() ?? false;
-        const proceduralLayerWeight = (isIdlePlaying && !action && !isProceduralPlaying && !isExternalAnimPlaying) ? 1.0 : 0.0;
+        const isIdlePlaying = isPMX ? true : (animationManagerRef.current?.isPlaying('Idle') ?? true);
+        const proceduralLayerWeight = (!isActionActive && !isProceduralPlaying && !isExternalAnimPlaying) ? 1.0 : 0.0;
 
         // --- 1. MOVIMIENTO "VIVO" AVANZADO (Procedural Animation) ---
         if (modelRef.current && !isExternalAnimPlaying) {
@@ -3670,154 +3669,287 @@ function AvatarModelInner({
             const targetY = baseY + (inhale * breathAmplitude * moodInfluence.expressionIntensity * proceduralLayerWeight);
             modelRef.current.position.y = THREE.MathUtils.lerp(modelRef.current.position.y, targetY, 0.08);
 
-            // B. VIDA PROCEDURAL EN REPOSO (5-State Idle Cycle + Speech Gestures + Nympho Mode)
+            // B. VIDA PROCEDURAL EN REPOSO (5 Poses de Idle Orgánicas + Rotación Dinámica + Cero A-Pose)
             if (!isExternalAnimPlaying && !activeCustomPoseRef.current && proceduralLayerWeight > 0.01) {
 
                 // ── B0. ACTUALIZAR TIMER DEL CICLO IDLE ──
                 idleStateTimerRef.current += delta;
                 if (idleStateTimerRef.current >= nextIdleSwitchTimeRef.current) {
                     idleStateTimerRef.current = 0;
-                    nextIdleSwitchTimeRef.current = 10 + Math.random() * 6; // 10-16s entre transiciones
+                    nextIdleSwitchTimeRef.current = 11 + Math.random() * 6; // 11-17s por pose
                     prevIdleStateRef.current = currentIdleStateRef.current;
                     const others = IDLE_STATES.filter(s => s !== currentIdleStateRef.current);
                     const nextState = others[Math.floor(Math.random() * others.length)];
                     currentIdleStateRef.current = nextState;
-                    idleBlendRef.current = 0; // Reiniciar blend
+                    idleBlendRef.current = 0; // Inicia blend suave
 
                     // Si hay una animación de override asignada a este estado de Idle, dispararla
                     const slotId = `idle_${nextState}` as IdleSlotId;
                     checkAndTriggerSlotOverride(slotId, true);
                 }
-                // Blend suave entre estados (0 -> 1 en ~2s)
-                idleBlendRef.current = Math.min(1, idleBlendRef.current + delta / 2.0);
-                const curState = currentIdleStateRef.current;
 
-                // Nympho mode multiplier
+                // Blend suave entre estados (0 -> 1 en ~2.2s con curva sigmoide suave)
+                idleBlendRef.current = Math.min(1, idleBlendRef.current + delta / 2.2);
+                const blend = THREE.MathUtils.smoothstep(idleBlendRef.current, 0, 1);
+
+                // Nympho / Hot mode multiplier
                 const isNymphoMode = isHotMode;
                 const nymphoMult = isNymphoMode ? 2.2 : 1.0;
-
-                // Helper deg->rad inline
                 const d2r = THREE.MathUtils.degToRad;
+                const breathPitch = inhale * (isNymphoMode ? 0.045 : 0.025) * moodInfluence.expressionIntensity;
 
-                // ── B1. COLUMNA / TORSO — POSES VISIBLES Y DIFERENCIADAS ──
-                if (spineRef.current) {
-                    const spineBaseQuat = spineRef.current.userData.baseQuat;
-                    const breathPitch = inhale * (isNymphoMode ? 0.045 : 0.025) * moodInfluence.expressionIntensity;
-
+                // ── GENERADOR DE POSES DE IDLE NATURALES (CERO A-POSE) ──
+                const computeIdlePose = (stateName: IdleState) => {
                     let sP = 0, sY = 0, sR = 0;
-                    if (curState === 'relaxed') {
-                        sP = breathPitch + d2r(2);
-                        sY = Math.sin(t * 0.7) * d2r(3);
-                        sR = Math.cos(t * 0.5) * d2r(2);
-                    } else if (curState === 'weight_shift') {
-                        sP = d2r(-3) * nymphoMult;
-                        sY = Math.sin(t * 0.45) * d2r(7);
-                        sR = Math.sin(t * 0.3) * d2r(5) * nymphoMult;
-                    } else if (curState === 'cute_waist') {
-                        sP = d2r(6);
-                        sY = Math.sin(t * 0.55) * d2r(4);
-                        sR = d2r(7) * Math.sin(t * 0.25);
-                    } else if (curState === 'thoughtful') {
-                        sP = d2r(9);
-                        sY = d2r(-5) + Math.sin(t * 0.4) * d2r(2);
-                        sR = d2r(3);
-                    } else if (curState === 'curious_look') {
-                        sP = d2r(4);
-                        sY = Math.sin(t * 0.5) * d2r(4);
-                        sR = d2r(8) + Math.sin(t * 0.3) * d2r(2);
-                    }
-                    // En modo ninfómano: arqueo lumbar sensual (pecho hacia afuera, culo respingado)
-                    if (isNymphoMode) {
-                        sP -= d2r(14); // Inclinación lumbar más pronunciada
-                        sR += Math.sin(t * 1.8) * d2r(2.5); // Micro-temblor de éxtasis
-                    }
-
-                    const spDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(sP, sY, sR));
-                    if (spineBaseQuat) {
-                        spineRef.current.quaternion.slerp(spineBaseQuat.clone().multiply(spDelta), 0.05);
-                    } else {
-                        spineRef.current.quaternion.slerp(spDelta, 0.05);
-                    }
-                }
-
-                // ── B2. CADERAS — BALANCEO EXPRESIVO ──
-                if (hipsRef.current) {
-                    const hipsBaseQuat = hipsRef.current.userData.baseQuat;
                     let hY = 0, hZ = 0;
-                    if (curState === 'relaxed') {
-                        hY = Math.sin(t * 0.5) * d2r(2.5);
-                        hZ = Math.cos(t * 0.4) * d2r(2);
-                    } else if (curState === 'weight_shift') {
+                    let laP = 0, laY = 0, laR = 0;
+                    let raP = 0, raY = 0, raR = 0;
+                    let lfaP = 0, lfaY = 0, lfaR = 0;
+                    let rfaP = 0, rfaY = 0, rfaR = 0;
+                    let headP = 0, headY = 0, headR = 0;
+
+                    // Baseline de descanso que elimina la A-Pose:
+                    // En PMX los brazos en bind pose apuntan hacia afuera (~40°). Para dejarlos al costado:
+                    // Brazo izquierdo: Z negativo (-38°). Brazo derecho: Z positivo (+38°).
+                    const baseArmLZ = isPMX ? d2r(-38) : d2r(-10);
+                    const baseArmLX = isPMX ? d2r(-4) : d2r(-68);
+                    const baseArmLY = isPMX ? d2r(10) : 0;
+
+                    const baseArmRZ = isPMX ? d2r(38) : d2r(10);
+                    const baseArmRX = isPMX ? d2r(-4) : d2r(-68);
+                    const baseArmRY = isPMX ? d2r(-10) : 0;
+
+                    if (stateName === 'relaxed') {
+                        // 1. Casual Relaxed: caída natural de brazos a los lados, suave respiración
+                        sP = breathPitch + d2r(2);
+                        sY = Math.sin(t * 0.6) * d2r(2.5);
+                        sR = Math.cos(t * 0.4) * d2r(2);
+
+                        hY = Math.sin(t * 0.5) * d2r(2);
+                        hZ = Math.cos(t * 0.4) * d2r(2.5);
+
+                        laP = baseArmLX + inhale * 0.02 + d2r(2);
+                        laY = baseArmLY;
+                        laR = baseArmLZ + Math.sin(t * 0.5) * d2r(1.5);
+                        lfaR = d2r(isPMX ? -16 : 14);
+                        lfaY = d2r(isPMX ? 12 : 0);
+
+                        raP = baseArmRX + inhale * 0.02 + d2r(2);
+                        raY = baseArmRY;
+                        raR = baseArmRZ - Math.sin(t * 0.5) * d2r(1.5);
+                        rfaR = d2r(isPMX ? 16 : 14);
+                        rfaY = d2r(isPMX ? -12 : 0);
+
+                        headY = Math.sin(t * 0.4) * d2r(2);
+                        headR = Math.cos(t * 0.3) * d2r(2);
+
+                    } else if (stateName === 'cute_waist') {
+                        // 2. Cintura Cute: mano en la cadera/cintura, cadera ladeada femenina
+                        sP = d2r(5);
+                        sY = d2r(-4) + Math.sin(t * 0.4) * d2r(2);
+                        sR = d2r(5);
+
+                        hY = d2r(-4);
+                        hZ = d2r(8) + Math.sin(t * 0.35) * d2r(1.5);
+
+                        // Brazo izquierdo: codo hacia afuera, antebrazo apuntando a la cintura
+                        laP = isPMX ? d2r(12) : d2r(-35);
+                        laY = isPMX ? d2r(22) : d2r(20);
+                        laR = isPMX ? d2r(-20) : d2r(-28);
+                        lfaP = isPMX ? 0 : d2r(55);
+                        lfaR = d2r(isPMX ? -62 : -25);
+                        lfaY = d2r(isPMX ? 25 : 0);
+
+                        // Brazo derecho: descansando suavemente junto al muslo
+                        raP = baseArmRX + d2r(6);
+                        raY = baseArmRY;
+                        raR = baseArmRZ - d2r(isPMX ? 4 : 5);
+                        rfaP = isPMX ? 0 : d2r(20);
+                        rfaR = d2r(isPMX ? 22 : 18);
+                        rfaY = d2r(isPMX ? -10 : 0);
+
+                        headP = d2r(-2);
+                        headY = d2r(-3);
+                        headR = d2r(5); // Cabeza coqueta inclinada
+
+                    } else if (stateName === 'thoughtful') {
+                        // 3. Pensativa: brazos cruzados sobre el pecho/abdomen
+                        sP = d2r(8);
+                        sY = d2r(3) + Math.sin(t * 0.4) * d2r(2);
+                        sR = d2r(2);
+
+                        hY = d2r(2);
+                        hZ = d2r(-2.5);
+
+                        // Brazo izquierdo cruzado horizontalmente
+                        laP = isPMX ? d2r(25) : d2r(-25);
+                        laY = isPMX ? d2r(35) : d2r(30);
+                        laR = isPMX ? d2r(-14) : d2r(-15);
+                        lfaP = isPMX ? 0 : d2r(70);
+                        lfaR = d2r(isPMX ? -75 : -35);
+                        lfaY = d2r(isPMX ? 30 : 0);
+
+                        // Brazo derecho sosteniendo el codo / pecho
+                        raP = isPMX ? d2r(28) : d2r(-30);
+                        raY = isPMX ? d2r(-30) : d2r(-25);
+                        raR = isPMX ? d2r(14) : d2r(15);
+                        rfaP = isPMX ? 0 : d2r(65);
+                        rfaR = d2r(isPMX ? 65 : 30);
+                        rfaY = d2r(isPMX ? -25 : 0);
+
+                        headP = d2r(3);
+                        headY = d2r(4);
+                        headR = d2r(-6); // Cabeza pensativa
+
+                    } else if (stateName === 'curious_look') {
+                        // 4. Tímida / Manos al Frente: manos juntas frente al vientre, tierna y kawaii
+                        sP = d2r(4);
+                        sY = Math.sin(t * 0.45) * d2r(2.5);
+                        sR = d2r(1.5);
+
+                        hY = Math.sin(t * 0.4) * d2r(1.5);
+                        hZ = d2r(1.5);
+
+                        // Brazos convergiendo al vientre
+                        laP = isPMX ? d2r(18) : d2r(-48);
+                        laY = isPMX ? d2r(20) : d2r(15);
+                        laR = isPMX ? d2r(-28) : d2r(-15);
+                        lfaP = isPMX ? 0 : d2r(40);
+                        lfaR = d2r(isPMX ? -40 : -15);
+                        lfaY = d2r(isPMX ? 20 : 0);
+
+                        raP = isPMX ? d2r(18) : d2r(-48);
+                        raY = isPMX ? d2r(-20) : d2r(-15);
+                        raR = isPMX ? d2r(28) : d2r(15);
+                        rfaP = isPMX ? 0 : d2r(40);
+                        rfaR = d2r(isPMX ? 40 : 15);
+                        rfaY = d2r(isPMX ? -20 : 0);
+
+                        headP = d2r(2);
+                        headY = Math.sin(t * 0.4) * d2r(3);
+                        headR = d2r(5); // Inclinación dulce
+
+                    } else if (stateName === 'weight_shift') {
+                        // 5. Curva Sensual: desplazamiento de cadera pronunciado, lordosis atractiva
+                        sP = (isNymphoMode ? d2r(-15) : d2r(-6)) * nymphoMult;
+                        sY = Math.sin(t * 0.45) * d2r(5);
+                        sR = Math.sin(t * 0.3) * d2r(5) * nymphoMult;
+
                         hY = Math.sin(t * 0.4) * d2r(6) * nymphoMult;
-                        hZ = Math.sin(t * 0.3) * d2r(7) * nymphoMult;
-                    } else if (curState === 'cute_waist') {
-                        hY = Math.sin(t * 0.55) * d2r(5);
-                        hZ = Math.cos(t * 0.4) * d2r(4.5);
-                    } else if (curState === 'thoughtful') {
-                        hY = 0; hZ = d2r(3.5);
-                    } else if (curState === 'curious_look') {
-                        hY = Math.sin(t * 0.5) * d2r(4);
-                        hZ = Math.cos(t * 0.38) * d2r(3.5);
+                        hZ = (d2r(-9) + Math.sin(t * 0.3) * d2r(2)) * nymphoMult;
+
+                        // Brazo izquierdo relajado
+                        laP = baseArmLX + d2r(4);
+                        laY = baseArmLY;
+                        laR = baseArmLZ + d2r(isPMX ? -2 : 0);
+                        lfaR = d2r(isPMX ? -18 : 15);
+                        lfaY = d2r(isPMX ? 10 : 0);
+
+                        // Brazo derecho acompañando la cadera curvada
+                        raP = isPMX ? d2r(10) : d2r(-48);
+                        raY = isPMX ? d2r(-14) : 0;
+                        raR = isPMX ? d2r(24) : d2r(20);
+                        rfaP = isPMX ? 0 : d2r(40);
+                        rfaR = d2r(isPMX ? 45 : 30);
+                        rfaY = d2r(isPMX ? -18 : 0);
+
+                        headP = d2r(-3);
+                        headY = d2r(4);
+                        headR = d2r(-4);
                     }
+
                     if (isNymphoMode) {
-                        // Vaivén constante de caderas seductor
+                        sP -= d2r(12); // Arqueo lumbar adicional
+                        sR += Math.sin(t * 1.8) * d2r(2.5);
                         hY += Math.sin(t * 1.2) * d2r(4);
                         hZ += Math.cos(t * 1.0) * d2r(5);
                     }
-                    const hDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, hY, hZ));
-                    if (hipsBaseQuat) {
-                        hipsRef.current.quaternion.slerp(hipsBaseQuat.clone().multiply(hDelta), 0.05);
+
+                    return { sP, sY, sR, hY, hZ, laP, laY, laR, raP, raY, raR, lfaP, lfaY, lfaR, rfaP, rfaY, rfaR, headP, headY, headR };
+                };
+
+                // Calcular pose previa y pose actual interpoladas
+                const pPrev = computeIdlePose(prevIdleStateRef.current);
+                const pCur = computeIdlePose(currentIdleStateRef.current);
+
+                const lerp = THREE.MathUtils.lerp;
+                const sP = lerp(pPrev.sP, pCur.sP, blend);
+                const sY = lerp(pPrev.sY, pCur.sY, blend);
+                const sR = lerp(pPrev.sR, pCur.sR, blend);
+
+                const hY = lerp(pPrev.hY, pCur.hY, blend);
+                const hZ = lerp(pPrev.hZ, pCur.hZ, blend);
+
+                const laP = lerp(pPrev.laP, pCur.laP, blend);
+                const laY = lerp(pPrev.laY, pCur.laY, blend);
+                const laR = lerp(pPrev.laR, pCur.laR, blend);
+
+                const raP = lerp(pPrev.raP, pCur.raP, blend);
+                const raY = lerp(pPrev.raY, pCur.raY, blend);
+                const raR = lerp(pPrev.raR, pCur.raR, blend);
+
+                const lfaP = lerp(pPrev.lfaP, pCur.lfaP, blend);
+                const lfaY = lerp(pPrev.lfaY, pCur.lfaY, blend);
+                const lfaR = lerp(pPrev.lfaR, pCur.lfaR, blend);
+
+                const rfaP = lerp(pPrev.rfaP, pCur.rfaP, blend);
+                const rfaY = lerp(pPrev.rfaY, pCur.rfaY, blend);
+                const rfaR = lerp(pPrev.rfaR, pCur.rfaR, blend);
+
+                const headP = lerp(pPrev.headP, pCur.headP, blend);
+                const headY = lerp(pPrev.headY, pCur.headY, blend);
+                const headR = lerp(pPrev.headR, pCur.headR, blend);
+
+                // ── B1. COLUMNA / TORSO ──
+                if (spineRef.current) {
+                    const spineBaseQuat = spineRef.current.userData.baseQuat;
+                    const spDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(sP, sY, sR));
+                    if (spineBaseQuat) {
+                        spineRef.current.quaternion.slerp(spineBaseQuat.clone().multiply(spDelta), 0.06);
+                    } else {
+                        spineRef.current.quaternion.slerp(spDelta, 0.06);
                     }
                 }
 
-                // ── B3. BRAZOS + ANTEBRAZOS EN IDLE — POSES DISTINTAS Y VISIBLES ──
+                // ── B2. CADERAS ──
+                if (hipsRef.current) {
+                    const hipsBaseQuat = hipsRef.current.userData.baseQuat;
+                    const hDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, hY, hZ));
+                    if (hipsBaseQuat) {
+                        hipsRef.current.quaternion.slerp(hipsBaseQuat.clone().multiply(hDelta), 0.06);
+                    }
+                }
+
+                // ── B3. CABEZA — INCLINACIÓN Y VISTA NATURAL ──
+                if (headBoneRef.current && headBoneRef.current.userData.baseQuat) {
+                    const headDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(headP, headY, headR));
+                    headBoneRef.current.quaternion.slerp(headBoneRef.current.userData.baseQuat.clone().multiply(headDelta), 0.05);
+                }
+
+                // ── B4. BRAZOS + ANTEBRAZOS EN IDLE (POSTURAS ORGÁNICAS SIN A-POSE) ──
                 const lipSyncVolume = lipSyncRef.current ? (lipSyncRef.current.getState?.()?.intensity ?? 0) : 0;
                 const isSpeechActive = isAiSpeaking || lipSyncVolume > 0.04;
 
                 if (!isSpeechActive) {
-                    // BRAZO IZQUIERDO
+                    // Brazo Izquierdo
                     if (leftArmRef.current && leftArmRef.current.userData.baseQuat) {
-                        let lP = inhale * 0.02, lR = 0;
-                        if (curState === 'relaxed') { lP += d2r(3); lR = Math.sin(t * 0.55) * d2r(3); }
-                        if (curState === 'weight_shift') { lP += d2r(5); lR = d2r(-4); }
-                        if (curState === 'cute_waist') { lP += d2r(8); lR = d2r(-6); }
-                        if (curState === 'thoughtful') { lP += d2r(18); lR = d2r(-10); }
-                        if (curState === 'curious_look') { lP += d2r(6); lR = d2r(5); }
-                        leftArmRef.current.quaternion.slerp(leftArmRef.current.userData.baseQuat.clone().multiply(
-                            new THREE.Quaternion().setFromEuler(new THREE.Euler(lP, 0, lR))), 0.06);
+                        const laDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(laP, laY, laR));
+                        leftArmRef.current.quaternion.slerp(leftArmRef.current.userData.baseQuat.clone().multiply(laDelta), 0.07);
                     }
-                    // ANTEBRAZO IZQUIERDO
+                    // Antebrazo Izquierdo
                     if (leftForeArmRef.current && leftForeArmRef.current.userData.baseQuat) {
-                        let lfP = 0, lfR = 0;
-                        if (curState === 'relaxed') { lfP = d2r(5); lfR = Math.sin(t * 0.6) * d2r(4); }
-                        if (curState === 'weight_shift') { lfP = d2r(10); lfR = d2r(-5); }
-                        if (curState === 'cute_waist') { lfP = d2r(15); lfR = d2r(-8); }
-                        if (curState === 'thoughtful') { lfP = d2r(35); lfR = d2r(-5); }
-                        if (curState === 'curious_look') { lfP = d2r(8); lfR = d2r(6); }
-                        leftForeArmRef.current.quaternion.slerp(leftForeArmRef.current.userData.baseQuat.clone().multiply(
-                            new THREE.Quaternion().setFromEuler(new THREE.Euler(lfP, 0, lfR))), 0.06);
+                        const lfaDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(lfaP, lfaY, lfaR));
+                        leftForeArmRef.current.quaternion.slerp(leftForeArmRef.current.userData.baseQuat.clone().multiply(lfaDelta), 0.07);
                     }
-                    // BRAZO DERECHO
+                    // Brazo Derecho
                     if (rightArmRef.current && rightArmRef.current.userData.baseQuat) {
-                        let rP = inhale * 0.02, rR = 0;
-                        if (curState === 'relaxed') { rP += d2r(3); rR = -Math.sin(t * 0.55) * d2r(3); }
-                        if (curState === 'weight_shift') { rP += d2r(6); rR = d2r(-5) * nymphoMult; }
-                        if (curState === 'cute_waist') { rP += d2r(4); rR = d2r(-3); }
-                        if (curState === 'thoughtful') { rP += d2r(5); rR = d2r(-4); }
-                        if (curState === 'curious_look') { rP += d2r(8); rR = d2r(6); }
-                        rightArmRef.current.quaternion.slerp(rightArmRef.current.userData.baseQuat.clone().multiply(
-                            new THREE.Quaternion().setFromEuler(new THREE.Euler(rP, 0, rR))), 0.06);
+                        const raDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(raP, raY, raR));
+                        rightArmRef.current.quaternion.slerp(rightArmRef.current.userData.baseQuat.clone().multiply(raDelta), 0.07);
                     }
-                    // ANTEBRAZO DERECHO
+                    // Antebrazo Derecho
                     if (rightForeArmRef.current && rightForeArmRef.current.userData.baseQuat) {
-                        let rfP = 0, rfR = 0;
-                        if (curState === 'relaxed') { rfP = d2r(5); rfR = -Math.sin(t * 0.6) * d2r(4); }
-                        if (curState === 'weight_shift') { rfP = d2r(12); rfR = d2r(-7); }
-                        if (curState === 'cute_waist') { rfP = d2r(8); rfR = d2r(-5); }
-                        if (curState === 'thoughtful') { rfP = d2r(10); rfR = d2r(-6); }
-                        if (curState === 'curious_look') { rfP = d2r(18); rfR = d2r(8); }
-                        rightForeArmRef.current.quaternion.slerp(rightForeArmRef.current.userData.baseQuat.clone().multiply(
-                            new THREE.Quaternion().setFromEuler(new THREE.Euler(rfP, 0, rfR))), 0.06);
+                        const rfaDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(rfaP, rfaY, rfaR));
+                        rightForeArmRef.current.quaternion.slerp(rightForeArmRef.current.userData.baseQuat.clone().multiply(rfaDelta), 0.07);
                     }
                 }
 
@@ -5914,6 +6046,8 @@ const AvatarViewer3D: React.FC<AvatarViewer3DProps> = ({
                     canvas.addEventListener('webglcontextlost', (event) => {
                         console.error('⚠️ Contexto WebGL perdido!');
                         event.preventDefault();
+                        // Invalidar cache de modelos PMX: los buffers GPU son inválidos tras pérdida de contexto
+                        invalidatePMXModelCache();
                         console.log('🔄 Intentando recuperar...');
                     });
 

@@ -17,11 +17,26 @@ export interface PMXModelResult {
 }
 
 /**
+ * Cache en memoria de modelos ya cargados, keyed por URL.
+ * Evita re-descomprimir y re-parsear el mismo ZIP durante la sesión,
+ * que era la causa principal de la latencia de 10-14 segundos entre turnos.
+ */
+const _pmxModelCache = new Map<string, PMXModelResult>();
+
+/**
  * Carga un modelo (PMX, FBX, GLTF) desde una URL o un archivo Blob/File.
  * Si es un paquete comprimido (ZIP/RAR/7z), descomprime las texturas y crea
  * Object URLs en memoria para que el loader correspondiente las resuelva automáticamente.
+ * Los modelos se cachean en memoria por URL para evitar recargas innecesarias.
  */
 export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelResult> {
+  // Cache hit: devolver resultado previo sin re-descomprimir ni re-parsear
+  const cacheKey = typeof urlOrFile === 'string' ? urlOrFile : urlOrFile.name + '_' + urlOrFile.size;
+  const cached = _pmxModelCache.get(cacheKey);
+  if (cached) {
+    console.log(`⚡ [PMXLoader] Cache HIT para "${cacheKey.split('#').pop()}" — sin re-descomprimir`);
+    return cached;
+  }
   let fileBuffer: ArrayBuffer;
   let fileName = 'model.pmx';
   const blobUrls: string[] = [];
@@ -166,16 +181,19 @@ export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelRe
     const modelBlobUrl = fileMap.get(modelPath) || fileMap.get(modelPath.toLowerCase()) || '';
     if (!modelBlobUrl) throw new Error(`No se pudo obtener Blob URL del modelo: ${modelPath}`);
 
+    let result: PMXModelResult;
     if (modelType === 'fbx') {
       const secondaryBlobUrl = secondaryModelPath ? (fileMap.get(secondaryModelPath) || fileMap.get(secondaryModelPath.toLowerCase())) : undefined;
-      return await loadMeshWithFBXLoader(modelBlobUrl, manager, secondaryBlobUrl, fileMap);
+      result = await loadMeshWithFBXLoader(modelBlobUrl, manager, secondaryBlobUrl, fileMap);
     } else if (modelType === 'glb' || modelType === 'gltf') {
-      return await loadMeshWithGLTFLoader(modelBlobUrl, manager);
+      result = await loadMeshWithGLTFLoader(modelBlobUrl, manager);
     } else {
       const isPmd = modelType === 'pmd';
       const secondaryBlobUrl = secondaryModelPath ? (fileMap.get(secondaryModelPath) || fileMap.get(secondaryModelPath.toLowerCase())) : undefined;
-      return await loadMeshWithMMDLoader(modelBlobUrl, manager, isPmd ? 'pmd' : 'pmx', fileMap, secondaryBlobUrl);
+      result = await loadMeshWithMMDLoader(modelBlobUrl, manager, isPmd ? 'pmd' : 'pmx', fileMap, secondaryBlobUrl);
     }
+    _pmxModelCache.set(cacheKey, result);
+    return result;
   } else {
     // Archivo directo sin comprimir
     const lowerName = fileName.toLowerCase();
@@ -183,14 +201,30 @@ export async function loadPMXModel(urlOrFile: string | File): Promise<PMXModelRe
     const blobUrl = URL.createObjectURL(blob);
     blobUrls.push(blobUrl);
 
+    let result: PMXModelResult;
     if (lowerName.endsWith('.fbx')) {
-      return await loadMeshWithFBXLoader(blobUrl, manager);
+      result = await loadMeshWithFBXLoader(blobUrl, manager);
     } else if (lowerName.endsWith('.glb') || lowerName.endsWith('.gltf')) {
-      return await loadMeshWithGLTFLoader(blobUrl, manager);
+      result = await loadMeshWithGLTFLoader(blobUrl, manager);
     } else {
       const isPmd = lowerName.endsWith('.pmd');
-      return await loadMeshWithMMDLoader(blobUrl, manager, isPmd ? 'pmd' : 'pmx');
+      result = await loadMeshWithMMDLoader(blobUrl, manager, isPmd ? 'pmd' : 'pmx');
     }
+    _pmxModelCache.set(cacheKey, result);
+    return result;
+  }
+}
+
+/**
+ * Invalida el cache de un modelo específico (útil cuando se detecta pérdida de contexto WebGL).
+ */
+export function invalidatePMXModelCache(urlOrKey?: string): void {
+  if (urlOrKey) {
+    _pmxModelCache.delete(urlOrKey);
+    console.log(`🗑️ [PMXLoader] Cache invalidado para: ${urlOrKey.split('#').pop()}`);
+  } else {
+    _pmxModelCache.clear();
+    console.log('🗑️ [PMXLoader] Cache completo invalidado (recuperación de contexto WebGL)');
   }
 }
 
