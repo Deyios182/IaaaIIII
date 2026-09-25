@@ -61,6 +61,7 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.11.0",
+    "robotjs": "^0.9.1",
     "three": "^0.182.0",
     "vosk-browser": "^0.0.8",
     "ws": "^8.21.1"

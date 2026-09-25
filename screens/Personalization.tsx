@@ -14,6 +14,29 @@ const Personalization: React.FC<PersonalizationProps> = ({ avatar, updateAvatar,
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState("https://lh3.googleusercontent.com/aida-public/AB6AXuC4Jn8rnAcFABO-P2zrGS8ZYlcD5SbgirhnV_mpuZWuuzvHkIvmrfvcbGm_DsmYoNwxOmehBXxHsZa2YbiSaekzwdQkdRA6g3o1m_hiwjPitxPXNCPxlBqo_tAuuXvBrp6uUg88ssTRg2ZVnvA1OJ2po4nRA7b-hncDWHbuHCM9qonavRJ1IEFacHYGpltlLInsULe55WhUcNoPF1vF0ZusAl8r8KmuziQkwwVnYsskt3Dj_QvDFKyxr7GD78KDpcmqnoZ_VRnh1u6C");
+  const [availableModels, setAvailableModels] = useState<{name: string, url: string, img: string}[]>([]);
+
+  React.useEffect(() => {
+    const fetchModels = async () => {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI && electronAPI.getAvailableModels) {
+        const models = await electronAPI.getAvailableModels();
+        const loadedModels = models.map((m: any) => ({
+          name: m.name,
+          url: m.url,
+          img: m.url.includes('nova-avatar') ? 'https://render.readyplayer.me/676ed830026e476839352e82.png' :
+               `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%232563eb" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="11">${m.name.substring(0, 10).toUpperCase()}</text></svg>`
+        }));
+        loadedModels.push({ 
+          name: 'Cyberpunk', 
+          url: 'https://models.readyplayer.me/6185a4acfb622cf1cdc49348.glb', 
+          img: 'https://render.readyplayer.me/6185a4acfb622cf1cdc49348.png' 
+        });
+        setAvailableModels(loadedModels);
+      }
+    };
+    fetchModels();
+  }, []);
 
   const handleApplyChanges = async () => {
     // ... preserved
@@ -99,13 +122,7 @@ const Personalization: React.FC<PersonalizationProps> = ({ avatar, updateAvatar,
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              {[
-                { name: 'Nova Original', url: '/models/nova-avatar.glb', img: 'https://render.readyplayer.me/676ed830026e476839352e82.png' },
-                { name: 'Anie Chafa', url: '/models/anichafa.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23f59e0b" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="11">ANIE CHAFA</text></svg>' },
-                { name: 'Grokani', url: '/models/grokani_lipsync.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23ec4899" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="12">GROKANI</text></svg>' },
-                { name: 'Android', url: '/models/Android.glb', img: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%238b5cf6" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="white" font-size="11">ANDROID</text></svg>' },
-                { name: 'Cyberpunk', url: 'https://models.readyplayer.me/6185a4acfb622cf1cdc49348.glb', img: 'https://render.readyplayer.me/6185a4acfb622cf1cdc49348.png' },
-              ].map((preset) => (
+              {availableModels.map((preset) => (
                 <button
                   key={preset.url}
                   onClick={() => updateAvatar({ modelUrl: preset.url })}

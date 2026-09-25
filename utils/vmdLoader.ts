@@ -260,7 +260,26 @@ export async function loadVmdAnimationClip(
 ): Promise<THREE.AnimationClip | null> {
   try {
     const parser = new MMDParser();
-    const vmd = parser.parseVmd(buffer);
+    // Suprimir spam de mmd-parser que satura el main thread (ej. unknown char code 144)
+    const originalWarn = console.warn;
+    const originalLog = console.log;
+    const originalError = console.error;
+    const filterSpam = (originalFn: any) => (...args: any[]) => {
+        if (typeof args[0] === 'string' && args[0].includes('unknown char code')) return;
+        originalFn(...args);
+    };
+    console.warn = filterSpam(originalWarn);
+    console.log = filterSpam(originalLog);
+    console.error = filterSpam(originalError);
+    
+    let vmd;
+    try {
+        vmd = parser.parseVmd(buffer);
+    } finally {
+        console.warn = originalWarn;
+        console.log = originalLog;
+        console.error = originalError;
+    }
 
     if (!vmd) {
       console.warn(`⚠️ VMD "${name}" no se pudo parsear.`);

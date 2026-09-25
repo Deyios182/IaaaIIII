@@ -206,11 +206,14 @@ export const ALL_GEMINI_VOICES: VoiceOption[] = [
 interface VoiceSettingsProps {
   avatar: AvatarSettings;
   updateAvatar: (settings: Partial<AvatarSettings>) => void;
-  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude';
-  setSelectedBrain: (brain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude') => void;
+  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude' | 'local';
+  setSelectedBrain: (brain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude' | 'local') => void;
+  localApiUrl: string;
+  localModelName: string;
+  updateLocalLLM: (url: string, model: string) => void;
 }
 
-const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, selectedBrain, setSelectedBrain }) => {
+const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, selectedBrain, setSelectedBrain, localApiUrl, localModelName, updateLocalLLM }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [activeCategoryTab, setActiveCategoryTab] = useState<number | 'all'>('all');
@@ -750,6 +753,7 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {[
               { id: 'gemini-live', label: 'Gemini Live', icon: '⚡', desc: 'Voz bidireccional nativa, latencia 150ms.', badge: 'RECOMENDADO' },
+              { id: 'local', label: 'Local (Ollama/LMStudio)', icon: '🏠', desc: '100% Offline. Usa tus propios modelos.', badge: 'PRIVADO' },
               { id: 'grok', label: 'Grok 4.1 Fast', icon: '🧠', desc: 'xAI. Sin censura, razonamiento profundo.', badge: 'EXPLÍCITO' },
               { id: 'gpt4o', label: 'GPT-4o', icon: '🤖', desc: 'OpenAI. Calidad y equilibrio multimodal.', badge: 'ESTÁNDAR' },
               { id: 'claude', label: 'Claude Sonnet', icon: '💭', desc: 'Anthropic. Análisis y profundidad.', badge: 'CREATIVO' }
@@ -773,6 +777,40 @@ const VoiceSettings: React.FC<VoiceSettingsProps> = ({ avatar, updateAvatar, sel
               </button>
             ))}
           </div>
+
+          {/* Opciones de Modelo Local (Solo visible si selectedBrain === 'local') */}
+          {selectedBrain === 'local' && (
+            <div className="mt-4 p-4 rounded-xl border border-emerald-500/30 bg-emerald-950/20 space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-400 text-lg">dns</span>
+                <h3 className="text-sm font-bold text-emerald-300">Configuración de Modelo Local</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400">Endpoint API (OpenAI Compatible)</label>
+                  <input 
+                    type="text" 
+                    value={localApiUrl}
+                    onChange={(e) => updateLocalLLM(e.target.value, localModelName)}
+                    placeholder="http://localhost:11434/v1"
+                    className="w-full bg-black/50 border border-emerald-500/30 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-400"
+                  />
+                  <p className="text-[9px] text-slate-500">Ollama: http://localhost:11434/v1 | LM Studio: http://localhost:1234/v1</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400">Nombre del Modelo</label>
+                  <input 
+                    type="text" 
+                    value={localModelName}
+                    onChange={(e) => updateLocalLLM(localApiUrl, e.target.value)}
+                    placeholder="qwen2.5:7b, hermes..."
+                    className="w-full bg-black/50 border border-emerald-500/30 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-400"
+                  />
+                  <p className="text-[9px] text-slate-500">Asegúrate de tenerlo descargado y corriendo en tu servidor local.</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
       </div>

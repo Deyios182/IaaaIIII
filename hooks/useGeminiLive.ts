@@ -58,7 +58,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
             const ai = new GoogleGenAI({ apiKey: config.apiKey });
 
             const session = await ai.live.connect({
-                model: config.model || 'gemini-2.5-flash-native-audio-preview-12-2025',
+                model: config.model || 'gemini-3.1-flash-live-preview',
                 callbacks: {
                     onopen: () => {
                         console.log('✅ Gemini Live: Connected');
@@ -193,7 +193,7 @@ export function useGeminiLive(config: GeminiLiveConfig): GeminiLiveReturn {
         if (!sessionRef.current) return;
         try {
             sessionRef.current.sendRealtimeInput({
-                media: {
+                audio: {
                     data: encodeBase64(new Uint8Array(pcmData.buffer)),
                     mimeType: 'audio/pcm;rate=16000'
                 }

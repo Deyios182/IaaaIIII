@@ -23,20 +23,21 @@ export interface AIConsultResponse {
     modelUsed: string;
 }
 
-// Modelos disponibles en OpenRouter
+// Modelos disponibles en OpenRouter (Actualizado a Free Tier)
 export const AVAILABLE_MODELS = {
-    GROK_4_1_FAST: 'x-ai/grok-4.1-fast', // 🚀 Más nuevo (2025), agentic, menos censura
-    GROK_2_MINI: 'x-ai/grok-2-mini', // 💰 Más barato y rápido
-    GROK_BETA: 'x-ai/grok-beta', // Experimental, más contexto
-    GROK_2: 'x-ai/grok-2', // Flagship con mejor razonamiento
-    GROK_2_1212: 'x-ai/grok-2-1212', // Versión mejorada
-    GROK_VISION: 'x-ai/grok-vision-beta', // Con capacidad visual
-    GPT4_TURBO: 'openai/gpt-4-turbo',
+    GROK_4_1_FAST: 'google/gemma-4-31b-it:free', // 🚀 Reemplazado por Gemma 4 31B (Alta Calidad / Gratis)
+    GROK_2_MINI: 'deepseek/deepseek-v4-flash-0731:free', // 💰 Reemplazado por DeepSeek V4 Flash (Rápido / Gratis)
+    GROK_BETA: 'qwen/qwen3.8-27b:free', // Reemplazado por Qwen
+    GROK_2: 'google/gemma-4-31b-it:free', 
+    GROK_2_1212: 'google/gemma-4-26b-a4b-it:free', 
+    GROK_VISION: 'google/gemma-4-31b-it:free', 
+    GPT4_TURBO: 'openai/gpt-4-turbo', // Mantener pagos como opción si se quiere
     GPT4O: 'openai/gpt-4o',
     CLAUDE_SONNET: 'anthropic/claude-3.5-sonnet',
     CLAUDE_OPUS: 'anthropic/claude-3-opus',
     GEMINI_PRO: 'google/gemini-pro-1.5'
 } as const;
+
 
 /**
  * Consulta a un modelo de IA a través de OpenRouter para obtener una segunda opinión

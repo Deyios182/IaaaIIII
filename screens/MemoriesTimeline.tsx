@@ -22,6 +22,7 @@ interface TimelineItem {
   description: string;
   extra?: string;
   category?: string;
+  location?: string;
   completed?: boolean;
   photoData?: string;
   mediaData?: WatchedMedia;
@@ -65,7 +66,8 @@ const MemoriesTimeline: React.FC = () => {
           title: 'Conversación / Chat',
           description: m.user_message || 'Mensaje',
           extra: m.ai_response || '',
-          category: m.emotion || 'chat'
+          category: m.emotion || 'chat',
+          location: m.location
         });
       });
 
@@ -752,6 +754,12 @@ const MemoriesTimeline: React.FC = () => {
                             <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-medium">
                               "{item.description}"
                             </p>
+                            {item.location && (
+                              <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 w-fit">
+                                <span className="material-symbols-outlined text-[12px]">location_on</span>
+                                {item.location}
+                              </span>
+                            )}
                             {item.extra && (
                               <div className="bg-black/40 rounded-xl p-3 text-[11px] text-slate-400 border-l-2 border-purple-500/40 mt-2">
                                 <span className="block text-[9px] font-black text-purple-300 uppercase mb-0.5">Respuesta de Nova</span>

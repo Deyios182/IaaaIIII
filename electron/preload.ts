@@ -33,11 +33,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getInstalledGames: () => ipcRenderer.invoke('system:get-installed-games'),
 
     // 🆕 AUTOMATIZACIÓN DE TECLADO Y MOUSE Y VENTANAS
-    mouseClick: (options) => ipcRenderer.invoke('system:mouse-click', options),
+    mouseClick: (action) => ipcRenderer.invoke('system:mouse-click', action),
+    mouseClickPrecise: (coords) => ipcRenderer.invoke('system:mouse-click-precise', coords),
     mouseMove: (x, y) => ipcRenderer.invoke('system:mouse-move', { x, y }),
     typeText: (text) => ipcRenderer.invoke('system:type-text', text),
     pressKey: (key) => ipcRenderer.invoke('system:press-key', key),
     controlWindow: (action, target) => ipcRenderer.invoke('system:window-control', { action, target }),
+    findUIElement: (name) => ipcRenderer.invoke('system:find-ui-element', name),
 
     // ⚡ TERMINAL Y MACROS DE DESARROLLO / TRABAJO
     runCommand: (command, options) => ipcRenderer.invoke('system:run-command', command, options),
@@ -45,6 +47,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     captureScreenFrame: () => ipcRenderer.invoke('system:capture-screen-frame'),
     captureWindowFrame: (windowName) => ipcRenderer.invoke('system:capture-window-frame', windowName),
     listWindows: () => ipcRenderer.invoke('system:list-windows'),
+
+    // 🤖 AGENTE AUTÓNOMO — Portapapeles y Scroll
+    readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+    writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
+    mouseScroll: (options) => ipcRenderer.invoke('system:mouse-scroll', options),
 
     // Información de la plataforma
     platform: process.platform,

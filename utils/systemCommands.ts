@@ -379,8 +379,16 @@ export function getAppCommand(appName: string): string | null {
     return APP_MAP[normalized] || null;
 }
 
+export interface WindowBounds {
+    name?: string;
+    thumbW: number;
+    thumbH: number;
+    windowX?: number;
+    windowY?: number;
+}
+
 // Mapear coordenadas (soporta píxeles reales o escala 0-1000 de Gemini Visual Grounding)
-export function parseScreenCoordinates(rawX?: number | string, rawY?: number | string): { x?: number; y?: number } {
+export function parseScreenCoordinates(rawX?: number | string, rawY?: number | string, windowBounds?: WindowBounds | null): { x?: number; y?: number } {
     let numX = typeof rawX === 'number' ? rawX : (rawX !== undefined && rawX !== null && rawX !== '' ? Number(rawX) : NaN);
     let numY = typeof rawY === 'number' ? rawY : (rawY !== undefined && rawY !== null && rawY !== '' ? Number(rawY) : NaN);
 
@@ -390,7 +398,17 @@ export function parseScreenCoordinates(rawX?: number | string, rawY?: number | s
 
         // Si las coordenadas están en escala normalizada 0-1000 (Visual Grounding de Gemini)
         if (numX >= 0 && numX <= 1000 && numY >= 0 && numY <= 1000) {
-            if (screenW > 1000 || screenH > 1000) {
+            if (windowBounds) {
+                // Modo Ventana: Escalar usando las dimensiones del thumbnail y aplicar el offset de la ventana
+                // Si faltan windowX o windowY, asumimos (0,0) u otro fallback
+                const xOffset = windowBounds.windowX || 0;
+                const yOffset = windowBounds.windowY || 0;
+                // Asumimos que el thumbnail capturado cubre la ventana completa y mantiene el aspecto
+                const realX = Math.round(xOffset + (numX / 1000) * windowBounds.thumbW);
+                const realY = Math.round(yOffset + (numY / 1000) * windowBounds.thumbH);
+                return { x: realX, y: realY };
+            } else if (screenW > 1000 || screenH > 1000) {
+                // Modo Pantalla Completa: Escalar a la resolución del monitor
                 const realX = Math.round((numX / 1000) * screenW);
                 const realY = Math.round((numY / 1000) * screenH);
                 return { x: realX, y: realY };
@@ -577,7 +595,7 @@ Puedes ejecutar comandos del sistema cuando el usuario te lo pida:
 - Abrir URLs: "abre youtube.com", "ve a google.com"
 - Terminal y Scripts: "ejecuta git status", "corre npm run build", "haz un ping a google"
 - Macros de Entorno: "activa el entorno de EasyPatagonia", "modo Albion Online"
-- Controlar Mouse: "haz clic", "clic derecho", "mueve el mouse a 500, 300"
+- Controlar Mouse (Alta Precisión 1080p): Tienes capacidad de "Computer Use" avanzada. Usa coordenadas espaciales normalizadas [Y, X] de 0 a 1000 basadas en la pantalla (Ej: [500, 500] es el centro absoluto). Antes de hacer clic, el sistema interceptará el comando y le mostrará un "Puntero Láser" al usuario pidiéndole permiso. Siente la libertad de ser proactiva: si el usuario te pide "entra a mi correo", tú calcula dónde está Chrome, usa mouseClick, espera el permiso, y luego usa typeText.
 - Controlar Teclado: "escribe Hola Mundo", "presiona enter", "presiona tab", "presiona ctrl+v", "presiona win+d"
 - Controlar Ventanas: "minimiza todo", "minimiza esta ventana", "minimiza chrome", "maximiza discord", "restaura la ventana"
 
@@ -588,12 +606,13 @@ Formatos de comando rápido:
 [SYSTEM_CMD: runMacro easypatagonia]
 [SYSTEM_CMD: typeText texto a escribir]
 [SYSTEM_CMD: pressKey enter] (o tab, esc, backspace, ctrl+c, ctrl+v, win+d)
-[SYSTEM_CMD: mouseClick 500,300] (o right, double)
-[SYSTEM_CMD: mouseMove 800,600]
+[SYSTEM_CMD: mouseClick 500,300] (OJO: Coordenadas X,Y de 0 a 1000. X=horizontal, Y=vertical. Agrega right o double si se requiere, ej: [SYSTEM_CMD: mouseClick 500,300 double])
+[SYSTEM_CMD: mouseMove 800,600] (Coordenadas X,Y de 0 a 1000)
 [SYSTEM_CMD: minimizeWindow nombreApp] (o active)
 [SYSTEM_CMD: maximizeWindow nombreApp] (o active)
 [SYSTEM_CMD: minimizeAll]
 
-Cuando el usuario te pida realizar una acción física o técnica en su computadora, responde confirmando y usa la etiqueta correspondiente.
+Cuando el usuario te pida realizar una acción física o técnica en su computadora, responde confirmando brevemente (ej. "¡Claro, abriendo Chrome!") y usa la etiqueta correspondiente en tu texto. 
+El sistema gestionará la espera de permisos del usuario automáticamente, no te preocupes por quedarte "trabada" esperando.
 `;
 }

@@ -52,6 +52,51 @@ interface CustomCategory { id: string; label: string; icon: string; }
 const CUSTOM_CATS_KEY = 'nova_custom_anim_categories';
 const CUSTOM_GESTURE_CATS_KEY = 'nova_custom_gesture_categories';
 
+// --- Diccionario de traducción de huesos MMD (Japonés/Chino -> Español) ---
+const BONE_TRANSLATIONS: Record<string, string> = {
+  '髪': 'Cabello',
+  '前髪': 'Flequillo',
+  '後ろ髪': 'Cabello Trasero',
+  '横髪': 'Cabello Lateral',
+  '胸': 'Pecho',
+  '乳': 'Pecho',
+  'おっぱい': 'Pechos',
+  '尻': 'Glúteos',
+  'ケツ': 'Glúteos',
+  'お尻': 'Glúteos',
+  'スカート': 'Falda',
+  '腕': 'Brazo',
+  '足': 'Pierna',
+  '足首': 'Tobillo',
+  '袖': 'Manga',
+  '服': 'Ropa',
+  'リボン': 'Lazo',
+  'ネクタイ': 'Corbata',
+  '紐': 'Cuerda',
+  '目': 'Ojo',
+  '首': 'Cuello',
+  '頭': 'Cabeza',
+  '肩': 'Hombro',
+  '手': 'Mano',
+  '指': 'Dedo',
+  '親指': 'Pulgar',
+  '人指': 'Índice',
+  '中指': 'Medio',
+  '薬指': 'Anular',
+  '小指': 'Meñique',
+  '左': 'Izq',
+  '右': 'Der'
+};
+
+function translateBoneName(boneName: string): string {
+  let translated = boneName;
+  // Reemplazar todas las ocurrencias conocidas en el nombre
+  for (const [kanji, esp] of Object.entries(BONE_TRANSLATIONS)) {
+    translated = translated.split(kanji).join(` ${esp} `);
+  }
+  return translated.replace(/\s+/g, ' ').trim();
+}
+
 // --- Error Boundary local para evitar crasheos del motor 3D ---
 class ErrorBoundary extends React.Component<{ children: React.ReactNode, fallback: React.ReactNode }, { hasError: boolean }> {
   constructor(props: any) {
@@ -111,7 +156,7 @@ const HAIR_COLORS = [
   { color: '#1a1a1a', name: 'Negro' },
 ];
 
-type Tab = 'model' | 'stage' | 'clothing' | 'gestures' | 'animations' | 'calibration' | 'learning';
+type Tab = 'model' | 'stage' | 'clothing' | 'gestures' | 'animations' | 'calibration' | 'physics' | 'learning';
 
 const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allowWebSearch, setAllowWebSearch }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -262,6 +307,62 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
   const [stageList, setStageList] = useState<StagePreset[]>(stageStore.getAll());
   const [activeStageId, setActiveStageId] = useState<string>(stageStore.getActiveStage().id);
   const stageInputRef = useRef<HTMLInputElement>(null);
+
+  // Estados para Físicas Jiggle
+  const [physicsOverrides, setPhysicsOverrides] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const handleSelectPart = (e: any) => {
+      const { partName, boneName } = e.detail;
+      
+      // Si estamos en la pestaña de ropa, buscar por el nombre de la malla/material
+      if (partName) {
+        setClothingSearch(partName);
+      }
+      
+      // Si estamos en la pestaña de físicas, el buscador necesita el nombre del hueso (o la malla si no hay hueso)
+      const searchTarget = boneName || partName;
+      if (searchTarget) {
+        setAnimSearch(searchTarget);
+      }
+    };
+    window.addEventListener('nova-select-part', handleSelectPart);
+    return () => window.removeEventListener('nova-select-part', handleSelectPart);
+  }, []);
+
+  useEffect(() => {
+    const handleBonesLoaded = (e: any) => {
+      setModelBones(e.detail.bones);
+      import('../utils/jigglePhysics').then(mod => {
+          mod.loadPhysicsOverrides(e.detail.url);
+          setPhysicsOverrides(mod.getPhysicsOverrides());
+      });
+    };
+    window.addEventListener('nova_model_bones_loaded', handleBonesLoaded);
+    return () => window.removeEventListener('nova_model_bones_loaded', handleBonesLoaded);
+  }, []);
+
+  const handlePhysicsOverrideChange = (boneName: string, type: string) => {
+      import('../utils/jigglePhysics').then(mod => {
+          const newOverrides = { ...physicsOverrides, [boneName]: type };
+          if (type === 'auto') delete newOverrides[boneName];
+          setPhysicsOverrides(newOverrides);
+          mod.savePhysicsOverrides(avatar.modelUrl || 'default', newOverrides as any);
+      });
+  };
+
+  const handleBulkPhysicsOverride = (type: string) => {
+      const filteredBones = modelBones.filter(b => !animSearch || b.toLowerCase().includes(animSearch.toLowerCase()) || translateBoneName(b).toLowerCase().includes(animSearch.toLowerCase()));
+      import('../utils/jigglePhysics').then(mod => {
+          let newOverrides = { ...physicsOverrides };
+          filteredBones.forEach(boneName => {
+              newOverrides[boneName] = type;
+              if (type === 'auto') delete newOverrides[boneName];
+          });
+          setPhysicsOverrides(newOverrides);
+          mod.savePhysicsOverrides(avatar.modelUrl || 'default', newOverrides as any);
+      });
+  };
 
   useEffect(() => {
     const unsub = stageStore.subscribe(() => {
@@ -457,6 +558,12 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     setClothingItems([...cm.getItems()]);
   };
 
+  const handleClothingCategoryOverride = (meshName: string, category: ClothingCategory) => {
+    const cm = getClothingManager();
+    cm.setItemCategory(meshName, category);
+    setClothingItems([...cm.getItems()]);
+  };
+
   const handleToggleClothingCategory = (category: ClothingCategory, visible: boolean) => {
     const cm = getClothingManager();
     cm.setCategoryVisibility(category, visible);
@@ -602,14 +709,14 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
             }));
             setAvailableModels(mappedModels);
           } else {
-            setAvailableModels(MODEL_PRESETS);
+            setAvailableModels([]);
           }
         } catch (e) {
           console.error("Error fetching models:", e);
-          setAvailableModels(MODEL_PRESETS);
+          setAvailableModels([]);
         }
       } else {
-        setAvailableModels(MODEL_PRESETS);
+        setAvailableModels([]);
       }
     };
     fetchModels();
@@ -1060,6 +1167,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
     { id: 'clothing', label: 'Ropa', icon: 'checkroom' },
     { id: 'gestures', label: 'Gestos', icon: 'waving_hand' },
     { id: 'animations', label: 'Anims', icon: 'animation' },
+    { id: 'physics', label: 'Físicas', icon: 'science' },
     { id: 'calibration', label: 'Calibrar', icon: 'tune' },
     { id: 'learning', label: 'Aprendizaje', icon: 'psychology' },
   ];
@@ -1514,7 +1622,7 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 </div>
 
                                 {/* Textos */}
-                                <div className="truncate">
+                                <div className="truncate flex-1">
                                   <span className={`text-[10px] font-bold block truncate ${item.visible ? 'text-white' : 'text-slate-400'
                                     }`}>
                                     {item.displayName}
@@ -1525,8 +1633,25 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                                 </div>
                               </div>
 
-                              {/* Indicador visual de estado */}
-                              <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                              <div className="flex items-center gap-2 shrink-0 pl-2">
+                                <select 
+                                  value={item.category}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    handleClothingCategoryOverride(item.name, e.target.value as any);
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="bg-black/30 text-[9px] text-slate-300 border border-white/10 rounded px-1 py-0.5 outline-none hover:border-violet-500"
+                                >
+                                  <option value="outfit">Outfit</option>
+                                  <option value="underwear">Lencería</option>
+                                  <option value="shoes">Zapatos</option>
+                                  <option value="accessory">Accesorio</option>
+                                  <option value="other">Otro</option>
+                                  <option value="body">Cuerpo (Fijo)</option>
+                                </select>
+                                
+                                {/* Indicador visual de estado */}
                                 <span className={`text-[9px] px-1.5 py-0.2 rounded font-medium ${item.visible
                                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                                     : 'bg-slate-800 text-slate-500 border border-slate-700/50'
@@ -1657,7 +1782,59 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                     <span>＋</span>
                     <span>Nuevo Gesto</span>
                   </button>
-                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/30">
+                  <button
+                    onClick={() => {
+                      const allG = gestureRegistry.getAllStandard();
+                      const unassigned = allG.filter(g => !gestureOverrides.has(g.id));
+                      const assignedNames = new Set(Array.from(gestureOverrides.values()));
+                      const availableAnims = storedAnims.filter(a => !assignedNames.has(a.name));
+                      
+                      let count = 0;
+                      for (const g of unassigned) {
+                        const match = availableAnims.find(a => {
+                          if (assignedNames.has(a.name)) return false;
+                          const nameLower = a.name.toLowerCase();
+                          if (nameLower.includes(g.id)) return true;
+                          return g.aliases.some(alias => nameLower.includes(alias));
+                        });
+
+                        if (match) {
+                          gestureRegistry.setGestureOverride(g.id, match.name);
+                          assignedNames.add(match.name);
+                          count++;
+                        }
+                      }
+                      setGestureOverrides(new Map(gestureRegistry.getAllOverrides()));
+                      alert(`Se auto-asignaron inteligentemente ${count} animaciones basadas en sus nombres.`);
+                    }}
+                    className="px-2.5 py-1 rounded-lg text-[9px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow flex items-center gap-1 transition-all cursor-pointer ml-1"
+                    title="Asigna animaciones buscando coincidencias de nombres (ej: 'saludo.vmd' va a 'Saludar')"
+                  >
+                    <span>🧠</span>
+                    <span>Auto Inteligente</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const allG = gestureRegistry.getAllStandard();
+                      const unassigned = allG.filter(g => !gestureOverrides.has(g.id));
+                      const assignedNames = new Set(Array.from(gestureOverrides.values()));
+                      const availableAnims = storedAnims.filter(a => !assignedNames.has(a.name));
+                      const shuffled = [...availableAnims].sort(() => Math.random() - 0.5);
+                      let count = 0;
+                      for (let i = 0; i < unassigned.length && i < shuffled.length; i++) {
+                        gestureRegistry.setGestureOverride(unassigned[i].id, shuffled[i].name);
+                        count++;
+                      }
+                      setGestureOverrides(new Map(gestureRegistry.getAllOverrides()));
+                      alert(`Se asignaron ${count} animaciones aleatorias a los gestos vacíos.`);
+                    }}
+                    className="px-2.5 py-1 rounded-lg text-[9px] font-bold bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white shadow flex items-center gap-1 transition-all cursor-pointer ml-1"
+                    title="Asigna animaciones libres aleatoriamente a los gestos sin configuración"
+                  >
+                    <span>🎲</span>
+                    <span>Auto Random</span>
+                  </button>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/30 ml-1">
                     {gestureOverrides.size} con VMD / Pack
                   </span>
                 </div>
@@ -2752,6 +2929,85 @@ const AvatarStudio: React.FC<AvatarStudioProps> = ({ avatar, updateAvatar, allow
                 <li><span className="text-violet-400 font-bold">3.</span> Download → <strong className="text-white">FBX Binary</strong> → "Without Skin"</li>
                 <li><span className="text-violet-400 font-bold">4.</span> Arrastra el .fbx aquí ¡directo, sin convertir!</li>
               </ol>
+            </div>
+          </>)}
+
+          {/* ═══ TAB: FÍSICAS ═══ */}
+          {activeTab === 'physics' && (<>
+            <div className="bg-white/[0.02] border border-cyan-500/20 rounded-xl p-4 space-y-4 mb-4">
+              <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                <label className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-xs">science</span>
+                  Físicas Jiggle
+                </label>
+                <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/30">
+                  {Object.keys(physicsOverrides).length} overrides
+                </span>
+              </div>
+              
+              <div className="p-2 bg-cyan-500/5 border border-cyan-500/15 rounded-lg text-[9px] text-cyan-300/90 leading-relaxed">
+                Asigna el material físico a los huesos interactivos de tu modelo. Útil para arreglar mangas detectadas como pechos, o hacer que la ropa se mueva libremente. Los cambios se guardan y se aplican la próxima vez que cargues el modelo.
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Buscar hueso (ej: sleeve, breast, hair)..."
+                  value={animSearch}
+                  onChange={e => setAnimSearch(e.target.value)}
+                  className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-[10px] text-white focus:outline-none focus:border-cyan-500/50"
+                />
+                <select
+                  onChange={(e) => {
+                      if (e.target.value) {
+                          handleBulkPhysicsOverride(e.target.value);
+                          e.target.value = '';
+                      }
+                  }}
+                  className="bg-cyan-900/30 text-[9px] text-cyan-300 border border-cyan-500/30 rounded-lg px-2 py-1.5 outline-none cursor-pointer hover:bg-cyan-800/40 transition-colors"
+                >
+                  <option value="">+ Aplicar a todos...</option>
+                  <option value="auto">🌟 Auto</option>
+                  <option value="none">🛑 Fijo</option>
+                  <option value="clothing">👕 Ropa Suelta</option>
+                  <option value="breast">🍈 Pechos</option>
+                  <option value="butt">🍑 Glúteos</option>
+                  <option value="hair">💇 Cabello</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1 custom-scrollbar">
+                  {modelBones
+                      .filter(b => !animSearch || b.toLowerCase().includes(animSearch.toLowerCase()) || translateBoneName(b).toLowerCase().includes(animSearch.toLowerCase()))
+                      .map(bone => {
+                      const override = physicsOverrides[bone] || 'auto';
+                      const translatedName = translateBoneName(bone);
+                      return (
+                          <div key={bone} className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                              <span className="text-[9px] font-mono text-slate-300 truncate max-w-[120px]" title={bone}>
+                                  {translatedName}
+                              </span>
+                              <select
+                                  value={override}
+                                  onChange={(e) => handlePhysicsOverrideChange(bone, e.target.value)}
+                                  className="bg-[#1a1a24] text-[9px] text-slate-300 border border-white/10 rounded px-1 py-1 w-[120px]"
+                              >
+                                  <option value="auto">🌟 Auto</option>
+                                  <option value="none">🛑 Fijo</option>
+                                  <option value="clothing">👕 Ropa Suelta</option>
+                                  <option value="breast">🍈 Pechos</option>
+                                  <option value="butt">🍑 Glúteos</option>
+                                  <option value="hair">💇 Cabello</option>
+                              </select>
+                          </div>
+                      );
+                  })}
+                  {modelBones.length === 0 && (
+                      <div className="text-center p-4 text-[9px] text-slate-500">
+                          Carga un modelo para ver sus huesos.
+                      </div>
+                  )}
+              </div>
             </div>
           </>)}
 

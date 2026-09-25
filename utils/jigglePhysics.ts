@@ -11,7 +11,7 @@ export interface JiggleBone {
     velocity: THREE.Vector3;
     targetRotation: THREE.Euler;
     settings?: JiggleSettings; // Configuración específica por hueso
-    type: 'breast' | 'butt' | 'hair' | 'other';
+    type: 'breast' | 'butt' | 'hair' | 'clothing' | 'other';
     tipOffset: THREE.Vector3;
     baseLocalDir: THREE.Vector3;
     particleRadius: number;
@@ -63,11 +63,52 @@ export interface BodyColliderRefs {
     rightBreast?: THREE.Object3D | null;
 }
 
+export type JiggleBoneType = 'breast' | 'butt' | 'hair' | 'clothing' | 'none' | 'auto';
+
+let currentPhysicsOverrides: Record<string, JiggleBoneType> = {};
+
+function getStableId(modelId: string): string {
+    if (modelId.startsWith('blob:') && modelId.includes('#')) {
+        return decodeURIComponent(modelId.split('#')[1]);
+    } else if (modelId.includes('/')) {
+        return modelId.split('/').pop() || modelId;
+    }
+    return modelId;
+}
+
+export function loadPhysicsOverrides(modelId: string) {
+    try {
+        const stableId = getStableId(modelId);
+        const key = `nova_physics_overrides_${stableId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const saved = localStorage.getItem(key);
+        if (saved) {
+            currentPhysicsOverrides = JSON.parse(saved);
+        } else {
+            currentPhysicsOverrides = {};
+        }
+    } catch (_) {
+        currentPhysicsOverrides = {};
+    }
+}
+
+export function savePhysicsOverrides(modelId: string, overrides: Record<string, JiggleBoneType>) {
+    try {
+        currentPhysicsOverrides = overrides;
+        const stableId = getStableId(modelId);
+        const key = `nova_physics_overrides_${stableId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        localStorage.setItem(key, JSON.stringify(currentPhysicsOverrides));
+    } catch (_) {}
+}
+
+export function getPhysicsOverrides() {
+    return currentPhysicsOverrides;
+}
+
 // Configuración por defecto
 export const DEFAULT_JIGGLE_SETTINGS: JiggleSettings = {
     stiffness: 0.22,
     damping: 0.58,
-    intensity: 1.70,
+    intensity: 0.85, // Reducido desde 1.70 para evitar que los pechos (y otros) se muevan excesivamente si caen en la categoría por defecto
     gravity: 0.08,
     maxAngle: Math.PI / 6.0
 }
@@ -118,26 +159,38 @@ const STRUCTURAL_EXCLUDES = [
 
 // Configuración de rebote por tipo (User requested: Ropa 50% soft, Jiggle 80% soft, Pelo orgánico multicapa)
 export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Partial<JiggleSettings> {
+    const override = currentPhysicsOverrides[boneName];
     const n = boneName.toLowerCase();
     const raw = boneName;
 
+    // Ropa Suelta (Sleeves, Skirts) - Gravedad suave, mayor amortiguación, rebote ligero
+    if (override === 'clothing') {
+        return {
+            stiffness: 0.15,
+            damping: 0.95,
+            gravity: 0.025,
+            intensity: 0.85,
+            maxAngle: Math.PI / 4
+        };
+    }
+
     // Pechos: viaje visible, sag leve, 1–2 rebotes y se apagan
-    const isBreast = n.includes('breast') || n.includes('boob') || n.includes('oppai') ||
-        n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho');
+    const isBreast = override === 'breast' || (!override || override === 'auto') && (n.includes('breast') || n.includes('boob') || n.includes('oppai') ||
+        n.includes('bust') || n.includes('mune') || raw.includes('胸') || n.includes('pecho'));
     if (isBreast) return {
-        stiffness: 0.55,
-        damping: 0.78,
+        stiffness: 0.75, // MÁS firme (antes 0.55)
+        damping: 0.85, // MÁS amortiguación (antes 0.78)
         gravity: 0,
-        intensity: 0.90,
-        maxAngle: Math.PI / 14
+        intensity: 0.60, // MENOS intensidad general (antes 0.90)
+        maxAngle: Math.PI / 18 // MENOS ángulo máximo (antes 14)
     };
 
     // Glúteos: más firmes, menos sag, menos viaje. Nunca copiar el preset del pecho.
-    const isButt = (n.includes('butt') || n.includes('glute') || n.includes('buttock') || n.includes('buttcheek') ||
+    const isButt = override === 'butt' || (!override || override === 'auto') && ((n.includes('butt') || n.includes('glute') || n.includes('buttock') || n.includes('buttcheek') ||
         n.includes('shiri') || n.includes('siri') || n.includes('booty') || n.includes('nalga') || n.includes('trasero') ||
         raw.includes('尻') || raw.includes('臀') || raw.includes('屁股') || raw.includes('お尻') || raw.includes('ケツ') ||
         (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(n) && !n.includes('passive') && !n.includes('assault'))) &&
-        !n.includes('pelvis') && !n.includes('hip') && !n.includes('thigh') && !n.includes('leg');
+        !n.includes('pelvis') && !n.includes('hip') && !n.includes('thigh') && !n.includes('leg'));
     if (isButt) return {
         stiffness: 0.55,
         damping: 0.78,
@@ -149,11 +202,11 @@ export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Par
     if (isActualEarBone(n)) return { stiffness: 0.35, damping: 0.65, gravity: 0, maxAngle: Math.PI / 4 };
 
     // Pelo físico (japonés, chino o inglés: jerarquía realista con caída fluida, puntas elásticas y flequillo controlado)
-    const isHair = n.includes('hair') || n.includes('tail') || n.includes('ponytail') ||
+    const isHair = override === 'hair' || (!override || override === 'auto') && (n.includes('hair') || n.includes('tail') || n.includes('ponytail') ||
         n.includes('bangs') || n.includes('strand') || n.includes('kaminoke') ||
         raw.includes('髪') || raw.includes('发') || raw.includes('辮') ||
         n.includes('pigtail') || n.includes('braid') || n.includes('twintail') ||
-        n.includes('ahoge') || raw.includes('アホ毛');
+        n.includes('ahoge') || raw.includes('アホ毛'));
 
     if (isHair) {
         // 1. Flequillo / Bangs / Fringe (Pelo frontal: rebote suave sin meterse en la frente ni tapar ojos)
@@ -189,11 +242,11 @@ export function getPhysicsSettings(boneName: string, bone?: THREE.Object3D): Par
 
         if (isTip) {
             return {
-                stiffness: isLongHair ? 0.20 : 0.22,
-                damping: isLongHair ? 0.95 : 0.90, // Alto drag aerodinámico: amortigua sacudidas en pelo largo
-                gravity: isLongHair ? 0.022 : 0.012, // Peso descendente continuo para mantenerlo cayendo hacia abajo
-                intensity: isLongHair ? 0.85 : 0.95,
-                maxAngle: isLongHair ? (Math.PI / 6.0) : (Math.PI / 5.0) // ~30° máx en pelo largo (evita que se enrolle)
+                stiffness: isLongHair ? 0.25 : 0.22,
+                damping: isLongHair ? 0.96 : 0.90,
+                gravity: isLongHair ? 0.022 : 0.012,
+                intensity: isLongHair ? 0.55 : 0.95,
+                maxAngle: isLongHair ? (Math.PI / 9.0) : (Math.PI / 5.0)
             };
         }
 
@@ -232,6 +285,11 @@ function isActualEarBone(lowerName: string): boolean {
 
 // Detectar si un hueso es de tipo jiggle
 export function isJiggleBone(boneName: string): boolean {
+    const override = currentPhysicsOverrides[boneName];
+    if (override && override !== 'auto') {
+        return override !== 'none';
+    }
+
     const lower = boneName.toLowerCase();
 
     const isSafeAss = (/(?:^|[._\-\s])ass(?:$|[._\-\s\d])/i.test(lower) || lower === 'ass') &&
@@ -280,8 +338,13 @@ export function isJiggleBone(boneName: string): boolean {
     return true;
 }
 
-// Detectar tipo semántico de hueso (Pechos, Glúteos, Cabello)
-export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | 'other' {
+// Detectar tipo semántico de hueso (Pechos, Glúteos, Cabello, Ropa)
+export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | 'clothing' | 'other' {
+    const override = currentPhysicsOverrides[boneName];
+    if (override && override !== 'auto' && override !== 'none') {
+        return override;
+    }
+
     const n = boneName.toLowerCase();
     const raw = boneName;
     if (n.includes('breast') || n.includes('boob') || n.includes('oppai') || n.includes('bust') || n.includes('mune') || n.includes('pecho') || raw.includes('胸') || raw.includes('乳')) {
@@ -303,7 +366,7 @@ export function detectBoneType(boneName: string): 'breast' | 'butt' | 'hair' | '
     return 'other';
 }
 
-function computeTipOffset(bone: THREE.Object3D, type: 'breast' | 'butt' | 'hair' | 'other'): { tipOffset: THREE.Vector3, baseLocalDir: THREE.Vector3, particleRadius: number } {
+function computeTipOffset(bone: THREE.Object3D, type: 'breast' | 'butt' | 'hair' | 'clothing' | 'other'): { tipOffset: THREE.Vector3, baseLocalDir: THREE.Vector3, particleRadius: number } {
     let tipOffset = new THREE.Vector3();
     let particleRadius = 0.05;
 
@@ -838,6 +901,8 @@ export class JigglePhysicsSystem {
     // Permitir añadir huesos manualmente o actualizar configuración específica
     addBone(bone: THREE.Object3D, settingsOverrides?: Partial<JiggleSettings>): void {
         if (!bone) return;
+        if (currentPhysicsOverrides[bone.name] === 'none') return; // User explicitly disabled physics for this bone
+        
         bone.userData.isJiggleBone = true;
         // Si ya fue detectado por initialize, actualizar sus settings con la configuración personalizada
         const existing = this.bones.find(b => b.bone.uuid === bone.uuid);

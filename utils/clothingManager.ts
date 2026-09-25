@@ -245,7 +245,16 @@ export class ClothingManager {
     // Inicializar con un modelo 3D y su identificador
     initialize(model: THREE.Object3D, modelId: string = 'default'): ClothingItem[] {
         this.model = model;
-        this.currentModelId = modelId;
+        
+        // 0. Extraer un ID estable si es una URL Blob (ej: blob:http://...#MiModelo.pmx) o ruta completa
+        let stableId = modelId;
+        if (modelId.startsWith('blob:') && modelId.includes('#')) {
+            stableId = decodeURIComponent(modelId.split('#')[1]);
+        } else if (modelId.includes('/')) {
+            stableId = modelId.split('/').pop() || modelId;
+        }
+        this.currentModelId = stableId;
+        
         this.items = [];
 
         // 1. Recolectar todas las mallas
@@ -256,9 +265,29 @@ export class ClothingManager {
             }
         });
 
-        // Caso A: Modelo con múltiples mallas independientes (típico de GLTF/GLB/VRM/DAZ)
-        if (meshes.length > 1) {
-            for (const mesh of meshes) {
+        // 2. Procesar cada malla
+        for (const mesh of meshes) {
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            
+            if (materials.length > 1) {
+                // La malla tiene múltiples materiales (Típico de PMX o modelos combinados)
+                // Se ocultan los materiales individuales, no la malla entera.
+                materials.forEach((mat: any, idx: number) => {
+                    const matName = mat.name || `${mesh.name}_Mat_${idx + 1}`;
+                    const category = getCategoryForMesh(matName);
+                    if (category !== 'body') {
+                        this.items.push({
+                            name: matName,
+                            displayName: getDisplayName(matName),
+                            visible: mat.visible !== false,
+                            material: mat,
+                            category
+                        });
+                    }
+                });
+            } else {
+                // La malla tiene un solo material (Típico de GLTF/FBX modular)
+                // Se oculta la malla entera.
                 const category = getCategoryForMesh(mesh.name);
                 if (category !== 'body') {
                     this.items.push({
@@ -272,30 +301,8 @@ export class ClothingManager {
             }
         }
 
-        // Caso B: Modelo con una sola malla contenedora o mallas con sub-materiales (MMD / PMX)
-        if (this.items.length === 0 && meshes.length >= 1) {
-            for (const mesh of meshes) {
-                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                if (materials.length > 1) {
-                    materials.forEach((mat: any, idx: number) => {
-                        const matName = mat.name || `Parte_${idx + 1}`;
-                        const category = getCategoryForMesh(matName);
-                        if (category !== 'body') {
-                            this.items.push({
-                                name: matName,
-                                displayName: getDisplayName(matName),
-                                visible: mat.visible !== false,
-                                material: mat,
-                                category
-                            });
-                        }
-                    });
-                }
-            }
-        }
-
         // Restaurar estado guardado para este modelo específico
-        this.loadSettings(modelId);
+        this.loadSettings(this.currentModelId);
         this.notify();
 
         console.log(`👗 [ClothingManager] Modelo "${modelId}": ${this.items.length} prendas y accesorios configurados.`);
@@ -438,31 +445,57 @@ export class ClothingManager {
         });
     }
 
-    // Persistencia por modelo
+    // Persistencia por modelo (Visibilidad y Categorías Manuales)
     saveSettings(modelId: string): void {
         try {
-            const key = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-            const map: Record<string, boolean> = {};
+            const keyVis = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const keyCat = `nova_clothing_cat_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const visMap: Record<string, boolean> = {};
+            const catMap: Record<string, ClothingCategory> = {};
+            
             this.items.forEach(i => {
-                map[i.name] = i.visible;
+                visMap[i.name] = i.visible;
+                catMap[i.name] = i.category;
             });
-            localStorage.setItem(key, JSON.stringify(map));
+            
+            localStorage.setItem(keyVis, JSON.stringify(visMap));
+            localStorage.setItem(keyCat, JSON.stringify(catMap));
         } catch (_) {}
     }
 
     loadSettings(modelId: string): void {
         try {
-            const key = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-            const saved = localStorage.getItem(key);
-            if (saved) {
-                const map = JSON.parse(saved);
-                this.items.forEach(item => {
-                    if (map[item.name] !== undefined) {
-                        this.applyItemVisibility(item, !!map[item.name]);
-                    }
-                });
-            }
+            const keyVis = `nova_clothing_settings_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            const keyCat = `nova_clothing_cat_${modelId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+            
+            const savedVis = localStorage.getItem(keyVis);
+            const savedCat = localStorage.getItem(keyCat);
+            
+            let visMap: Record<string, boolean> = {};
+            let catMap: Record<string, ClothingCategory> = {};
+            
+            if (savedVis) visMap = JSON.parse(savedVis);
+            if (savedCat) catMap = JSON.parse(savedCat);
+            
+            this.items.forEach(item => {
+                if (visMap[item.name] !== undefined) {
+                    this.applyItemVisibility(item, !!visMap[item.name]);
+                }
+                if (catMap[item.name] !== undefined) {
+                    item.category = catMap[item.name];
+                }
+            });
         } catch (_) {}
+    }
+
+    // Cambiar la categoría manualmente (Calibración Manual)
+    setItemCategory(itemName: string, category: ClothingCategory): void {
+        const item = this.items.find(i => i.name === itemName);
+        if (item) {
+            item.category = category;
+            this.saveSettings(this.currentModelId);
+            this.notify();
+        }
     }
 
     // --- STRIP LOGIC ---

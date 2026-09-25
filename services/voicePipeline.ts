@@ -9,7 +9,7 @@ import { startContinuousRecognition } from './sttService';
 import { speakText, stopSpeech } from './ttsService';
 import { consultGrok, AVAILABLE_MODELS, type AIConsultRequest } from './grokConsultant';
 
-export type BrainModel = 'gemini-live' | 'grok' | 'gpt4o' | 'claude';
+export type BrainModel = 'gemini-live' | 'grok' | 'gpt4o' | 'claude' | 'local';
 
 export interface VoicePipelineConfig {
     brain: BrainModel;

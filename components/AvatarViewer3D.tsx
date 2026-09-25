@@ -7,7 +7,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import * as THREE from 'three';
 import { LipSyncAnalyzer } from '../utils/lipSync';
 import { emotionToFacialExpression, type Emotion } from '../utils/emotionDetector';
-import { JigglePhysicsSystem } from '../utils/jigglePhysics';
+import { JigglePhysicsSystem, loadPhysicsOverrides } from '../utils/jigglePhysics';
 import { getClothingManager } from '../utils/clothingManager';
 import { performanceMonitor } from '../utils/performanceMonitor';
 import { AnimationManager, getAnimationName } from '../utils/animationManager';
@@ -935,10 +935,36 @@ function AvatarModelInner({
             lipSyncRef.current = null;
         }
 
+        // FIX CRÍTICO: Limpiar memoria WebGL de Three.js (Geometrías, Materiales y Texturas)
+        if (modelRef.current) {
+            modelRef.current.traverse((child: any) => {
+                if (child.isMesh) {
+                    if (child.geometry) {
+                        child.geometry.dispose();
+                    }
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((mat: any) => {
+                                if (mat.map) mat.map.dispose();
+                                mat.dispose();
+                            });
+                        } else {
+                            if (child.material.map) child.material.map.dispose();
+                            child.material.dispose();
+                        }
+                    }
+                }
+            });
+            // Opcional: remover el modelo de la escena si fuera necesario
+        }
+
         console.log('✅ Recursos limpiados');
     };
 
     useEffect(() => {
+        // Declarado al nivel del useEffect para que sea visible tanto en el bloque de init como en el cleanup return
+        let proceduralHandler: ((e: Event) => void) | null = null;
+
         if (modelRef.current) {
             const SHOW_VERBOSE_LOGS = false;
             const meshes: THREE.Mesh[] = [];
@@ -2427,48 +2453,14 @@ function AvatarModelInner({
             }
 
             // 2.5 Jiggle Physics - Ropa, Cabello, Pechos, Trasero
+            loadPhysicsOverrides(modelUrl || 'default');
             jigglePhysicsRef.current = new JigglePhysicsSystem();
             jigglePhysicsRef.current.initialize(modelRef.current);
 
-            // Pechos: blandos, con peso, 2–3 rebotes
-            if (leftBreastRef.current) {
-                jigglePhysicsRef.current.addBone(leftBreastRef.current, {
-                    stiffness: 0.16,
-                    damping: 0.52,
-                    gravity: 0.14,
-                    intensity: 2.10,
-                    maxAngle: Math.PI / 5.0
-                });
-            }
-            if (rightBreastRef.current) {
-                jigglePhysicsRef.current.addBone(rightBreastRef.current, {
-                    stiffness: 0.16,
-                    damping: 0.52,
-                    gravity: 0.14,
-                    intensity: 2.10,
-                    maxAngle: Math.PI / 5.0
-                });
-            }
-
-            // Glúteos: un poco más firmes, menos sag. Nunca stiffness 1 ni gravity 0.002
-            if (leftButtRef.current && leftButtRef.current !== hipsRef.current) {
-                jigglePhysicsRef.current.addBone(leftButtRef.current, {
-                    stiffness: 0.22,
-                    damping: 0.58,
-                    gravity: 0.08,
-                    intensity: 1.70,
-                    maxAngle: Math.PI / 6.0
-                });
-            }
-            if (rightButtRef.current && rightButtRef.current !== hipsRef.current) {
-                jigglePhysicsRef.current.addBone(rightButtRef.current, {
-                    stiffness: 0.22,
-                    damping: 0.58,
-                    gravity: 0.08,
-                    intensity: 1.70,
-                    maxAngle: Math.PI / 6.0
-                });
-            }
+            // --- EVENTO PARA UI: MANDAR LISTA DE HUESOS ---
+            const allSceneBones = modelRef.current.getObjectsByProperty('isBone', true) as THREE.Bone[];
+            const boneNames = Array.from(new Set(allSceneBones.map(b => b.name))).sort();
+            window.dispatchEvent(new CustomEvent('nova_model_bones_loaded', { detail: { bones: boneNames, url: modelUrl || 'default' } }));
             // 2.6 Dynamic Body Colliders (Anti-clipping, colisión de manos y brazos con pechos/glúteos, y pelo)
             jigglePhysicsRef.current.setupBodyColliders({
                 head: headBoneRef.current,
@@ -2617,12 +2609,10 @@ function AvatarModelInner({
             // - X (+75) -> ARRIBA (Confirmado por foto)
             // CONCLUSIÓN: X es el eje Vertical. Positivo es Arriba.
             // SOLUCIÓN: Usar X NEGATIVO para bajar los brazos.
-            // INICIALIZAR GESTOR DE ROPA Y VESTIR COMPLETAMENTE POR DEFECTO (Solo para modelos base GLB/VRM)
-            if (!isPMX) {
-                const cm = getClothingManager();
-                cm.initialize(modelRef.current);
-                cm.presetFullClothed();
-            }
+            // INICIALIZAR GESTOR DE ROPA (Soporta GLB/VRM y PMX)
+            const cm = getClothingManager();
+            cm.initialize(modelRef.current, modelUrl || 'default');
+            // No llamamos a presetFullClothed() aquí, para no sobrescribir la configuración guardada
 
             const forceArmsDown = () => {
                 const armDownRot = THREE.MathUtils.degToRad(-80); // 80 grados ABAJO (Negativo)
@@ -2681,7 +2671,7 @@ function AvatarModelInner({
 
             // Registrar listener de acciones disparadas por el sistema nervioso o eventos globales
             if (typeof window !== 'undefined') {
-                const proceduralHandler = (e: Event) => {
+                proceduralHandler = (e: Event) => {
                     const { action: act } = (e as CustomEvent<{ action: string }>).detail || {};
                     if (act) executeAction(act);
                 };
@@ -2711,6 +2701,10 @@ function AvatarModelInner({
 
         // Cleanup on unmount
         return () => {
+            if (typeof window !== 'undefined' && proceduralHandler) {
+                window.removeEventListener('aiko-play-procedural', proceduralHandler);
+                window.removeEventListener('aiko-action', proceduralHandler);
+            }
             ikRecalibrateFrames.current = 30; // Resetear para que al cargar nuevo modelo se recalibre de nuevo
             ikControllerRef.current?.resetCalibration(); // Deshabilitar head tracking hasta que el nuevo Idle se estabilice
             cleanupResources();
@@ -3934,22 +3928,22 @@ function AvatarModelInner({
                     // Brazo Izquierdo
                     if (leftArmRef.current && leftArmRef.current.userData.baseQuat) {
                         const laDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(laP, laY, laR));
-                        leftArmRef.current.quaternion.slerp(leftArmRef.current.userData.baseQuat.clone().multiply(laDelta), 0.07);
+                        leftArmRef.current.quaternion.copy(leftArmRef.current.userData.baseQuat.clone().multiply(laDelta));
                     }
                     // Antebrazo Izquierdo
                     if (leftForeArmRef.current && leftForeArmRef.current.userData.baseQuat) {
                         const lfaDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(lfaP, lfaY, lfaR));
-                        leftForeArmRef.current.quaternion.slerp(leftForeArmRef.current.userData.baseQuat.clone().multiply(lfaDelta), 0.07);
+                        leftForeArmRef.current.quaternion.copy(leftForeArmRef.current.userData.baseQuat.clone().multiply(lfaDelta));
                     }
                     // Brazo Derecho
                     if (rightArmRef.current && rightArmRef.current.userData.baseQuat) {
                         const raDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(raP, raY, raR));
-                        rightArmRef.current.quaternion.slerp(rightArmRef.current.userData.baseQuat.clone().multiply(raDelta), 0.07);
+                        rightArmRef.current.quaternion.copy(rightArmRef.current.userData.baseQuat.clone().multiply(raDelta));
                     }
                     // Antebrazo Derecho
                     if (rightForeArmRef.current && rightForeArmRef.current.userData.baseQuat) {
                         const rfaDelta = new THREE.Quaternion().setFromEuler(new THREE.Euler(rfaP, rfaY, rfaR));
-                        rightForeArmRef.current.quaternion.slerp(rightForeArmRef.current.userData.baseQuat.clone().multiply(rfaDelta), 0.07);
+                        rightForeArmRef.current.quaternion.copy(rightForeArmRef.current.userData.baseQuat.clone().multiply(rfaDelta));
                     }
                 }
 
@@ -5502,6 +5496,47 @@ function AvatarModelInner({
                 object={modelData.scene}
                 scale={modelScale}
                 position={modelPosition}
+                onPointerDown={(e: any) => {
+                    let clickedName = e.object?.name;
+                    let boneName = '';
+                    if (e.face && e.object?.material) {
+                        const matIndex = e.face.materialIndex;
+                        const mats = Array.isArray(e.object.material) ? e.object.material : [e.object.material];
+                        if (mats[matIndex] && mats[matIndex].name) {
+                            clickedName = mats[matIndex].name;
+                        }
+                    }
+                    
+                    if (e.object?.isSkinnedMesh && e.face && e.object.geometry?.attributes?.skinIndex && e.object.geometry?.attributes?.skinWeight) {
+                        try {
+                            const skinIndexAttr = e.object.geometry.attributes.skinIndex;
+                            const skinWeightAttr = e.object.geometry.attributes.skinWeight;
+                            const vertexIdx = e.face.a;
+                            
+                            let maxWeight = -1;
+                            let maxBoneIndex = -1;
+                            
+                            for (let i = 0; i < skinIndexAttr.itemSize; i++) {
+                                const weight = skinWeightAttr.getComponent(vertexIdx, i);
+                                if (weight > maxWeight) {
+                                    maxWeight = weight;
+                                    maxBoneIndex = skinIndexAttr.getComponent(vertexIdx, i);
+                                }
+                            }
+                            
+                            if (maxBoneIndex !== -1 && e.object.skeleton?.bones[maxBoneIndex]) {
+                                boneName = e.object.skeleton.bones[maxBoneIndex].name;
+                            }
+                        } catch (err) {}
+                    }
+
+                    if (clickedName || boneName) {
+                        e.stopPropagation();
+                        window.dispatchEvent(new CustomEvent('nova-select-part', { 
+                            detail: { partName: clickedName, boneName: boneName } 
+                        }));
+                    }
+                }}
             />
             <AvatarInteractionLayer
                 ref={interactionLayerRef}

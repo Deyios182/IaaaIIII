@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, desktopCapturer, screen, ipcMain, shell, Notification } from 'electron';
+import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, desktopCapturer, screen, ipcMain, shell, Notification, clipboard } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec, execSync } from 'child_process';
@@ -298,6 +298,13 @@ function registerGlobalShortcuts() {
     globalShortcut.register('Alt+M', () => {
         toggleMiniMode();
     });
+
+    // 🛑 KILL-SWITCH (Botón de pánico) para abortar acciones automatizadas
+    globalShortcut.register('Ctrl+Shift+Esc', () => {
+        console.log('🚨 [KILL-SWITCH] Abortando todas las acciones automatizadas en curso!');
+        // Aquí podríamos limpiar timeouts o procesos pendientes si existieran
+        win?.webContents.send('system:action-aborted');
+    });
 }
 
 // Estado del modo mini
@@ -409,6 +416,94 @@ app.whenReady().then(() => {
             name: source.name,
             thumbnail: source.thumbnail.toDataURL(),
         }));
+    });
+
+    // Handler para Visual Grounding (Captura cruda + Cursor)
+    ipcMain.handle('system:capture-screen-frame', async () => {
+        try {
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { width, height } = primaryDisplay.size;
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width, height }
+            });
+            const primarySource = sources[0]; 
+            const imageBase64 = primarySource.thumbnail.toDataURL();
+            const cursorPoint = screen.getCursorScreenPoint();
+            return {
+                success: true,
+                imageBase64,
+                cursorX: cursorPoint.x,
+                cursorY: cursorPoint.y,
+                timestamp: Date.now()
+            };
+        } catch (e) {
+            console.error('Error capturing screen frame:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Handler para UI Automation: Buscar elemento nativo por Name
+    ipcMain.handle('system:find-ui-element', async (_event: any, elementName: string) => {
+        try {
+            console.log(`🔍 Buscando UI Element: "${elementName}"`);
+            const psScript = `
+                Add-Type -AssemblyName UIAutomationClient
+                Add-Type -AssemblyName UIAutomationTypes
+                $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
+                $condition = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::NameProperty, 
+                    "${elementName}"
+                )
+                $element = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+                if ($element -ne $null) {
+                    try {
+                        $rect = $element.Current.BoundingRectangle
+                        $result = @{
+                            Found = $true
+                            Name = $element.Current.Name
+                            X = $rect.Left + ($rect.Width / 2)
+                            Y = $rect.Top + ($rect.Height / 2)
+                        }
+                        $result | ConvertTo-Json -Compress
+                    } catch {
+                        Write-Output '{"Found": false}'
+                    }
+                } else {
+                    Write-Output '{"Found": false}'
+                }
+            `;
+            
+            return new Promise((resolve) => {
+                exec(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ';').replace(/"/g, '\\"')}"`, (error, stdout) => {
+                    try {
+                        const res = JSON.parse(stdout.trim());
+                        resolve(res);
+                    } catch (e) {
+                        resolve({ Found: false, error: 'Parse Error' });
+                    }
+                });
+            });
+        } catch (e) {
+            return { Found: false, error: String(e) };
+        }
+    });
+
+    // Handler para Visual Grounding (RobotJS)
+    ipcMain.handle('system:mouse-click-precise', async (_event: any, coords: { x: number, y: number, description?: string }) => {
+        try {
+            console.log(`🎯 [RobotJS] Click preciso en X:${coords.x}, Y:${coords.y} (${coords.description || 'N/A'})`);
+            const robot = require('robotjs');
+            // Mover el mouse a las coordenadas
+            robot.moveMouseSmooth(coords.x, coords.y);
+            // Pequeña pausa antes de hacer clic para dar feedback visual nativo
+            await new Promise(r => setTimeout(r, 100));
+            robot.mouseClick();
+            return { success: true };
+        } catch (e) {
+            console.error('❌ Error en click preciso:', e);
+            return { success: false, error: String(e) };
+        }
     });
 
     // Handlers para controles de ventana (frameless)
@@ -762,9 +857,9 @@ app.whenReady().then(() => {
             
             const files = fs.readdirSync(modelsPath);
             return files
-                .filter(file => file.toLowerCase().endsWith('.glb') || file.toLowerCase().endsWith('.vrm'))
+                .filter(file => file.toLowerCase().endsWith('.glb') || file.toLowerCase().endsWith('.vrm') || file.toLowerCase().endsWith('.pmx'))
                 .map(file => ({
-                    name: file.replace(/\.(glb|vrm)$/i, '').replace(/[-_]/g, ' '),
+                    name: file.replace(/\.(glb|vrm|pmx)$/i, '').replace(/[-_]/g, ' '),
                     url: `/models/${file}`,
                     file: file
                 }));
@@ -846,6 +941,43 @@ app.whenReady().then(() => {
             return { success: true };
         } catch (e) {
             console.error('Error en mouse-click:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // Clic de mouse preciso con corrección DPI e interpolación
+    ipcMain.handle('system:mouse-click-precise', async (_event: any, options: { x: number; y: number; description?: string }) => {
+        try {
+            const { x, y, description } = options;
+            console.log(`🎯 [ComputerUse] Clic preciso en (${x}, ${y}) - "${description || 'Sin descripción'}"`);
+
+            // PowerShell script for DPI-aware mouse click
+            const scriptLines = [
+                `Add-Type -TypeDefinition @'`,
+                `using System;`,
+                `using System.Runtime.InteropServices;`,
+                `public class WinMousePrecise {`,
+                `    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);`,
+                `    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);`,
+                `    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);`,
+                `}`,
+                `'@ -ErrorAction SilentlyContinue`,
+                // SM_CXSCREEN = 0. However, DPI scaling might require different APIs to get the true physical vs logical resolution, 
+                // but since the user is on 1080p, direct SetCursorPos should work, or we can just apply a direct SetCursorPos.
+                // We'll add a smooth move for anticheat avoidance.
+                `$targetX = ${Math.round(x)}`,
+                `$targetY = ${Math.round(y)}`,
+                `[WinMousePrecise]::SetCursorPos($targetX, $targetY)`,
+                `Start-Sleep -Milliseconds 50`,
+                `[WinMousePrecise]::mouse_event(0x0002, 0, 0, 0, 0)`,
+                `Start-Sleep -Milliseconds 20`,
+                `[WinMousePrecise]::mouse_event(0x0004, 0, 0, 0, 0)`
+            ];
+
+            runPSSync(scriptLines.join('\n'));
+            return { success: true };
+        } catch (e) {
+            console.error('Error en mouse-click-precise:', e);
             return { success: false, error: String(e) };
         }
     });
@@ -1054,14 +1186,49 @@ app.whenReady().then(() => {
     // 👁️ CAPTURA NATIVA DE PANTALLA (Visión de Copiloto de Baja Latencia)
     ipcMain.handle('system:capture-screen-frame', async (_event: any) => {
         try {
-            const sources = await desktopCapturer.getSources({
-                types: ['screen'],
-                thumbnailSize: { width: 1280, height: 720 }
-            });
-            if (sources.length > 0 && sources[0].thumbnail) {
-                const base64 = sources[0].thumbnail.toJPEG(75).toString('base64');
-                return { success: true, imageBase64: base64, mode: 'fullscreen', screenW: 1280, screenH: 720 };
+            const displays = screen.getAllDisplays();
+            
+            // Modo simple (1 monitor)
+            if (displays.length <= 1) {
+                const primaryDisplay = screen.getPrimaryDisplay();
+                const { width, height } = primaryDisplay.size;
+                const sources = await desktopCapturer.getSources({
+                    types: ['screen'],
+                    thumbnailSize: { width: width, height: height }
+                });
+                if (sources.length > 0 && sources[0].thumbnail) {
+                    const base64 = sources[0].thumbnail.toJPEG(90).toString('base64');
+                    return { success: true, imageBase64: base64, mode: 'fullscreen', screenW: width, screenH: height };
+                }
+            } else {
+                // Modo Multi-Monitor Panorámico
+                const sources = await desktopCapturer.getSources({
+                    types: ['screen'],
+                    thumbnailSize: { width: 1920, height: 1080 } 
+                });
+                
+                const screensInfo = sources.map((s, idx) => {
+                    const displayId = (s as any).display_id;
+                    let bound = displays[idx]?.bounds || { x: 0, y: 0, width: 1920, height: 1080 };
+                    
+                    if (displayId) {
+                        const d = displays.find(d => d.id.toString() === displayId.toString());
+                        if (d) bound = d.bounds;
+                    }
+
+                    return {
+                        id: s.id,
+                        name: s.name,
+                        bounds: bound,
+                        base64: s.thumbnail ? s.thumbnail.toJPEG(85).toString('base64') : null
+                    };
+                }).filter(s => s.base64);
+
+                if (screensInfo.length > 0) {
+                    return { success: true, screens: screensInfo, isMultiMonitor: true };
+                }
             }
+
             return { success: false, error: 'No se pudo capturar la pantalla.' };
         } catch (e) {
             console.error('Error en captura nativa de pantalla:', e);
@@ -1110,7 +1277,53 @@ app.whenReady().then(() => {
             const primaryDisplay = screen.getPrimaryDisplay();
             const scaleFactor = primaryDisplay.scaleFactor || 1;
 
-            console.log(`🔍 [WindowCapture] Ventana encontrada: "${match.name}" | Thumbnail: ${size.width}x${size.height}`);
+            let windowX = 0;
+            let windowY = 0;
+
+            if (process.platform === 'win32' && match.id.startsWith('window:')) {
+                const parts = match.id.split(':');
+                if (parts.length >= 2) {
+                    const hwndId = parts[1];
+                    try {
+                        const { execSync } = require('child_process');
+                        const script = `
+                            Add-Type -TypeDefinition @'
+                            using System;
+                            using System.Runtime.InteropServices;
+                            public class WinUser {
+                                [StructLayout(LayoutKind.Sequential)]
+                                public struct RECT {
+                                    public int Left;
+                                    public int Top;
+                                    public int Right;
+                                    public int Bottom;
+                                }
+                                [DllImport("user32.dll")]
+                                public static extern bool GetWindowRect(IntPtr hwnd, out RECT lpRect);
+                            }
+                            '@ -ErrorAction SilentlyContinue;
+                            $hwnd = [IntPtr]${hwndId};
+                            $rect = New-Object WinUser+RECT;
+                            [WinUser]::GetWindowRect($hwnd, [ref]$rect) | Out-Null;
+                            Write-Output "$($rect.Left),$($rect.Top)"
+                        `.replace(/\n/g, ' ');
+                        const resultStr = execSync(`powershell -NoProfile -Command "${script}"`, { encoding: 'utf8' }).trim();
+                        const coords = resultStr.split(',');
+                        if (coords.length === 2) {
+                            const x = Number(coords[0]);
+                            const y = Number(coords[1]);
+                            if (!isNaN(x) && !isNaN(y)) {
+                                windowX = x;
+                                windowY = y;
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Error obteniendo WindowRect via PowerShell:', err);
+                    }
+                }
+            }
+
+            console.log(`🔍 [WindowCapture] Ventana encontrada: "${match.name}" | Thumbnail: ${size.width}x${size.height} | Posición: (${windowX}, ${windowY})`);
 
             return {
                 success: true,
@@ -1120,10 +1333,66 @@ app.whenReady().then(() => {
                 // Dimensiones del thumbnail (para mapeo de coordenadas)
                 thumbW: size.width,
                 thumbH: size.height,
+                windowX,
+                windowY,
                 scaleFactor
             };
         } catch (e) {
             console.error('Error capturando ventana:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 📋 PORTAPAPELES — Leer y escribir (usado por Nova como agente de trabajo)
+    ipcMain.handle('clipboard:read', async () => {
+        try {
+            const text = clipboard.readText();
+            console.log(`📋 [Clipboard] Leído: "${text.slice(0, 80)}${text.length > 80 ? '...' : ''}"`)
+            return { success: true, text };
+        } catch (e) {
+            console.error('Error leyendo portapapeles:', e);
+            return { success: false, text: '', error: String(e) };
+        }
+    });
+
+    ipcMain.handle('clipboard:write', async (_event: any, text: string) => {
+        try {
+            clipboard.writeText(text || '');
+            console.log(`📋 [Clipboard] Escrito: "${(text || '').slice(0, 80)}"`);
+            return { success: true };
+        } catch (e) {
+            console.error('Error escribiendo portapapeles:', e);
+            return { success: false, error: String(e) };
+        }
+    });
+
+    // 🖱️ SCROLL DE MOUSE (MOUSEEVENTF_WHEEL nativo de Win32)
+    ipcMain.handle('system:mouse-scroll', async (_event: any, options: { x?: number; y?: number; delta?: number }) => {
+        try {
+            const delta = options?.delta ?? 3;
+            // WHEEL_DELTA estándar = 120 por «clic» de rueda
+            const wheelAmount = Math.round(delta * 120);
+            const script = [
+                `Add-Type -TypeDefinition @'`,
+                `using System;`,
+                `using System.Runtime.InteropServices;`,
+                `public class WinScroll {`,
+                `    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);`,
+                `    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);`,
+                `}`,
+                `'@ -ErrorAction SilentlyContinue`,
+                // Mover el cursor a la posición objetivo antes de hacer scroll (si se especificó)
+                ...(typeof options?.x === 'number' && typeof options?.y === 'number'
+                    ? [`[WinScroll]::SetCursorPos(${Math.round(options.x)}, ${Math.round(options.y)})`, `Start-Sleep -Milliseconds 50`]
+                    : []),
+                // 0x0800 = MOUSEEVENTF_WHEEL
+                `[WinScroll]::mouse_event(0x0800, 0, 0, ${wheelAmount}, 0)`,
+            ].join('\n');
+            runPSSync(script);
+            console.log(`🖱️ [Scroll] delta=${delta} (wheelAmount=${wheelAmount})`);
+            return { success: true };
+        } catch (e) {
+            console.error('Error en mouse-scroll:', e);
             return { success: false, error: String(e) };
         }
     });

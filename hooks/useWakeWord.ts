@@ -6,6 +6,8 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createModel } from 'vosk-browser';
+import * as IdentityEngine from '../utils/identityEngine';
+import type { SpeakerResult } from '../utils/identityEngine';
 
 export interface WakeWordConfig {
     volumeThreshold?: number;
@@ -23,6 +25,7 @@ export interface WakeWordReturn {
     isSpeechDetected: boolean;
     isSupported: boolean;
     lastDetectedPhrase: string;
+    currentSpeaker: SpeakerResult | null;  // 🆕 Speaker biométrico detectado
     startListening: () => Promise<void>;
     stopListening: () => void;
 }
@@ -53,6 +56,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
 
     const [isListening, setIsListening] = useState(false);
     const [lastDetectedPhrase, setLastDetectedPhrase] = useState('');
+    const [currentSpeaker, setCurrentSpeaker] = useState<SpeakerResult | null>(null);
 
     const callbackRef = useRef({ onActivate, onDeactivate, onTranscript, onPartialTranscript });
     useEffect(() => {
@@ -66,6 +70,11 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
 
     useEffect(() => {
         if (!enabled || !isSupported) return;
+
+        // Suscribir al IdentityEngine para actualizar estado React
+        const unsubscribeIdentity = IdentityEngine.onSpeakerChange((result) => {
+            setCurrentSpeaker(result);
+        });
 
         let recognizer: any = null;
         let audioContext: AudioContext | null = null;
@@ -179,6 +188,11 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
                                 buffer.copyToChannel(event.data, 0);
                                 recognizer.acceptWaveform(buffer);
                             }
+
+                            // 🆕 Tap lateral biométrico — fire & forget (<0.05ms)
+                            // Se ejecuta DESPUÉS de Vosk para no afectar latencia STT
+                            IdentityEngine.feedAudioFrame(event.data);
+
                         } catch {}
                     }
                 };
@@ -199,6 +213,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
         return () => {
             isUnmounted = true;
             setIsListening(false);
+            unsubscribeIdentity();
             if (processor && source) {
                 try { source.disconnect(); } catch {}
                 try { (processor as any).disconnect?.(); } catch {}
@@ -220,6 +235,7 @@ export const useWakeWord = (configOrCb: WakeWordConfig | (() => void) = {}): Wak
         isSpeechDetected: isListening,
         isSupported,
         lastDetectedPhrase,
+        currentSpeaker,
         startListening: async () => {},
         stopListening: () => {}
     };

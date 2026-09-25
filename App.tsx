@@ -52,7 +52,9 @@ const getDefaultState = (): AppState => ({
     facts: [],
     habits: []
   },
-  selectedBrain: 'gemini-live' // Default: Gemini Live (nativo, rápido)
+  selectedBrain: 'gemini-live', // Default: Gemini Live (nativo, rápido)
+  localApiUrl: 'http://localhost:11434/v1',
+  localModelName: 'qwen2.5:7b'
 });
 
 const loadState = (): AppState => {
@@ -229,7 +231,15 @@ const AppContent: React.FC<{
           <Routes>
             <Route path="/" element={<></>} /> {/* Dummy route para el path '/' */}
             <Route path="/personalize" element={<Navigate to="/avatar-studio" />} />
-            <Route path="/voice" element={<VoiceSettings avatar={state.avatar} updateAvatar={updateAvatar} selectedBrain={state.selectedBrain} setSelectedBrain={(brain) => setState(p => ({ ...p, selectedBrain: brain }))} />} />
+            <Route path="/voice" element={<VoiceSettings 
+              avatar={state.avatar} 
+              updateAvatar={updateAvatar} 
+              selectedBrain={state.selectedBrain} 
+              setSelectedBrain={(brain) => setState(p => ({ ...p, selectedBrain: brain }))} 
+              localApiUrl={state.localApiUrl || 'http://localhost:11434/v1'}
+              localModelName={state.localModelName || 'qwen2.5:7b'}
+              updateLocalLLM={(url, model) => setState(p => ({ ...p, localApiUrl: url, localModelName: model }))}
+            />} />
             <Route path="/memory" element={<MemorySettings
               retention={state.memoryRetention}
               style={state.conversationStyle}

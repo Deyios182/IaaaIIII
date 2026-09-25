@@ -56,6 +56,7 @@ export interface KnownPerson {
     voice_description?: string;
     photo_data?: string;
     face_descriptor?: number[];
+    voice_signature?: any; // JSON with avgPitch and pitchVariance
     is_unknown?: boolean;
     first_seen?: string;
     last_seen?: string;
@@ -68,6 +69,7 @@ export interface Memory {
     ai_response: string;
     emotion?: string;
     is_important?: boolean;
+    location?: string;
     timestamp?: string;
 }
 

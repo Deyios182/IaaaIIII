@@ -48,6 +48,8 @@ export interface PersonEntry {
     pitchVariance: number; // Varianza de tono (Expresividad)
     spectralCentroid?: number; // Timbre (Brillo)
   };
+  voiceEnrolledSamples?: number;    // Cantidad de muestras de enrolamiento guardadas
+  voiceConfidenceScore?: number;    // Score histórico promedio de identificación (0-1)
 }
 
 export type NovaFunctionalMode =
@@ -166,5 +168,7 @@ export interface AppState {
     habits: string[];
   };
   userFaceDescriptor?: number[]; // 🆕 Descriptor facial del usuario principal
-  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude'; // 🆕 Modelo de IA para conversaciones
+  selectedBrain: 'gemini-live' | 'grok' | 'gpt4o' | 'claude' | 'local'; // 🆕 Modelo de IA para conversaciones
+  localApiUrl?: string; // 🆕 URL del servidor local (ej: http://localhost:11434/v1)
+  localModelName?: string; // 🆕 Nombre del modelo local (ej: qwen2.5)
 }

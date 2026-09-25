@@ -181,6 +181,13 @@ export function analyzeLoadedModel(gltf: any, url: string): ModelCapabilities {
 
 // Función para escanear modelos locales en la carpeta public/models
 export async function scanLocalModels(): Promise<{ name: string; url: string; }[]> {
+    try {
+        const electronAPI = (window as any).electronAPI;
+        if (electronAPI && electronAPI.getAvailableModels) {
+            return await electronAPI.getAvailableModels();
+        }
+    } catch(e) {}
+    
     // En producción, esto vendría de un endpoint o file system
     // Por ahora, retornamos los modelos conocidos + cualquiera que el usuario haya agregado
     const defaultModels = [

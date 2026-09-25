@@ -15,6 +15,16 @@ export interface TTSConfig {
 }
 
 /**
+ * Limpia el texto de etiquetas de acción como *sonríe* o [Animacion] para que el TTS no las lea.
+ */
+function cleanTextForTTS(text: string): string {
+    if (!text) return '';
+    let cleaned = text.replace(/\*.*?\*/g, ''); // Elimina *acciones*
+    cleaned = cleaned.replace(/\[.*?\]/g, ''); // Elimina [etiquetas]
+    return cleaned.trim();
+}
+
+/**
  * Sintetiza texto a audio usando Web Speech API
  * (Gemini no tiene TTS nativo aún, usamos browser API)
  */
@@ -28,7 +38,13 @@ export async function synthesizeSpeech(
             return;
         }
 
-        const utterance = new SpeechSynthesisUtterance(text);
+        const cleanedText = cleanTextForTTS(text);
+        if (!cleanedText) {
+            resolve(new ArrayBuffer(0));
+            return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(cleanedText);
 
         // Configuración de voz
         utterance.lang = config.language || 'es-ES';
@@ -73,7 +89,10 @@ export function speakText(text: string, config: TTSConfig = {}): void {
         return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    const cleanedText = cleanTextForTTS(text);
+    if (!cleanedText) return;
+
+    const utterance = new SpeechSynthesisUtterance(cleanedText);
     utterance.lang = config.language || 'es-ES';
     utterance.pitch = config.pitch || 1.0;
     utterance.rate = config.rate || 1.0;

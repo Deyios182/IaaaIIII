@@ -3,6 +3,42 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
+import { exec } from 'child_process';
+
+function wifiPlugin() {
+  return {
+    name: 'wifi-plugin',
+    configureServer(server: any) {
+      // Endpoint para WiFi
+      server.middlewares.use('/api/wifi', (req: any, res: any) => {
+        exec('netsh wlan show interfaces', (err, stdout) => {
+          let ssid = "Wired/Unknown";
+          if (!err) {
+             const match = stdout.match(/SSID\s*:\s*(.+)/);
+             if (match) ssid = match[1].trim();
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ssid }));
+        });
+      });
+
+      // Endpoint para GPS Nativo de Windows
+      server.middlewares.use('/api/location', (req: any, res: any) => {
+        exec('powershell -ExecutionPolicy Bypass -File get_location.ps1', (err, stdout) => {
+          let lat = null;
+          let lon = null;
+          if (!err && stdout.trim() !== "Unknown" && stdout.includes(",")) {
+            const parts = stdout.trim().split(",");
+            lat = parseFloat(parts[0]);
+            lon = parseFloat(parts[1]);
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ lat, lon, raw: stdout.trim() }));
+        });
+      });
+    }
+  }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
@@ -15,6 +51,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     plugins: [
+      wifiPlugin(),
       react(),
       electron([
         {

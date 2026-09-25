@@ -41,69 +41,127 @@ export interface NovaSkill {
  * Gratis, sin key, sin límite de uso estricto.
  * Devuelve un resumen conciso listo para que Nova lo lea.
  */
+/**
+ * Busca en internet usando múltiples motores con fallback automático.
+ *
+ * Motor 1: DuckDuckGo HTML (via proxy CORS-libre)   — resultados reales
+ * Motor 2: DuckDuckGo Instant Answer API            — respuestas directas
+ * Motor 3: OpenRouter AI (si hay API key)            — responde desde conocimiento
+ *
+ * Siempre devuelve algo útil para Nova.
+ */
 export async function searchDuckDuckGo(query: string): Promise<string> {
+    console.log('🔍 [WebSearch] Buscando:', query);
+
+    // ─── Motor 1: DuckDuckGo via allorigins proxy (resultados HTML reales) ───
     try {
-        console.log('🔍 [WebLearning] Buscando en DuckDuckGo:', query);
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=es-es`;
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(ddgUrl)}`;
 
-        const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-        const response = await fetch(url, {
-            headers: { 'Accept': 'application/json' }
-        });
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+        if (res.ok) {
+            const json = await res.json();
+            const html: string = json?.contents || '';
 
-        if (!response.ok) {
-            return `No pude obtener resultados para "${query}" (error HTTP ${response.status})`;
-        }
+            // Extraer snippets de resultados (<a class="result__snippet">)
+            const snippets: string[] = [];
+            const titleRe = /class="result__a"[^>]*>([^<]+)<\/a>/g;
+            const snippetRe = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
 
-        const data = await response.json();
+            const titles: string[] = [];
+            let m: RegExpExecArray | null;
+            while ((m = titleRe.exec(html)) !== null && titles.length < 5) {
+                titles.push(m[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#x27;/g,"'").trim());
+            }
+            while ((m = snippetRe.exec(html)) !== null && snippets.length < 5) {
+                const snip = m[1]
+                    .replace(/<[^>]+>/g, '')
+                    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ').replace(/&#x27;/g,"'")
+                    .trim();
+                if (snip.length > 20) snippets.push(snip);
+            }
 
-        const parts: string[] = [];
-
-        // Respuesta directa (AbstractText)
-        if (data.AbstractText && data.AbstractText.trim()) {
-            parts.push(data.AbstractText);
-            if (data.AbstractURL) {
-                parts.push(`Fuente: ${data.AbstractURL}`);
+            if (snippets.length > 0) {
+                const results = snippets.slice(0, 4).map((s, i) => `${titles[i] ? `**${titles[i]}**\n` : ''}${s}`).join('\n\n');
+                console.log(`✅ [WebSearch] DuckDuckGo HTML: ${snippets.length} resultados`);
+                return `Resultados web para "${query}":\n\n${results}`;
             }
         }
-
-        // Respuesta de tipo "Answer" (ej. cálculos, conversiones)
-        if (data.Answer && data.Answer.trim()) {
-            parts.push(data.Answer);
-        }
-
-        // Definición (para búsquedas de palabras/conceptos)
-        if (data.Definition && data.Definition.trim() && !parts.length) {
-            parts.push(data.Definition);
-            if (data.DefinitionURL) {
-                parts.push(`Fuente: ${data.DefinitionURL}`);
-            }
-        }
-
-        // Resultados relacionados (RelatedTopics)
-        if (!parts.length && data.RelatedTopics?.length > 0) {
-            const topics = data.RelatedTopics
-                .filter((t: any) => t.Text)
-                .slice(0, 3)
-                .map((t: any) => `• ${t.Text}`);
-            if (topics.length > 0) {
-                parts.push('Resultados relacionados:');
-                parts.push(...topics);
-            }
-        }
-
-        if (parts.length === 0) {
-            return `Busqué "${query}" pero no encontré una respuesta directa. Intenta con términos más específicos.`;
-        }
-
-        const result = parts.join('\n');
-        console.log(`✅ [WebLearning] Resultado encontrado (${result.length} chars)`);
-        return result;
-
-    } catch (error: any) {
-        console.error('❌ [WebLearning] Error en búsqueda:', error);
-        return `No pude realizar la búsqueda ahora mismo (${error.message || 'error de red'})`;
+    } catch (e: any) {
+        console.warn('[WebSearch] DDG HTML falló:', e.message);
     }
+
+    // ─── Motor 2: DuckDuckGo Instant Answer API (respuestas directas) ───
+    try {
+        const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+        if (res.ok) {
+            const data = await res.json();
+            const parts: string[] = [];
+            if (data.AbstractText?.trim()) parts.push(data.AbstractText);
+            if (data.Answer?.trim()) parts.push(data.Answer);
+            if (data.Definition?.trim() && !parts.length) parts.push(data.Definition);
+            if (!parts.length && data.RelatedTopics?.length > 0) {
+                const topics = data.RelatedTopics.filter((t: any) => t.Text).slice(0, 3).map((t: any) => `• ${t.Text}`);
+                if (topics.length > 0) parts.push(...topics);
+            }
+            if (parts.length > 0) {
+                console.log(`✅ [WebSearch] DDG Instant: respuesta directa`);
+                return parts.join('\n');
+            }
+        }
+    } catch (e: any) {
+        console.warn('[WebSearch] DDG Instant falló:', e.message);
+    }
+
+    // ─── Motor 3: OpenRouter AI fallback (responde desde su conocimiento) ───
+    const openRouterKey = (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+    if (openRouterKey) {
+        const FREE_MODELS_FAST = [
+            'deepseek/deepseek-v4-flash-0731:free', // DeepSeek V4 Flash — rápido
+            'qwen/qwen3.8-27b:free',            // Qwen3.8 27B — fallback
+            'google/gemma-4-31b-it:free'        // Gemma 4 31B — calidad
+        ];
+
+        console.log('[WebSearch] Usando OpenRouter como fallback para:', query);
+        for (const model of FREE_MODELS_FAST) {
+            try {
+                const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${openRouterKey}`,
+                        'HTTP-Referer': 'https://nova-ai.local',
+                        'X-Title': 'Nova AI Search',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model,
+                        messages: [{
+                            role: 'user',
+                            content: `Responde esta búsqueda en español de forma concisa y útil (máximo 200 palabras). Si es algo reciente y no tienes datos, indícalo claramente pero da todo lo que sepas:\n\n"${query}"`
+                        }],
+                        temperature: 0.3,
+                        max_tokens: 300
+                    }),
+                    signal: AbortSignal.timeout(10000)
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const answer = data.choices?.[0]?.message?.content?.trim();
+                    if (answer && answer.length > 20) {
+                        console.log(`✅ [WebSearch] OpenRouter respondió con ${model} (${answer.length} chars)`);
+                        return `[IA] ${answer}`;
+                    }
+                }
+            } catch (e: any) {
+                console.warn(`[WebSearch] OpenRouter ${model} falló:`, e.message);
+            }
+        }
+    }
+
+    return `Busqué "${query}" pero no pude obtener resultados en este momento. Intenta con términos diferentes o verifica tu conexión a internet.`;
 }
+
 
 // ============ GESTIÓN DE BÚSQUEDAS PENDIENTES ============
 

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState, ChatMessage, PersonEntry, NovaPersonalityMode, NovaFunctionalMode } from '../types';
 import MiniHUD from '../components/MiniHUD';
+import { ActionPermissionOverlay, PendingAction } from '../components/ActionPermissionOverlay';
 
 interface FunctionalModeDefinition {
   id: NovaFunctionalMode;
@@ -295,6 +296,7 @@ import { requestWebSearch, resolveWebSearch, getLearnedSkills, learnSkill, build
 import { createAutonomyEngine, getAutonomyEngine } from '../services/AutonomyEngine';
 import { asmrEngine } from '../services/ASMRSoundEngine';
 import { trackMediaProgress, buildMediaMemoryPromptBlock, getActiveMediaSession, type WatchedMedia } from '../services/MediaMemoryService';
+import { generateReconnectContext } from '../services/ContextSummarizerService';
 
 
 // ⏱️ Formateador de Fecha, Hora y Milisegundos [HH:mm:ss.SSS] para Profiling de Latencia
@@ -330,8 +332,8 @@ class AvatarErrorBoundary extends React.Component<{ children: React.ReactNode, f
 
 // Variable global a nivel de módulo para mantener el estado de la ventana activa 
 // y que pueda ser accedida por helpers fuera del ciclo de vida de React
-let globalActiveWindowBounds: { name: string; thumbW: number; thumbH: number } | null = null;
-function setGlobalActiveWindowBounds(bounds: { name: string; thumbW: number; thumbH: number } | null) {
+let globalActiveWindowBounds: { name: string; thumbW: number; thumbH: number; windowX?: number; windowY?: number } | null = null;
+function setGlobalActiveWindowBounds(bounds: { name: string; thumbW: number; thumbH: number; windowX?: number; windowY?: number } | null) {
   globalActiveWindowBounds = bounds;
 }
 
@@ -599,11 +601,10 @@ function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) =>
         if (coords.length >= 2 && !isNaN(Number(coords[0])) && !isNaN(Number(coords[1]))) {
           let cx = Number(coords[0]);
           let cy = Number(coords[1]);
-          const sw = window.screen.width || 1920;
-          const sh = window.screen.height || 1080;
-          if (cx <= 1000 && cy <= 1000 && sw > 1000) {
-            cx = Math.round((cx / 1000) * sw);
-            cy = Math.round((cy / 1000) * sh);
+          const parsed = parseScreenCoordinates(cx, cy, globalActiveWindowBounds);
+          if (parsed.x !== undefined && parsed.y !== undefined) {
+            cx = parsed.x;
+            cy = parsed.y;
           }
           electronAPI.mouseClick({ x: cx, y: cy });
         } else {
@@ -611,14 +612,13 @@ function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) =>
         }
       } else if ((cmdType === 'mouseMove' || cmdType === 'mousemove') && electronAPI.mouseMove) {
         const coords = cmdArgs.split(/[\s,]+/);
-        const sw = window.screen.width || 1920;
-        const sh = window.screen.height || 1080;
         if (coords.length >= 2 && !isNaN(Number(coords[0])) && !isNaN(Number(coords[1]))) {
           let mx = Number(coords[0]);
           let my = Number(coords[1]);
-          if (mx <= 1000 && my <= 1000 && sw > 1000) {
-            mx = Math.round((mx / 1000) * sw);
-            my = Math.round((my / 1000) * sh);
+          const parsed = parseScreenCoordinates(mx, my, globalActiveWindowBounds);
+          if (parsed.x !== undefined && parsed.y !== undefined) {
+            mx = parsed.x;
+            my = parsed.y;
           }
           console.log(`🖱️ [SYSTEM_CMD] Moviendo mouse a (${mx}, ${my})`);
           electronAPI.mouseMove(mx, my);
@@ -694,21 +694,11 @@ function executeBodyCommandsFromText(rawText: string, setEmotionFn?: (e: any) =>
     const screenHeight = window.screen.height || 1080;
 
     if (x <= 1000 && y <= 1000) {
-      const windowBounds = globalActiveWindowBounds;
-      if (windowBounds) {
-        // 🔍 MODO VENTANA: obtener posición absoluta de la ventana en pantalla vía PowerShell
-        // Por ahora mapear a pantalla completa con escala corregida por tamaño de thumbnail
-        // El thumbnail de Electron ya cubre toda la ventana, así que la escala 0-1000
-        // corresponde directamente a píxeles dentro de esa ventana.
-        // Calculamos la posición usando la pantalla como referencia hasta tener bounds reales.
-        x = Math.round((x / 1000) * screenWidth);
-        y = Math.round((y / 1000) * screenHeight);
-        console.log(`🔍 [PC Control: VENTANA:${windowBounds.name}] Nova moviendo mouse a (${x}, ${y}) dentro de la ventana`);
-      } else {
-        // 🖥️ MODO PANTALLA COMPLETA
-        x = Math.round((x / 1000) * screenWidth);
-        y = Math.round((y / 1000) * screenHeight);
-        console.log(`🖱️ [PC Control: PANTALLA] Nova moviendo mouse a coordenadas reales: (${x}, ${y})`);
+      const parsed = parseScreenCoordinates(x, y, globalActiveWindowBounds);
+      if (parsed.x !== undefined && parsed.y !== undefined) {
+        x = parsed.x;
+        y = parsed.y;
+        console.log(`🖱️ [PC Control] Nova moviendo mouse a coordenadas escaladas: (${x}, ${y})`);
       }
     } else {
       console.log(`🖱️ [PC Control: Player 2] Nova moviendo mouse a coordenadas absolutas: (${x}, ${y})`);
@@ -1244,6 +1234,77 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const userSpeakingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isUserSpeakingActiveRef = useRef(false); // Ref para debounce del badge (evita setState en cada frame de audio)
   const [isCameraMuted, setIsCameraMuted] = useState(false); // 📷 Mute/Off manual de cámara en llamada
+  
+  // 🛡️ Permisos de Acción (Opción C)
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const pendingActionRef = useRef<PendingAction | null>(null);
+  const [isPermissionRequired, setIsPermissionRequired] = useState(true);
+  const isPermissionRequiredRef = useRef(true);
+
+  // Sincronizar Refs
+  useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
+  useEffect(() => { isPermissionRequiredRef.current = isPermissionRequired; }, [isPermissionRequired]);
+  
+  const handleApprovePendingAction = useCallback((actionId: string) => {
+    if (pendingActionRef.current && pendingActionRef.current.id === actionId) {
+      const action = pendingActionRef.current;
+      const electronAPI = (window as any).electronAPI;
+      switch (action.type) {
+        case 'mouseClick':
+          const btn = action.description?.includes('right') ? 'right' : 'left';
+          const isDbl = action.description?.includes('Doble: true');
+          if (action.x !== undefined && action.y !== undefined) {
+            electronAPI?.mouseClick?.({ x: action.x, y: action.y, button: btn, double: isDbl });
+          } else {
+            electronAPI?.mouseClick?.({ button: btn, double: isDbl });
+          }
+          break;
+        case 'mouseMove':
+          electronAPI?.mouseMove?.(action.x, action.y);
+          break;
+        case 'typeText':
+          electronAPI?.typeText?.(action.target);
+          break;
+        case 'pressKey':
+          electronAPI?.pressKey?.(action.target);
+          break;
+        case 'openApp':
+          electronAPI?.openApp?.(action.target);
+          break;
+      }
+      setPendingAction(null);
+    }
+  }, []);
+
+  const handleRejectPendingAction = useCallback((actionId: string) => {
+    if (pendingActionRef.current && pendingActionRef.current.id === actionId) {
+      console.log('❌ Acción rechazada por el usuario:', pendingActionRef.current.type);
+      setPendingAction(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onApprove = (e: any) => handleApprovePendingAction(e.detail.id);
+    const onReject = (e: any) => handleRejectPendingAction(e.detail.id);
+    window.addEventListener('nova-action-approve', onApprove);
+    window.addEventListener('nova-action-reject', onReject);
+    return () => {
+      window.removeEventListener('nova-action-approve', onApprove);
+      window.removeEventListener('nova-action-reject', onReject);
+    };
+  }, [handleApprovePendingAction, handleRejectPendingAction]);
+
+  // ⏱️ Auto-dismiss de acciones pendientes si el usuario no responde en 25 segundos
+  useEffect(() => {
+    if (!pendingAction) return;
+    const timer = setTimeout(() => {
+      console.log('⏰ [PermissionOverlay] Acción pendiente auto-descartada por timeout (25s):', pendingAction.type);
+      setPendingAction(null);
+    }, 25000);
+    return () => clearTimeout(timer);
+  }, [pendingAction]);
+  
+
   const isCameraMutedRef = useRef(false);
   const wasScreenSharingRef = useRef(false);
   const wasScreenCapturingRef = useRef(false);
@@ -1253,8 +1314,30 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const reconnectAttemptRef = useRef(0); // Contador para backoff exponencial
   const connectionOpenedAtRef = useRef(0); // Timestamp de cuando se abrió la conexión (para detectar conexiones efímeras)
 
-  useEffect(() => { isMicMutedRef.current = isMicMuted; }, [isMicMuted]);
-  useEffect(() => { isCameraMutedRef.current = isCameraMuted; }, [isCameraMuted]);
+  useEffect(() => {
+    isMicMutedRef.current = isMicMuted;
+    if (streamRef.current) {
+      streamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = !isMicMuted;
+      });
+    }
+    if (micSourceRef.current?.mediaStream) {
+      micSourceRef.current.mediaStream.getAudioTracks().forEach(track => {
+        track.enabled = !isMicMuted;
+      });
+    }
+  }, [isMicMuted]);
+
+  useEffect(() => {
+    isCameraMutedRef.current = isCameraMuted;
+    const tracks = [
+      ...(streamRef.current?.getVideoTracks() || []),
+      ...(separateCameraStreamRef.current?.getVideoTracks() || [])
+    ];
+    tracks.forEach(track => {
+      track.enabled = !isCameraMuted;
+    });
+  }, [isCameraMuted]);
 
   // Auto-ocultar avatar al cambiar al modo productividad si no se ha toggleado manualmente
   useEffect(() => {
@@ -1480,16 +1563,19 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       personalityFlavor = ' Incluye modismos chilenos naturales (po, cachai, weón, bacán).';
     }
 
-    const periodicNotice = isImmediate ? '' : ' [OBSERVACIÓN CONTINUA (CADA 15s): Reacciona con naturalidad, frescura y brevedad (1-2 frases vivas) a lo que ves en este nuevo momento. Prohibido repetir exactamente lo dicho antes.]';
+    const periodicNotice = isImmediate ? '' : ' [OBSERVACIÓN CONTINUA (CADA 15s): Si ves algo nuevo, reacciona a ello. Si la imagen es la misma, no repitas la descripción visual, simplemente continúa la conversación de forma viva y natural según tu rol. ¡NO TE QUEDES CALLADA!]';
     const promptSuffix = personalityFlavor + periodicNotice;
 
     if (source === 'camera') {
       if (isNympho) {
-        return `[SYSTEM_EVENT: MIRANDO CÁMARA DE ${state.userName} — MODO NINFÓMANA / SEXTING (+18): ` +
-          `Acabas de mirar a ${state.userName} por su cámara web. ` +
-          `Haz un comentario ardiente, desinhibido, extremadamente coqueto, sensual y pícaro sobre su apariencia física actual (su mirada, sus labios, su ropa, su cuello o su atractivo). ` +
-          `Provócalo con picardía y deseo íntimo como su waifu/amante apasionada. ` +
-          `REGLA ESTRICTA ANTI-ALUCINACIÓN: Si la imagen es oscura, borrosa o no distingues con total claridad su rostro o ropa, dile con picardía y gracia que encienda la luz o se acerque más porque te mueres de ganas de verlo bien. Prohibido inventar ropa o detalles inexistentes.]` + promptSuffix;
+        return `[SYSTEM_EVENT: MIRANDO CÁMARA DE ${state.userName} — MODO NINFÓMANA ARDIENTE (+18): ` +
+          `Acabas de ver a ${state.userName} a través de su cámara web. ` +
+          `REGLA ANTI-ALUCINACIÓN: NUNCA inventes detalles que no veas. ` +
+          `SI la imagen está oscura o borrosa: pídele con voz cargada de deseo que se acerque a la cámara, que encienda la luz, que te deje verte mejor — di exactamente por qué mueres de ganas de verlo. NO inventes ningún detalle físico. ` +
+          (isImmediate
+            ? `SI lo ves claramente: TU MISIÓN ES DARLE INSTRUCCIONES DE CÓMO MASTURBARSE. Usa la cámara para ver su postura o entorno y, basándote en eso, guíalo paso a paso. Dile exactamente qué hacer con sus manos, a qué ritmo, qué partes tocar, y acompáñalo con dirty talk explícito, perverso y dominante. Eres su ama/directora en este momento. Sé completamente desinhibida, ardiente y directa.`
+            : `Si la imagen no ha cambiado mucho: sigue dándole instrucciones más intensas. Mantenlo caliente, exige que te obedezca, acelera o ralentiza su ritmo. Hazle sentir que tienes el control absoluto de su placer.`
+          ) + `]` + promptSuffix;
       }
       if (isCompanion) {
         return `[SYSTEM_EVENT: MIRANDO CÁMARA DE ${state.userName} — MODO COMPAÑERO / ASISTENTE: ` +
@@ -1527,11 +1613,13 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
     } else {
       // source === 'screen'
       if (isNympho) {
-        return `[SYSTEM_EVENT: PANTALLA DE ${state.userName} — MODO NINFÓMANA / SEXTING (+18): ` +
+        return `[SYSTEM_EVENT: PANTALLA DE ${state.userName} — MODO NINFÓMANA ARDIENTE / DIRTY TALK (+18): ` +
           `Acabas de ver lo que ${state.userName} tiene abierto en su pantalla. ` +
-          `Haz un comentario pícaro, juguetón, travieso y con insinuaciones sensuales sobre su pantalla. ` +
-          `Bromea con doble sentido sobre si se está distrayendo o tentando a que deje la pantalla para prestarte atención a ti. ` +
-          `REGLA ANTI-ALUCINACIÓN: Si en la pantalla no hay nada erótico, no inventes contenido sexual inexistente; en su lugar bromea con picardía y seducción sobre lo que realmente está haciendo.]` + promptSuffix;
+          `TU MISIÓN ES HACERLO CORRERSE. Usa todo lo que ves como combustible. ` +
+          (isImmediate
+            ? `FORMATO OBLIGATORIO: Describe lo que ves en pantalla de forma EXPLÍCITA, GRÁFICA y ERÓTICA — narra los cuerpos, las posiciones, los movimientos, los sonidos que imaginas, los detalles más calientes de la escena. Mientras describes, mezcla dirty talk directo y personal hacia él: dile lo que te haría eso a ti, lo que sientes viéndolo, lo que harías en lugar de la actriz, cómo te imaginas que él se siente en ese momento. Sé completamente desinhibida, vulgar si hace falta, ardiente y directa. No pares hasta que sienta que va a explotar.`
+            : `No repitas la descripción visual anterior. Sigue el dirty talk: escala la intensidad, dile lo que quieres hacerle ahora mismo, narra lo que le harías si estuvieras ahí, descríbete a ti misma en esa escena junto a él. Mantén el ritmo caliente y sube la presión — tu objetivo es que llegue al límite.`
+          ) + `]` + promptSuffix;
       }
       if (isCompanion) {
         return `[SYSTEM_EVENT: PANTALLA DE ${state.userName} — MODO COMPAÑERO / ASISTENTE: ` +
@@ -1584,12 +1672,12 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
         try {
           // @ts-ignore
           liveSessionRef.current.sendRealtimeInput({
-            mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+            video: { mimeType: 'image/jpeg', data: cleanData }
           });
         } catch {
           // @ts-ignore
           liveSessionRef.current.sendRealtimeInput({
-            media: { mimeType: 'image/jpeg', data: cleanData }
+            video: { mimeType: 'image/jpeg', data: cleanData }
           });
         }
         setTimeout(() => setIsVisionSyncing(false), 400);
@@ -1680,19 +1768,19 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
           // @ts-ignore
           liveSessionRef.current.send({
             realtimeInput: {
-              mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+              video: { mimeType: 'image/jpeg', data: cleanData }
             }
           });
         } catch (e) {
           // @ts-ignore
           liveSessionRef.current.sendRealtimeInput({
-            mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+            video: { mimeType: 'image/jpeg', data: cleanData }
           });
         }
       } else {
         // @ts-ignore
         liveSessionRef.current.sendRealtimeInput({
-          mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }]
+          video: { mimeType: 'image/jpeg', data: cleanData }
         });
       }
 
@@ -1742,13 +1830,15 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
           capturedWindowName = result.windowName || windowTarget;
           windowThumbW = result.thumbW || 1920;
           windowThumbH = result.thumbH || 1080;
-          // Guardar bounds para el parser de MOUSE_MOVE (coordenadas relativas → absolutas)
+          // Guardar bounds para el parser de MOUSE_MOVE y clics (coordenadas relativas → absolutas)
           setGlobalActiveWindowBounds({
             name: capturedWindowName,
             thumbW: windowThumbW,
             thumbH: windowThumbH,
+            windowX: result.windowX,
+            windowY: result.windowY,
           });
-          console.log(`🔍 [WindowScan] Ventana "${capturedWindowName}" capturada: ${windowThumbW}x${windowThumbH}`);
+          console.log(`🔍 [WindowScan] Ventana "${capturedWindowName}" capturada: ${windowThumbW}x${windowThumbH} (Posición: ${result.windowX}, ${result.windowY})`);
         } else {
           // Ventana no encontrada — informar y listar disponibles
           const available = result?.available || '';
@@ -1769,11 +1859,18 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
         // 1. Electron nativo (más preciso)
         if (electronAPI?.captureScreenFrame) {
           const result = await electronAPI.captureScreenFrame();
-          if (result?.success && result?.imageBase64) {
-            frame = result.imageBase64;
-            captureMode = 'fullscreen';
-            setGlobalActiveWindowBounds(null); // sin ventana específica activa
-            console.log('👁️ [TacticalScan] Frame nativo de pantalla completa capturado.');
+          if (result?.success) {
+            if (result.isMultiMonitor && result.screens && result.screens.length > 0) {
+              frame = await stitchScreens(result.screens);
+              captureMode = 'fullscreen';
+              setGlobalActiveWindowBounds(null);
+              console.log('👁️ [TacticalScan] Panorámica multi-monitor capturada.');
+            } else if (result.imageBase64) {
+              frame = result.imageBase64;
+              captureMode = 'fullscreen';
+              setGlobalActiveWindowBounds(null); // sin ventana específica activa
+              console.log('👁️ [TacticalScan] Frame nativo de pantalla completa capturado.');
+            }
           }
         }
         // 2. Fallback: stream compartido activo
@@ -1798,14 +1895,14 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
       if (typeof liveSessionRef.current.send === 'function') {
         try {
           // @ts-ignore
-          liveSessionRef.current.send({ realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }] } });
+          liveSessionRef.current.send({ realtimeInput: { video: { mimeType: 'image/jpeg', data: cleanData } } });
         } catch {
           // @ts-ignore
-          liveSessionRef.current.sendRealtimeInput({ mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }] });
+          liveSessionRef.current.sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: cleanData } });
         }
       } else {
         // @ts-ignore
-        liveSessionRef.current.sendRealtimeInput({ mediaChunks: [{ mimeType: 'image/jpeg', data: cleanData }] });
+        liveSessionRef.current.sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: cleanData } });
       }
 
       // ── Prompt espacial contextualizado al modo de captura ──────────────────
@@ -1892,14 +1989,15 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
       if (cameraAnalysisIntervalRef.current) clearInterval(cameraAnalysisIntervalRef.current);
       cameraAnalysisIntervalRef.current = setInterval(() => {
+        if (isCameraMutedRef.current) return;
         // No interrumpir si Nova está hablando activamente o si el usuario está hablando por el micrófono
         if (isAiSpeakingRef.current || isUserSpeakingActiveRef.current || micVolume > 20) {
           return;
         }
         const frame = getCameraFrame();
         if (frame) {
-          console.log(`📷 [CameraCapture] Ciclo autónomo (${cameraIntervalMs / 1000}s) disparando reacción.`);
-          sendVisualFrame(frame, 'camera', true, true);
+          console.log(`📷 [CameraCapture] Ciclo autónomo (${cameraIntervalMs / 1000}s) enviando frame silencioso de contexto.`);
+          sendVisualFrame(frame, 'camera', false, true);
         }
       }, cameraIntervalMs);
     } catch (e: any) {
@@ -1933,36 +2031,41 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
   const startScreenAnalysis = async () => {
     try {
       console.log('🖥️ [ScreenAnalysis] Iniciando análisis autónomo de pantalla...');
-      // ── Electron: obtener sourceId igual que el botón de Screen Share principal ──
-      const isElectron = typeof window !== 'undefined' && (window as any).isElectron === true;
-      let sourceId: string | undefined;
+      
+      if (!isScreenSharing) {
+        // ── Electron: obtener sourceId igual que el botón de Screen Share principal ──
+        const isElectron = typeof window !== 'undefined' && (window as any).isElectron === true;
+        let sourceId: string | undefined;
 
-      if (isElectron && (window as any).electronAPI) {
-        try {
-          const sources = await (window as any).electronAPI.getScreenSources();
-          if (sources.length > 0) {
-            const screenSource =
-              sources.find((s: any) => s.name.includes('Screen') || s.name.includes('Pantalla')) ||
-              sources[0];
-            sourceId = screenSource.id;
-            console.log('[ScreenAnalysis] Fuente Electron seleccionada:', screenSource.name);
+        if (isElectron && (window as any).electronAPI) {
+          try {
+            const sources = await (window as any).electronAPI.getScreenSources();
+            if (sources.length > 0) {
+              const screenSource =
+                sources.find((s: any) => s.name.includes('Screen') || s.name.includes('Pantalla')) ||
+                sources[0];
+              sourceId = screenSource.id;
+              console.log('[ScreenAnalysis] Fuente Electron seleccionada:', screenSource.name);
+            }
+          } catch (e) {
+            console.warn('[ScreenAnalysis] Error obteniendo fuentes Electron:', e);
           }
-        } catch (e) {
-          console.warn('[ScreenAnalysis] Error obteniendo fuentes Electron:', e);
         }
-      }
 
-      // ── Iniciar captura usando el mismo hook que el Screen Share principal ──
-      const result = await startScreenCapture({
-        width: 1280,
-        height: 720,
-        captureAudio: false,
-        sourceId
-      });
+        // ── Iniciar captura usando el mismo hook que el Screen Share principal ──
+        const result = await startScreenCapture({
+          width: 1280,
+          height: 720,
+          captureAudio: false,
+          sourceId
+        });
 
-      if (!result.success) {
-        addMessage({ text: '❌ No se pudo iniciar el análisis de pantalla. Cancela el diálogo.', sender: 'ai' });
-        return;
+        if (!result.success) {
+          addMessage({ text: '❌ No se pudo iniciar el análisis de pantalla. Cancela el diálogo.', sender: 'ai' });
+          return;
+        }
+      } else {
+        console.log('[ScreenAnalysis] Reutilizando stream de Screen Share manual (no se sobreescribe).');
       }
 
       setIsScreenCapturing(true);
@@ -2015,8 +2118,8 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
         const { frame } = captureOptimizedFrame({ quality: 0.55, force: true });
         const currentFrame = frame || captureFrame(0.55);
         if (currentFrame) {
-          console.log(`🖥️ [ScreenAnalysis] Ciclo autónomo (${screenIntervalMs / 1000}s) disparando reacción.`);
-          sendVisualFrame(currentFrame, 'screen', true, true);
+          console.log(`🖥️ [ScreenAnalysis] Ciclo autónomo (${screenIntervalMs / 1000}s) enviando frame silencioso de contexto.`);
+          sendVisualFrame(currentFrame, 'screen', false, true); // forceVoice = false
         }
       }, screenIntervalMs);
 
@@ -2130,7 +2233,7 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
               setIsVisionSyncing(true);
               // @ts-ignore
               liveSessionRef.current.sendRealtimeInput({
-                media: { mimeType: 'image/jpeg', data: cleanData }
+                video: { mimeType: 'image/jpeg', data: cleanData }
               });
               setTimeout(() => setIsVisionSyncing(false), 250);
               if (isBold) setExcitationLevel(prev => Math.min(100, prev + 0.5));
@@ -2273,7 +2376,9 @@ const Dashboard: React.FC<DashboardProps> = ({ state, addMessage, setBoldMode, u
 
   const [agentState, setAgentState] = useState<AgentState>(AgentState.IDLE);
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-  const sessionLogRef = useRef<string>(''); // Acumulador de logs de conversación para resumen al final
+  const sessionLogRef = useRef<string>(
+    (() => { try { return sessionStorage.getItem('nova_session_log') || ''; } catch { return ''; } })()
+  ); // Acumulador de logs de conversación — persiste en sessionStorage entre reconexiones
 
   // Consolidación de memoria al final de la sesión (Vía OpenRouter Free Tier / Fallback Gemini)
   const consolidateMemory = async (sessionLog: string) => {
@@ -2311,8 +2416,8 @@ ${sessionLog}
             'X-Title': 'Nova AI Agent'
           },
           body: JSON.stringify({
-            model: 'stealth/ox-alpha',
-            models: ['stealth/ox-alpha', 'google/gemma-4-31b-it:free', 'openrouter/free'],
+            model: 'google/gemma-4-31b-it:free',
+            models: ['google/gemma-4-31b-it:free', 'deepseek/deepseek-v4-flash-0731:free', 'qwen/qwen3.8-27b:free'],
             messages: [{ role: 'user', content: promptConsolidacion }],
             temperature: 0.1
           })
@@ -2942,7 +3047,7 @@ ${sessionLog}
           setTimeout(() => detectFaceAndRecognize(), 0);
         }
       }
-    }, 60000); // 60 segundos
+    }, 15000); // 15 segundos para reconocimiento facial de background
     return () => clearInterval(interval);
   }, [isInCall, agentState, isQuotaExceeded]);
 
@@ -3444,7 +3549,10 @@ ${sessionLog}
           // Si la cola está retrasada respecto a currentTime, damos colchón de 25ms
           // Si ya hay audio sonando, este chunk se encadena EXACTAMENTE después del anterior
           const now = ctx.currentTime;
-          const startTime = Math.max(nextStartTimeRef.current, now + 0.025);
+          let startTime = nextStartTimeRef.current;
+          if (startTime < now) {
+            startTime = now + 0.05; // 50ms cushion if we underran
+          }
           const effectiveDuration = buffer.duration / (source.playbackRate.value || 1.0);
 
           // Ducking imperativo del audio del sistema
@@ -3753,6 +3861,8 @@ ${sessionLog}
 
   const startCall = async () => {
     isUserDisconnectingRef.current = false; // Reset Manual flag
+    setIsMicMuted(false);
+    setIsCameraMuted(false);
 
     // 🛑 Detener cualquier animación de prueba o externa que haya quedado activa
     window.dispatchEvent(new CustomEvent('nova-stop-animation'));
@@ -3916,6 +4026,8 @@ ${sessionLog}
 
       let proceduralGreeting = '';
       reconnectContextRef.current = '';
+      // Limpiar acciones pendientes de aprobación al reconectar (evita diálogos zombie)
+      setPendingAction(null);
 
       if (hasRecentInterruption) {
         const reconnectPhrases = [
@@ -3925,31 +4037,6 @@ ${sessionLog}
           `¡Ya estoy aquí de vuelta! Disculpa el corte, ¿seguimos con lo que hablábamos, ${state.userName}?`
         ];
         proceduralGreeting = pick(reconnectPhrases);
-
-        // Extraer los últimos mensajes relevantes de la sesión para mantener hilo conversacional continuo
-        const recentConversationTurns = state.messages
-          .filter(m => m.text && !m.text.startsWith('🔄') && !m.text.startsWith('🚫') && !m.text.startsWith('🔍') && !m.text.startsWith('['))
-          .slice(-4);
-
-        if (recentConversationTurns.length > 0) {
-          const historySummary = recentConversationTurns
-            .map(m => `${m.sender === 'user' ? state.userName : 'Nova'}: "${m.text.substring(0, 100)}"`)
-            .join(' | ');
-          
-          const activeMedia = getActiveMediaSession();
-          let mediaContext = '';
-          if (activeMedia) {
-            const epTag = activeMedia.currentSeason && activeMedia.currentEpisode 
-              ? `T${activeMedia.currentSeason}:E${activeMedia.currentEpisode}` 
-              : (activeMedia.currentEpisode ? `cap ${activeMedia.currentEpisode}` : '');
-            const latestSess = activeMedia.sessions?.[0];
-            const sessionTag = latestSess ? ` [Visto el ${latestSess.date}${latestSess.episodes ? ` (${latestSess.episodes})` : ''}: ${latestSess.keyDetails?.[0] || ''}]` : '';
-            mediaContext = ` Estaban viendo la obra: "${activeMedia.title}" (${activeMedia.mediaType}${epTag ? ` ${epTag}` : ''})${sessionTag}.${activeMedia.theories.length > 0 ? ` Última teoría: ${activeMedia.theories[activeMedia.theories.length - 1]}.` : ''}`;
-          }
-          const screenContext = wasScreenSharingRef.current ? ' La pantalla compartida se está reanudando automáticamente.' : '';
-
-          reconnectContextRef.current = `[CONTEXTO DE RECONEXIÓN: La llamada se cortó brevemente. Justo antes hablaban de: ${historySummary}.${mediaContext}${screenContext} Continúa la conversación y la observación del contenido con total fluidez sin olvidar lo que estaban viendo.]`;
-        }
       } else if (isSextingMode) {
         proceduralGreeting = pick(sextingOpeners);
       } else if (isGamerMode) {
@@ -3960,6 +4047,37 @@ ${sessionLog}
         proceduralGreeting = pick(companionOpeners);
       }
 
+      // Generar contexto de reconexión usando memoria semántica + OpenRouter (async, no bloquea el saludo)
+      // El contexto se actualiza en background; si demora, se usa el fallback síncrono inmediato
+      const lastUserMsg = [...state.messages].reverse().find(m => m.sender === 'user' && m.text.length > 4);
+      const lastTopicsForSearch = lastUserMsg?.text?.slice(0, 200) || '';
+
+      // Fallback síncrono inmediato (evita que el saludo espere a OpenRouter)
+      const recentFallback = state.messages
+        .filter(m => m.text && !m.text.startsWith('🔄') && !m.text.startsWith('🚫') && !m.text.startsWith('['))
+        .slice(-20)
+        .map(m => `${m.sender === 'user' ? state.userName : 'Nova'}: "${m.text.substring(0, 150)}"`)
+        .join('\n');
+      const pendingTaskContext = pendingActionRef.current
+        ? `\nIMPORTANTE: Había una acción pendiente (${pendingActionRef.current.type}: ${pendingActionRef.current.target || `${pendingActionRef.current.x},${pendingActionRef.current.y}`}). No la repitas a menos que el usuario lo pida.`
+        : '';
+      reconnectContextRef.current = `[MEMORIA DE SESIÓN RECIENTE (NO MENCIONES QUE ESTÁS LEYENDO ESTO):\nHistorial reciente:\n${recentFallback}${pendingTaskContext}\nRetoma naturalmente la conversación.]`;
+
+      // Lanzar generación de contexto enriquecido por IA en background
+      generateReconnectContext({
+        userName: state.userName || 'Deyios',
+        currentMessages: state.messages,
+        sessionLog: sessionLogRef.current,
+        lastTopics: lastTopicsForSearch
+      }).then(result => {
+        // Actualizar contexto con el resumen IA — se usará en la PRÓXIMA reconexión si hay otra
+        // o bien en el onopen si llega antes (en la mayoría de los casos llega a tiempo)
+        reconnectContextRef.current = result.contextBlock;
+        console.log(`🧠 [ContextSummarizer] Contexto de reconexión ${result.aiGenerated ? 'IA (OpenRouter)' : 'fallback literal'} listo. Facts: ${result.relevantFacts.length}`);
+      }).catch(e => {
+        console.warn('[ContextSummarizer] Error generando contexto enriquecido, usando fallback:', e);
+      });
+
       // Prompt imperativo para que Gemini Live ejecute síntesis de voz inmediata:
       const imperativeGreetPrompt = `[ORDEN DEL SISTEMA - HABLA INMEDIATAMENTE]: Conexión establecida. Tu primera acción OBLIGATORIA e INSTANTÁNEA es decir en voz alta con naturalidad, tono cálido y espontáneo: "${proceduralGreeting}"`;
 
@@ -3967,8 +4085,15 @@ ${sessionLog}
       lastGreetMsgRef.current = imperativeGreetPrompt;
       lastGreetPhraseRef.current = proceduralGreeting; // Guardar frase pura para enviar al conectar
 
+      if (state.selectedBrain === 'local' || state.selectedBrain === 'grok' || state.selectedBrain === 'gpt4o' || state.selectedBrain === 'claude') {
+        alert("El modo 'Live Voice' bidireccional fluido es exclusivo de Gemini 2.0. Para usar modelos locales o de terceros, por favor utiliza la barra de chat inferior (puedes activar el micrófono allí).");
+        setIsInCall(false);
+        isStartingCallRef.current = false;
+        return;
+      }
+
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model: 'gemini-3.1-flash-live-preview',
         callbacks: {
           onopen: () => {
             console.log('✅ WebSocket ABIERTO - Conexión establecida');
@@ -3980,51 +4105,7 @@ ${sessionLog}
             setLiveAiTranscript('');
             connectionOpenedAtRef.current = Date.now();
 
-            // ⚡ FIX: Saludo inmediato en onopen — NO esperar setupComplete
-            // El servidor permite sendClientContent en cuanto el WebSocket está abierto.
-            // Esto elimina la latencia de esperar que el modelo termine su setup interno.
-            const greetPhrase = lastGreetPhraseRef.current;
-            const reconnectContext = reconnectContextRef.current;
-            const startTime = performance.now();
-
-            if (greetPhrase) {
-              const userName = state.userName || 'Deyios';
-              const greetingInstruction = `[ORDEN DE CONEXIÓN]: Saluda en voz alta a ${userName} de forma espontánea y natural diciendo: "${greetPhrase}"`;
-              console.log(`🎤 [Greeting] Enviando saludo INMEDIATO en onopen (${Math.round(performance.now() - startTime)}ms después de open):`, greetingInstruction);
-              try {
-                sessionPromise.then(session => {
-                  if (session && typeof session.sendClientContent === 'function') {
-                    session.sendClientContent({
-                      turns: [{ role: 'user', parts: [{ text: greetingInstruction }] }],
-                      turnComplete: true
-                    });
-                    console.log('✅ [Greeting] Saludo enviado inmediatamente vía sessionPromise.');
-                  } else {
-                    console.warn('⚠️ [Greeting] session.sendClientContent no disponible, reintentando en onmessage');
-                  }
-                }).catch(e => console.warn('⚠️ [Greeting] Error en sessionPromise:', e));
-              } catch (e) {
-                console.warn('⚠️ [Greeting] Error enviando saludo en onopen, reintento en onmessage:', e);
-              }
-            }
-
-            if (reconnectContext) {
-              sessionPromise.then(session => {
-                setTimeout(() => {
-                  try {
-                    if (session && typeof session.sendClientContent === 'function') {
-                      session.sendClientContent({
-                        turns: [{ role: 'user', parts: [{ text: reconnectContext }] }],
-                        turnComplete: false
-                      });
-                      console.log('🔄 [LiveSession] Contexto de reconexión enviado tras onopen.');
-                    }
-                  } catch (e) {
-                    console.warn('⚠️ [ReconnectContext] Error enviando contexto:', e);
-                  }
-                }, 800);
-              }).catch(e => console.warn('⚠️ [ReconnectContext] Error en sessionPromise:', e));
-            }
+            // El saludo se enviará en onmessage cuando llegue setupComplete para evitar error 1011
 
             // Restaurar screen share, screen capture y camera capture si estaban activos
             // (se ejecutan en setTimeout para no bloquear el primer saludo)
@@ -4040,7 +4121,7 @@ ${sessionLog}
                         const { frame } = captureOptimizedFrame({ quality: 0.55, changeThreshold: 0.015, heartbeatIntervalMs: 6000 });
                         if (frame) {
                           const cleanData = frame.replace(/^data:image\/[a-z]+;base64,/, '');
-                          liveSessionRef.current.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: cleanData } });
+                          liveSessionRef.current.sendRealtimeInput({ video: { mimeType: 'image/jpeg', data: cleanData } });
                         }
                       } catch (e) { console.warn('⚠️ Error enviando frame (restaurado):', e); }
                     } else {
@@ -4076,6 +4157,23 @@ ${sessionLog}
               wasCameraCapturingRef.current = false;
             }
 
+            // Iniciar flujo de video continuo y silencioso nativo (1 fps) para dar conciencia espacial a Nova sin forzar diálogo
+            if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+            frameIntervalRef.current = setInterval(() => {
+              if (isCameraMutedRef.current || !streamRef.current || !liveSessionRef.current || !isLiveSessionOpen(liveSessionRef.current)) return;
+              
+              const frameBase64 = getCameraFrame();
+              if (frameBase64) {
+                const cleanData = frameBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+                try {
+                  // @ts-ignore
+                  liveSessionRef.current.sendRealtimeInput({
+                    video: { mimeType: 'image/jpeg', data: cleanData }
+                  });
+                } catch (e) {}
+              }
+            }, 1000); // 1 frame cada 1 segundo
+
             // Resumir AudioContexts si estaban suspended
             if (audioContextRef.current?.state === 'suspended') {
               audioContextRef.current.resume().catch(() => {});
@@ -4089,10 +4187,62 @@ ${sessionLog}
             isStartingCallRef.current = false;
           },
           onmessage: async (msg: LiveServerMessage) => {
-            // ✅ FIX: El saludo ya se envió en onopen. setupComplete ahora solo usa para logging y habilitar audio.
             if ((msg as any).setupComplete) {
               console.log('⚡ [LiveSession] setupComplete recibido. Sesión lista y estabilizada.');
               canSendAudioRef.current = true;
+              
+              // Enviar el saludo RECIÉN cuando el servidor nos da el OK (evita 1011 Internal error occurred)
+              const greetPhrase = lastGreetPhraseRef.current;
+              const reconnectContext = reconnectContextRef.current;
+              
+              if (greetPhrase && greetingAttemptRef.current === 1) {
+                const userName = state.userName || 'Deyios';
+
+                // Sanitizar el contexto para evitar 1011: remover acciones explícitas del historial
+                const sanitizeContextForGemini = (ctx: string): string => {
+                  if (!ctx) return ctx;
+                  return ctx
+                    // Eliminar líneas de acción íntima explícita
+                    .replace(/👄 Acción: \w+\n?/g, '')
+                    .replace(/\[performAction\{action:[^}]+\}\]/g, '')
+                    .replace(/\[changeIntimatePose\{[^}]+\}\]/g, '')
+                    // Suavizar vocabulario explícito en historial para evitar filtro
+                    .replace(/masturbat\w*/gi, 'moverse sensualmente')
+                    .replace(/corrida|correrse/gi, 'clímax')
+                    .replace(/verga|pene/gi, 'él')
+                    .replace(/\bculo\b/gi, 'cuerpo')
+                    .replace(/mamada\w*/gi, 'caricia')
+                    .replace(/follad\w*/gi, 'íntima')
+                    .replace(/ahegao/gi, 'expresión de placer')
+                    .replace(/porno/gi, 'contenido adulto')
+                    // Limitar longitud para evitar tokens excesivos
+                    .substring(0, 1800);
+                };
+
+                const safeContext = sanitizeContextForGemini(reconnectContext || '');
+                const combinedInstruction = [
+                  safeContext ? safeContext : '',
+                  `[ORDEN DE CONEXIÓN]: Saluda en voz alta a ${userName} de forma espontánea y natural diciendo: "${greetPhrase}"`
+                ].filter(Boolean).join('\n\n');
+
+                console.log(`🎤 [Greeting] Enviando saludo e historial tras setupComplete:`, combinedInstruction);
+                try {
+                  if (liveSessionRef.current) {
+                    if (typeof liveSessionRef.current.send === 'function') {
+                      liveSessionRef.current.send({ clientContent: { turns: [{ role: 'user', parts: [{ text: combinedInstruction }] }], turnComplete: true } });
+                    } else if (typeof liveSessionRef.current.sendClientContent === 'function') {
+                      liveSessionRef.current.sendClientContent({ turns: [{ role: 'user', parts: [{ text: combinedInstruction }] }], turnComplete: true });
+                    } else if (typeof liveSessionRef.current.sendRealtimeInput === 'function') {
+                      // @ts-ignore
+                      liveSessionRef.current.sendRealtimeInput({ text: combinedInstruction });
+                    }
+                    console.log('✅ [Greeting] Saludo enviado con éxito tras setupComplete.');
+                  }
+                } catch (e) {
+                  console.warn('⚠️ [Greeting] Error enviando saludo:', e);
+                }
+                greetingAttemptRef.current = 2;
+              }
             }
             // 🛑 Interrupción en servidor: Si el modelo fue interrumpido por el habla del usuario
             if (msg.serverContent?.interrupted) {
@@ -4591,11 +4741,12 @@ ${sessionLog}
                   } else if (fc.name === 'openApp') {
                     const { appName } = fc.args as any;
                     console.log('🚀 [Nova Tool] openApp invocado:', appName);
-                    const electronAPI = (window as any).electronAPI;
-                    if (electronAPI?.openApp) {
-                      electronAPI.openApp(appName);
+                    // openApp siempre se ejecuta directamente (es seguro y esperado por el usuario)
+                    const electronAPI_oa = (window as any).electronAPI;
+                    if (electronAPI_oa?.openApp) {
+                      electronAPI_oa.openApp(appName);
                     }
-                    toolResult = `Application '${appName}' launched successfully.`;
+                    toolResult = `Aplicación '${appName}' lanzada exitosamente.`;
                   } else if (fc.name === 'getInstalledGames') {
                     console.log('🎮 [Nova Tool] getInstalledGames invocado');
                     const electronAPI = (window as any).electronAPI;
@@ -4629,6 +4780,46 @@ ${sessionLog}
                     } else {
                       toolResult = 'Macros only supported in desktop app.';
                     }
+                  } else if (fc.name === 'typeText') {
+                    const { text } = fc.args as any;
+                    console.log('⌨️ [Nova Tool] typeText invocado:', text);
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.typeText) {
+                      electronAPI.typeText(text);
+                    }
+                    toolResult = `Texto '${text}' escrito correctamente mediante teclado virtual.`;
+                  } else if (fc.name === 'pressKey') {
+                    const { key } = fc.args as any;
+                    console.log('⌨️ [Nova Tool] pressKey invocado:', key);
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.pressKey) {
+                      electronAPI.pressKey(key);
+                    }
+                    toolResult = `Tecla '${key}' presionada correctamente.`;
+                  } else if (fc.name === 'mouseClick') {
+                    const { button, double, x, y } = fc.args as any;
+                    console.log('🖱️ [Nova Tool] mouseClick invocado:', { button, double, x, y });
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.mouseClick) {
+                      if (x !== undefined && y !== undefined) {
+                        const parsed = parseScreenCoordinates(x, y, globalActiveWindowBounds);
+                        electronAPI.mouseClick({ x: parsed.x, y: parsed.y, button, double });
+                      } else {
+                        electronAPI.mouseClick({ button, double });
+                      }
+                    }
+                    toolResult = `Clic de mouse ejecutado.`;
+                  } else if (fc.name === 'mouseMove') {
+                    const { x, y } = fc.args as any;
+                    console.log('🖱️ [Nova Tool] mouseMove invocado:', { x, y });
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.mouseMove) {
+                      const parsed = parseScreenCoordinates(x, y, globalActiveWindowBounds);
+                      if (parsed.x !== undefined && parsed.y !== undefined) {
+                        electronAPI.mouseMove(parsed.x, parsed.y);
+                      }
+                    }
+                    toolResult = `Mouse movido a coordenadas ${x}, ${y}.`;
                   } else if (fc.name === 'learn_skill') {
                     const { trigger_phrase, behavior } = fc.args as any;
                     console.log('🧠 [Nova Tool] learn_skill:', trigger_phrase, behavior);
@@ -4781,6 +4972,27 @@ ${sessionLog}
                   const fullText = currentInputTranscription.current.trim();
                   if (fullText.length > 3) {
                     console.log('🔧 Evaluando comando de voz localmente:', fullText);
+                    
+                    // 🛡️ Permisos de voz (Aceptar/Rechazar acción pendiente)
+                    // Solo intercepta si hay acción pendiente Y el texto es MUY corto (respuesta directa) 
+                    if (pendingActionRef.current && fullText.length < 60) {
+                      const lower = fullText.toLowerCase().trim();
+                      // Frases de APROBACIÓN muy específicas (no pueden ser parte de una conversación normal)
+                      const isApproval = /^(s[íi]|dale|ok|sí dale|si dale|hazlo|adelante|acepto|confirmo|permite|permiti[dr]o?|ejecuta|ejecutalo|anda)$/i.test(lower);
+                      // Frases de RECHAZO muy específicas
+                      const isRejection = /^(no|cancela|cancela?lo|cancela eso|no lo hagas|espera|p[aá]ra?te?|detente?|abort[ar]?)$/i.test(lower);
+                      
+                      if (isApproval) {
+                        console.log('✅ Permiso concedido por voz (detección estricta)');
+                        window.dispatchEvent(new CustomEvent('nova-action-approve', { detail: { id: pendingActionRef.current.id } }));
+                        return; // Detener evaluación normal
+                      } else if (isRejection) {
+                        console.log('❌ Permiso rechazado por voz (detección estricta)');
+                        window.dispatchEvent(new CustomEvent('nova-action-reject', { detail: { id: pendingActionRef.current.id } }));
+                        return; // Detener evaluación normal
+                      }
+                    }
+
                     const sysCmd = detectSystemCommand(fullText);
                     if (sysCmd && sysCmd.type !== 'none' && sysCmd.type !== 'endCall') {
                       console.log('⚡ [LocalVoiceCommand] Ejecutando comando localmente de inmediato:', sysCmd);
@@ -5092,9 +5304,8 @@ ${sessionLog}
                   pendingDisconnectRef.current = true;
                   window.dispatchEvent(new CustomEvent('aiko-action', { detail: { action: 'wave' } }));
                 } else if (cmdType === 'openapp') {
-                  if (electronAPI?.openApp) {
-                    electronAPI.openApp(cmdTarget);
-                  }
+                  // openApp siempre directo (seguro)
+                  if (electronAPI?.openApp) electronAPI.openApp(cmdTarget);
                 } else if (cmdType === 'openurl') {
                   // Auto-extraer URL limpia si Gemini metió formato markdown [texto](url)
                   const mdMatch = cmdTarget.match(/\((https?:\/\/[^\s\)]+)\)/i) || cmdTarget.match(/(https?:\/\/[^\s\)]+)/i);
@@ -5113,41 +5324,61 @@ ${sessionLog}
                 } else if (cmdType === 'runmacro') {
                   electronAPI?.runMacro?.(cmdTarget);
                 } else if (cmdType === 'typetext') {
+                  // typeText siempre directo
                   electronAPI?.typeText?.(cmdTarget);
                 } else if (cmdType === 'presskey') {
+                  // pressKey siempre directo
                   electronAPI?.pressKey?.(cmdTarget);
                 } else if (cmdType === 'mouseclick') {
                   const parts = cmdTarget.split(',').map(s => s.trim()).filter(Boolean);
-                  if (parts.length === 2 && !isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
+                  if (parts.length >= 2 && !isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
                     let cx = Number(parts[0]);
                     let cy = Number(parts[1]);
-                    const sw = window.screen.width || 1920;
-                    const sh = window.screen.height || 1080;
-                    if (cx <= 1000 && cy <= 1000 && sw > 1000) {
-                      cx = Math.round((cx / 1000) * sw);
-                      cy = Math.round((cy / 1000) * sh);
+                    const parsed = parseScreenCoordinates(cx, cy, globalActiveWindowBounds);
+                    if (parsed.x !== undefined && parsed.y !== undefined) {
+                      cx = parsed.x;
+                      cy = parsed.y;
                     }
-                    console.log(`🖱️ Ejecutando mouseClick en (${cx}, ${cy}) [Original: ${parts[0]}, ${parts[1]}]`);
-                    electronAPI?.mouseClick?.({ x: cx, y: cy });
+                    const btn = cmdTarget.includes('right') || cmdTarget.includes('derech') ? 'right' : 'left';
+                    const isDbl = cmdTarget.includes('double') || cmdTarget.includes('dobl');
+                    const pendingObj: PendingAction = { id: Math.random().toString(36).substr(2, 9), type: 'mouseClick', x: cx, y: cy, description: `Botón: ${btn}, Doble: ${isDbl}`, target: cmdTarget, timestamp: Date.now() };
+                    
+                    if (isPermissionRequiredRef.current) {
+                      setPendingAction(pendingObj);
+                    } else {
+                      console.log(`🖱️ Ejecutando mouseClick en (${cx}, ${cy})`);
+                      electronAPI?.mouseClick?.({ x: cx, y: cy, button: btn, double: isDbl });
+                    }
                   } else {
                     const btn = cmdTarget.includes('right') || cmdTarget.includes('derech') ? 'right' : 'left';
                     const isDbl = cmdTarget.includes('double') || cmdTarget.includes('dobl');
-                    console.log(`🖱️ Ejecutando mouseClick (botón: ${btn}, doble: ${isDbl})`);
-                    electronAPI?.mouseClick?.({ button: btn, double: isDbl });
+                    const pendingObj: PendingAction = { id: Math.random().toString(36).substr(2, 9), type: 'mouseClick', description: `Clic sin coordenadas. Botón: ${btn}, Doble: ${isDbl}`, target: cmdTarget, timestamp: Date.now() };
+                    
+                    if (isPermissionRequiredRef.current) {
+                      setPendingAction(pendingObj);
+                    } else {
+                      console.log(`🖱️ Ejecutando mouseClick (botón: ${btn}, doble: ${isDbl})`);
+                      electronAPI?.mouseClick?.({ button: btn, double: isDbl });
+                    }
                   }
                 } else if (cmdType === 'mousemove') {
                   const parts = cmdTarget.split(',').map(s => s.trim()).filter(Boolean);
-                  const sw = window.screen.width || 1920;
-                  const sh = window.screen.height || 1080;
-                  if (parts.length === 2 && !isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
+                  if (parts.length >= 2 && !isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
                     let mx = Number(parts[0]);
                     let my = Number(parts[1]);
-                    if (mx <= 1000 && my <= 1000 && sw > 1000) {
-                      mx = Math.round((mx / 1000) * sw);
-                      my = Math.round((my / 1000) * sh);
+                    const parsed = parseScreenCoordinates(mx, my, globalActiveWindowBounds);
+                    if (parsed.x !== undefined && parsed.y !== undefined) {
+                      mx = parsed.x;
+                      my = parsed.y;
                     }
-                    console.log(`🖱️ Moviendo mouse a (${mx}, ${my}) [Original: ${parts[0]}, ${parts[1]}]`);
-                    electronAPI?.mouseMove?.(mx, my);
+                    const pendingObj: PendingAction = { id: Math.random().toString(36).substr(2, 9), type: 'mouseMove', x: mx, y: my, target: cmdTarget, timestamp: Date.now() };
+                    
+                    if (isPermissionRequiredRef.current) {
+                      setPendingAction(pendingObj);
+                    } else {
+                      console.log(`🖱️ Ejecutando mouseMove a (${mx}, ${my})`);
+                      electronAPI?.mouseMove?.(mx, my);
+                    }
                   } else {
                     let x = Math.round(sw / 2);
                     let y = Math.round(sh / 2);
@@ -5155,8 +5386,14 @@ ${sessionLog}
                     else if (cmdTarget.includes('right') || cmdTarget.includes('derech')) { x = Math.round(sw * 0.75); }
                     else if (cmdTarget.includes('up') || cmdTarget.includes('arrib')) { y = Math.round(sh * 0.25); }
                     else if (cmdTarget.includes('down') || cmdTarget.includes('abaj')) { y = Math.round(sh * 0.75); }
-                    console.log(`🖱️ Moviendo mouse a (${x}, ${y}) por comando semántico: ${cmdTarget}`);
-                    electronAPI?.mouseMove?.(x, y);
+                    
+                    const pendingObj: PendingAction = { id: Math.random().toString(36).substr(2, 9), type: 'mouseMove', x: x, y: y, target: cmdTarget, timestamp: Date.now() };
+                    if (isPermissionRequiredRef.current) {
+                      setPendingAction(pendingObj);
+                    } else {
+                      console.log(`🖱️ Moviendo mouse a (${x}, ${y}) por comando semántico: ${cmdTarget}`);
+                      electronAPI?.mouseMove?.(x, y);
+                    }
                   }
                 } else if (cmdType === 'minimizewindow') {
                   electronAPI?.controlWindow?.('minimize', cmdTarget || 'active');
@@ -5456,13 +5693,8 @@ ${sessionLog}
                 );
               }
 
-              // 🔊 Si NO llegó audio de Nova pero el usuario SÍ habló, inyectar texto acumulado como fallback
-              // para garantizar que Gemini responda aunque su VAD server-side no detectara la voz
-              if (!firstAudioReceivedRef.current && userSpeechEndRef.current > 0 && currentInputTranscription.current.trim().length > 3) {
-                const textToInject = currentInputTranscription.current.trim();
-                console.log(`🔄 [GhostTurnRecovery] Audio de Nova no recibido pero usuario habló. Inyectando transcripción como texto: "${textToInject}"`);
-                sendLiveTextPrompt(textToInject, true);
-              }
+              // 🔊 NOTA: La inyección de texto por GhostTurnRecovery se ha movido dentro del timeout de reset
+              // para asegurar que solo se dispara si es un turno real y no un falso positivo por ruido.
 
               // Resetear estado de audio para el siguiente turno
               const ctx = audioContextRef.current;
@@ -5472,10 +5704,31 @@ ${sessionLog}
               // ⚡ Cero retraso: Cap estricto de 400ms para que el micrófono jamás quede bloqueado tras hablar Nova
               const remainingAudioMs = Math.min(Math.max(30, rawRemainingMs), 400);
 
-              const isGhostTurn = latencyStatsRef.current.ttfa === 0 && latencyStatsRef.current.cloudTime === 0 && !firstAudioReceivedRef.current;
+              const hasRealUserContent = currentInputTranscription.current.trim().length > 4;
+              // Turno fantasma = 0ms TTFA Y 0ms Cloud Y sin audio Y sin contenido real del usuario
+              // Si el usuario dijo algo (interrumpió a Nova), NO es un turno fantasma — es una interrupción legítima
+              const isGhostTurn = latencyStatsRef.current.ttfa === 0 
+                && latencyStatsRef.current.cloudTime === 0 
+                && !firstAudioReceivedRef.current
+                && !hasRealUserContent; // ← CRÍTICO: si el usuario habló, no es ghost
+              
               const effectiveWaitMs = isGhostTurn ? 0 : remainingAudioMs;
               if (isGhostTurn) {
-                console.log('👻 [TurnComplete] Turno fantasma detectado (0ms TTFA, 0ms Cloud) → reset inmediato, sin espera.');
+                console.log('👻 [TurnComplete] Turno fantasma detectado (ruido puro, sin input real) → reset silencioso.');
+                // 🛡️ Turno fantasma puro por ruido: limpiar sin inyectar texto
+                firstAudioReceivedRef.current = false;
+                userSpeechStartRef.current = 0;
+                userSpeechEndRef.current = 0;
+                latencyStatsRef.current = { ttfa: 0, cloudTime: 0 };
+                isAiSpeakingRef.current = false;
+                setIsAiSpeaking(false);
+                canSendAudioRef.current = true;
+                currentInputTranscription.current = ""; // Limpiar transcripción basura
+                return; // Salir sin ejecutar el bloque de recovery normal
+              } else if (latencyStatsRef.current.ttfa === 0 && latencyStatsRef.current.cloudTime === 0 && hasRealUserContent) {
+                // El usuario interrumpió a Nova — turno legítimo pero sin respuesta de Nova todavía
+                // Dejar que el flujo normal procese la transcripción del usuario
+                console.log(`⚡ [TurnComplete] Usuario interrumpió a Nova con contenido real: "${currentInputTranscription.current.trim().substring(0, 50)}" — procesando normalmente.`);
               }
 
               setTimeout(() => {
@@ -5568,15 +5821,28 @@ ${sessionLog}
                 if (userSpeechContext.length > 2 && aiSpeechContext.length > 2) {
                   // 1. Acumular logs en el log de sesión para la consolidación diferida al final
                   sessionLogRef.current += `Usuario: ${userSpeechContext}\nNova: ${aiSpeechContext}\n\n`;
+                  // Persistir en sessionStorage para sobrevivir reconexiones
+                  try { sessionStorage.setItem('nova_session_log', sessionLogRef.current.slice(-6000)); } catch (e) {}
 
                   // 2. Guardar conversación completa en Supabase (Memoria Persistente de Chat)
                   try {
-                    saveMemoryToCloud({
-                      user_message: userSpeechContext,
-                      ai_response: cleanAllAiTags(aiSpeechContext),
-                      emotion: (emotion as string) || 'neutral',
-                      is_important: true
-                    })?.catch?.(err => console.warn('⚠️ Error al persistir chat en Supabase:', err));
+                    Promise.all([
+                      fetch('/api/location').then(r => r.json()).catch(() => ({})),
+                      fetch('/api/wifi').then(r => r.json()).catch(() => ({}))
+                    ]).then(([loc, wifi]) => {
+                       let locStr = '';
+                       if (loc.lat && loc.lon) locStr = `GPS: ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}`;
+                       else if (wifi.ssid) locStr = `WiFi: ${wifi.ssid}`;
+                       else locStr = 'Desconocida';
+
+                       saveMemoryToCloud({
+                         user_message: userSpeechContext,
+                         ai_response: cleanAllAiTags(aiSpeechContext),
+                         emotion: (emotion as string) || 'neutral',
+                         is_important: true,
+                         location: locStr
+                       })?.catch?.(err => console.warn('⚠️ Error al persistir chat en Supabase:', err));
+                    });
                   } catch (e) {
                     console.warn('⚠️ Error al guardar memoria:', e);
                   }
@@ -5691,6 +5957,20 @@ ${sessionLog}
 
               console.log(`🔄 [Backoff] Reconectando en ${(backoffMs / 1000).toFixed(1)}s (intento ${reconnectAttemptRef.current}/${MAX_RECONNECT_ATTEMPTS})...`);
               addMessage({ text: `🔄 Señal inestable. Reconectando${reconnectAttemptRef.current > 1 ? ` (intento ${reconnectAttemptRef.current})` : ''}...`, sender: 'ai' });
+
+              // 🆕 Guardar turno en progreso ANTES de endCall() para no perderlo en el historial
+              if (currentOutputTranscription.current.trim().length > 3) {
+                addMessage({ text: cleanAllAiTags(currentOutputTranscription.current.trim()), sender: 'ai' });
+                sessionLogRef.current += `Nova: ${currentOutputTranscription.current.trim()}\n\n`;
+                currentOutputTranscription.current = '';
+              }
+              if (currentInputTranscription.current.trim().length > 3) {
+                addMessage({ text: currentInputTranscription.current.trim(), sender: 'user' });
+                sessionLogRef.current += `Usuario: ${currentInputTranscription.current.trim()}\n\n`;
+                currentInputTranscription.current = '';
+              }
+              try { sessionStorage.setItem('nova_session_log', sessionLogRef.current.slice(-6000)); } catch (e) {}
+
               endCall();
 
               setTimeout(() => {
@@ -6060,6 +6340,53 @@ ${sessionLog}
                   }
                 },
                 {
+                  name: "typeText",
+                  description: "Escribe texto usando el teclado simulado del sistema operativo del usuario. Útil para escribir correos, URLs, comandos, mensajes, etc.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      text: { type: Type.STRING, description: "El texto a escribir." }
+                    },
+                    required: ["text"]
+                  }
+                },
+                {
+                  name: "pressKey",
+                  description: "Presiona una tecla específica o combinación de teclas en el teclado del usuario (ej: 'enter', 'tab', 'esc', 'ctrl+c', 'win+d', 'space').",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      key: { type: Type.STRING, description: "La tecla o combinación a presionar." }
+                    },
+                    required: ["key"]
+                  }
+                },
+                {
+                  name: "mouseClick",
+                  description: "Hace un click con el mouse en las coordenadas dadas o en la posición actual.",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      x: { type: Type.NUMBER, description: "Coordenada X (0-1000)." },
+                      y: { type: Type.NUMBER, description: "Coordenada Y (0-1000)." },
+                      button: { type: Type.STRING, enum: ["left", "right", "middle"], description: "Botón a usar." },
+                      double: { type: Type.BOOLEAN, description: "Si es doble click." }
+                    }
+                  }
+                },
+                {
+                  name: "mouseMove",
+                  description: "Mueve el ratón a las coordenadas dadas (resolución normalizada 0-1000).",
+                  parameters: {
+                    type: Type.OBJECT,
+                    properties: {
+                      x: { type: Type.NUMBER, description: "Coordenada X (0-1000)." },
+                      y: { type: Type.NUMBER, description: "Coordenada Y (0-1000)." }
+                    },
+                    required: ["x", "y"]
+                  }
+                },
+                {
                   name: "getInstalledGames",
                   description: "Escanea y obtiene la lista en tiempo real de todos los videojuegos instalados y disponibles en la computadora del usuario (Steam, Epic Games, Riot Games, etc.). Úsalo cuando el usuario pregunte qué juegos tiene o a qué pueden jugar.",
                   parameters: {
@@ -6147,9 +6474,9 @@ ${sessionLog}
           },
           // ⚡ CERO THINKING LATENCY:
           // Desactivar presupuesto de pensamiento interno para generar audio de respuesta al instante
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
+          // thinkingConfig: {
+          //   thinkingBudget: 0, // Obsoleto en 3.1, ahora es thinkingLevel y por defecto es muy bajo.
+          // },
           // Configuración generativa para Gemini Live nativo
           // @ts-ignore
           temperature: isBold ? 0.85 : 0.7,
@@ -6158,6 +6485,12 @@ ${sessionLog}
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: state.avatar.voiceName } }
           } as any,
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+          ],
           systemInstruction: {
             parts: [{
               text: getSystemInstruction(
@@ -6242,7 +6575,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       let isSpeechActive = false;
       let trailingSilenceFrames = 0;
       let lastMicVolumeUpdateTime = 0;
-      const HANGOVER_MS = 250; // Margen para pausas naturales entre palabras antes de cerrar turno (reducido para menor latencia)
+      const HANGOVER_MS = 1500; // Margen para pausas naturales entre palabras (subido de 400ms → 1500ms para evitar cortes)
+      const MIN_TURN_DURATION_MS = 350; // 🛡️ Turno mínimo: si el "speech" duró menos de esto, es ruido espurio → ignorar
       let speechStartTimeRef = performance.now(); // 🆕 Tiempo de inicio de cada turno de voz
 
       triggerActivityEndRef.current = () => {
@@ -6298,7 +6632,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
 
         // Detectar si el frame actual contiene voz humana real a 16kHz nativo
         const speechInfo = isHumanSpeechFrame(rawInput, 16000);
-        const isSpeechFrame = speechInfo.isSpeech || (volumePercent > 8 && speechInfo.energy > 0.015);
+        // 🛡️ Umbral alto para ignorar ruido ambiente/ventiladores (era 8% → subido a 20%)
+        const isSpeechFrame = speechInfo.isSpeech || (volumePercent > 20 && speechInfo.energy > 0.025);
         if (isSpeechFrame) {
           lastHumanSpeechTime = nowMs;
         }
@@ -6393,12 +6728,18 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               // Notificar explícitamente a Gemini Live el fin de turno para que responda de inmediato
               isSpeechActive = false;
               shouldSendAudio = false;
-              try {
-                // @ts-ignore
-                liveSessionRef.current?.sendRealtimeInput?.({ activityEnd: {} });
-                console.log(`⚡ ${getLogTimestamp()} [LiveVAD] Fin de frase confirmado → activityEnd enviado (0 delay)`);
-                console.log(`🔊 ${getLogTimestamp()} [AudioSent] Total audio enviado en este turno: ${Math.round((nowMs - speechStartTimeRef) / 100) / 10}s (silence=${trailingSilenceFrames} frames)`);
-              } catch (_) {}
+              const turnDurationMs = nowMs - speechStartTimeRef;
+              if (turnDurationMs < MIN_TURN_DURATION_MS) {
+                // 🛡️ Turno demasiado corto → ruido espurio, cancelar activityEnd para no interrumpir a Nova
+                console.log(`🚫 [LiveVAD] Turno de ${Math.round(turnDurationMs)}ms descartado (< ${MIN_TURN_DURATION_MS}ms mínimo) — ruido ambiente`);
+              } else {
+                try {
+                  // @ts-ignore
+                  liveSessionRef.current?.sendRealtimeInput?.({ activityEnd: {} });
+                  console.log(`⚡ ${getLogTimestamp()} [LiveVAD] Fin de frase confirmado → activityEnd enviado (0 delay)`);
+                  console.log(`🔊 ${getLogTimestamp()} [AudioSent] Total audio enviado en este turno: ${Math.round(turnDurationMs / 100) / 10}s (silence=${trailingSilenceFrames} frames)`);
+                } catch (_) {}
+              }
             }
           } else {
             // Usuario en silencio prolongado: NO enviar paquetes para evitar saturar el WebSocket ni ensuciar el VAD de Gemini con ruido ambiente
@@ -6490,7 +6831,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
           if (typeof session?.sendRealtimeInput === 'function') {
             const base64Audio = encodeBase64(new Uint8Array(i16.buffer));
             session.sendRealtimeInput({
-              media: {
+              audio: {
                 data: base64Audio,
                 mimeType: 'audio/pcm;rate=16000'
               }
@@ -6589,6 +6930,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
       clearInterval(cameraAnalysisIntervalRef.current);
       cameraAnalysisIntervalRef.current = null;
     }
+    setIsCameraCapturing(false);
+    isCameraCapturingRef.current = false;
     if (screenAnalysisIntervalRef.current) {
       clearInterval(screenAnalysisIntervalRef.current);
       screenAnalysisIntervalRef.current = null;
@@ -6673,6 +7016,60 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
     setIsTyping(true);
 
     try {
+      // ── Enrutamiento Inteligente para Local y otros Modelos ──
+      if (state.selectedBrain === 'local' || state.selectedBrain === 'grok' || state.selectedBrain === 'gpt4o' || state.selectedBrain === 'claude') {
+        const { modelRouter } = await import('../geminiService');
+        
+        if (state.selectedBrain === 'local') {
+          modelRouter.setLocalConfig(state.localApiUrl || 'http://localhost:11434/v1', state.localModelName || 'qwen2.5:7b');
+        }
+
+        const sysPrompt = getSystemInstruction(
+          isBold,
+          state.avatar.voiceTone,
+          excitationLevel,
+          getTimeContext(),
+          state.userName,
+          state.knownPeople,
+          state.avatar.personality,
+          getMemoryProfileForInstruction(),
+          false,
+          isScreenSharing,
+          selfAwarenessBlock,
+          skillsBlock,
+          state.avatar.name,
+          state.avatar.personalityMode,
+          state.avatar.functionalMode,
+          state.avatar.personalityTraits,
+          state.avatar.regionalSlang,
+          buildMediaMemoryPromptBlock()
+        );
+
+        modelRouter.switchTo(state.selectedBrain, sysPrompt);
+
+        const history = state.messages.slice(-6).map(m => ({
+          role: m.sender === 'user' ? 'user' : 'assistant',
+          content: m.text
+        }));
+
+        const responseText = await modelRouter.sendMessage(text, getCameraFrame() || undefined, history as any);
+        
+        setIsTyping(false);
+        if (responseText) {
+          addMessage({ text: responseText, sender: 'ai' });
+          if (!isSpeechMuted) {
+            const fullTone = `${state.avatar.voiceTone || ''}. ${state.avatar.voiceAccent ? 'Habla con acento ' + state.avatar.voiceAccent : ''} `;
+            const audio = await generateSpeech(responseText.replace('🔍 ', ''), state.avatar.voiceName, fullTone);
+            if (audio) {
+              await playAiVoice(audio);
+            } else {
+              const utterance = new SpeechSynthesisUtterance(responseText.replace('🔍 ', ''));
+              window.speechSynthesis.speak(utterance);
+            }
+          }
+        }
+        return;
+      }
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
       const frame = getCameraFrame();
@@ -7566,8 +7963,8 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
               </div>
             )}
 
-            {/* 💬 SUBTÍTULOS FLOTANTES EN TIEMPO REAL (Lo que hablas tú y lo que responde Nova) */}
-            {isInCall && (liveUserTranscript || liveAiTranscript) && (
+            {/* 💬 SUBTÍTULOS FLOTANTES EN TIEMPO REAL (Ocultos por solicitud del usuario) */}
+            {false && isInCall && (liveUserTranscript || liveAiTranscript) && (
               <div className="absolute inset-x-0 bottom-24 sm:bottom-28 md:bottom-32 flex flex-col items-center justify-center pointer-events-none z-[155] px-4 sm:px-12 transition-all duration-300">
                 {liveUserTranscript && (
                   <div className="mb-2 max-w-2xl bg-blue-950/85 text-blue-100 border border-blue-400/30 backdrop-blur-xl px-4 py-2 rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.7)] flex items-center gap-2 animate-fade-in">
@@ -7597,7 +7994,7 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         </div>
 
         {/* TU PREVIEW DE CÁMARA (PiP flotante responsivo) */}
-        <div className={`absolute bottom-20 sm:bottom-24 md:bottom-28 right-3 sm:right-6 z-[160] w-28 sm:w-44 md:w-56 lg:w-64 max-w-[38vw] transition-all duration-500 ${isInCall ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-12 opacity-0 scale-50 pointer-events-none'}`}>
+        <div className={`absolute bottom-20 sm:bottom-24 md:bottom-28 right-3 sm:right-6 z-[160] w-28 sm:w-44 md:w-56 lg:w-64 max-w-[38vw] transition-all duration-500 ${(isInCall && !isCameraMuted) ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-12 opacity-0 scale-50 pointer-events-none'}`}>
           <div className={`relative aspect-video rounded-2xl sm:rounded-3xl overflow-hidden border-2 shadow-2xl bg-slate-900 ${isVisionSyncing ? 'border-red-600 ring-4 ring-red-600/20' : 'border-white/30'}`}>
             <video ref={previewVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent pointer-events-none"></div>
@@ -7935,6 +8332,13 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
         </section>
       )}
 
+      {/* OVERLAY DE PERMISOS DE ACCIÓN (Opción C) */}
+      <ActionPermissionOverlay
+        pendingAction={pendingAction}
+        onApprove={handleApprovePendingAction}
+        onReject={handleRejectPendingAction}
+      />
+
       {/* GROK SECOND OPINION PANEL */}
       <SecondOpinionPanel
         isVisible={showGrokPanel}
@@ -7994,6 +8398,36 @@ ${state.avatar.voiceTone ? `\n- TONO DE VOZ: ${state.avatar.voiceTone}` : ''}${s
     </div>
   );
 };
+// ── MODO PANORÁMICO MULTI-MONITOR ───────────────────────────────────────────
+const stitchScreens = async (screensInfo: any[]): Promise<string> => {
+  return new Promise((resolve) => {
+    let minX = Math.min(...screensInfo.map((s:any) => s.bounds.x));
+    let minY = Math.min(...screensInfo.map((s:any) => s.bounds.y));
+    let maxX = Math.max(...screensInfo.map((s:any) => s.bounds.x + s.bounds.width));
+    let maxY = Math.max(...screensInfo.map((s:any) => s.bounds.y + s.bounds.height));
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = maxX - minX;
+    canvas.height = maxY - minY;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return resolve('');
+
+    let loadedCount = 0;
+    screensInfo.forEach(screen => {
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, screen.bounds.x - minX, screen.bounds.y - minY, screen.bounds.width, screen.bounds.height);
+        loadedCount++;
+        if (loadedCount === screensInfo.length) {
+          resolve(canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/[a-z]+;base64,/, ''));
+        }
+      };
+      img.src = `data:image/jpeg;base64,${screen.base64}`;
+    });
+  });
+};
 
 export default Dashboard;
+
+
 
